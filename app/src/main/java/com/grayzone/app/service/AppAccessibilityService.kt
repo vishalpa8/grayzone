@@ -147,15 +147,25 @@ class AppAccessibilityService : AccessibilityService() {
 
         // If Grayzone is globally disabled, skip all monitoring (but still respect existing lockouts)
         if (!isGrayzoneEnabled) {
-            toggleGrayscale(false)
+            val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
+                setPackage(applicationContext.packageName)
+                putExtra("overlay_mode", 4) // Remove tint
+            }
+            sendBroadcast(broadcastIntent)
             return
         }
 
         val monitoredApps = prefs.getStringSet(KEY_MONITORED, emptySet()) ?: emptySet()
         val isMonitored = monitoredApps.contains(packageName)
 
-        // Toggle grayscale based on monitored state
-        toggleGrayscale(isMonitored)
+        if (!isMonitored) {
+            // Remove tint if we leave a monitored app
+            val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
+                setPackage(applicationContext.packageName)
+                putExtra("overlay_mode", 4) // Remove tint
+            }
+            sendBroadcast(broadcastIntent)
+        }
 
         if (isMonitored) {
             val now = System.currentTimeMillis()
@@ -163,9 +173,16 @@ class AppAccessibilityService : AccessibilityService() {
             val lockedUntil = prefs.getLong("locked_until_$packageName", 0L)
             
             if (now < activeUntil) {
-                // App is in an ACTIVE session, just apply grayscale, no overlay
+                // App is in an ACTIVE session, just apply tint, no lock overlay
                 Log.d(TAG, "App $packageName is in active session, allowing access")
                 startCountdownNotification(packageName, activeUntil)
+                
+                val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
+                    setPackage(applicationContext.packageName)
+                    putExtra(EXTRA_PACKAGE_NAME, packageName)
+                    putExtra("overlay_mode", 3) // Tint mode
+                }
+                sendBroadcast(broadcastIntent)
             } else if (now < lockedUntil) {
                 // App is HARD LOCKED - show lock overlay
                 Log.d(TAG, "App $packageName is LOCKED OUT - showing lock overlay")
@@ -185,29 +202,6 @@ class AppAccessibilityService : AccessibilityService() {
                     putExtra("overlay_mode", 1) // Friction mode
                 }
                 sendBroadcast(broadcastIntent)
-            }
-        }
-    }
-
-    private fun toggleGrayscale(enable: Boolean) {
-        if (checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) != PackageManager.PERMISSION_GRANTED) return
-        
-        // Check if grayscale feature is enabled in settings
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val grayscaleEnabled = prefs.getBoolean("grayscale_enabled", true)
-        
-        // If grayscale is disabled in settings, always turn it off
-        val shouldEnable = enable && grayscaleEnabled
-        
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val cr = contentResolver
-                Settings.Secure.putInt(cr, "accessibility_display_daltonizer_enabled", if (shouldEnable) 1 else 0)
-                if (shouldEnable) {
-                    Settings.Secure.putInt(cr, "accessibility_display_daltonizer", 0) // 0 = Grayscale
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to toggle grayscale: \${e.message}")
             }
         }
     }

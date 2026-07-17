@@ -111,7 +111,7 @@ fun SettingsScreen() {
             value = waitSeconds.toFloat(), 
             onValueChange = { waitSeconds = it.toInt() }, 
             valueRange = 3f..30f, 
-            steps = 27, 
+            steps = 26, 
             onValueChangeFinished = { prefs.edit().putInt("wait_seconds", waitSeconds).apply() }
         )
         
@@ -128,7 +128,7 @@ fun SettingsScreen() {
                 }
             }, 
             valueRange = 1f..60f, 
-            steps = 59, 
+            steps = 58, 
             onValueChangeFinished = { 
                 prefs.edit()
                     .putInt("session_minutes", sessionMinutes)
@@ -154,7 +154,7 @@ fun SettingsScreen() {
                 }
             }, 
             valueRange = 15f..300f, 
-            steps = 285, 
+            steps = 284, 
             onValueChangeFinished = { 
                 prefs.edit()
                     .putInt("session_minutes", sessionMinutes)

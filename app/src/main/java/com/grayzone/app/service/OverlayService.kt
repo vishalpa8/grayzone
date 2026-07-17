@@ -72,6 +72,7 @@ class OverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
+    private var tintView: View? = null
     private var countdownTimer: Timer? = null
     private var countdownJob: kotlinx.coroutines.Job? = null
     private var secondsRemaining = DEFAULT_WAIT
@@ -81,11 +82,22 @@ class OverlayService : Service() {
     private val appOpenedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AppAccessibilityService.ACTION_APP_OPENED) {
-                val pkg = intent.getStringExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME) ?: return
                 val mode = intent.getIntExtra("overlay_mode", 1)
-                val lockedUntil = intent.getLongExtra("locked_until", 0L)
-                val name = getAppName(pkg)
-                showOverlay(pkg, name, mode, lockedUntil)
+                
+                if (mode == 4) {
+                    dismissTint()
+                    return
+                }
+                
+                val pkg = intent.getStringExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME) ?: return
+                
+                if (mode == 3) {
+                    showTint()
+                } else {
+                    val lockedUntil = intent.getLongExtra("locked_until", 0L)
+                    val name = getAppName(pkg)
+                    showOverlay(pkg, name, mode, lockedUntil)
+                }
             }
         }
     }
@@ -170,12 +182,48 @@ class OverlayService : Service() {
         super.onDestroy()
         serviceScope.cancel()
         dismissOverlay()
+        dismissTint()
         try { unregisterReceiver(appOpenedReceiver) } catch (_: Exception) {}
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     // ─── Overlay UI ──────────────────────────────────────────────────────────
+
+    private fun showTint() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("grayscale_enabled", true)) {
+            dismissTint()
+            return
+        }
+        
+        if (tintView != null) return // Already showing
+
+        val ctx = this
+        val view = FrameLayout(ctx).apply {
+            setBackgroundColor(android.graphics.Color.argb(180, 128, 128, 128))
+        }
+
+        val wlp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+
+        tintView = view
+        try { windowManager?.addView(view, wlp) } catch (e: Exception) {
+            Log.e(TAG, "addTintView failed: ${e.message}")
+        }
+    }
+
+    private fun dismissTint() {
+        tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        tintView = null
+    }
 
     private fun showOverlay(packageName: String, appName: String, mode: Int, lockedUntil: Long) {
         dismissOverlay()
