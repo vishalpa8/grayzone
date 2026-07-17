@@ -98,8 +98,17 @@ fun MainAppContent() {
 fun MainScreen() {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(Tab.HOME) }
+    
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ -> }
 
     LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
         context.startForegroundService(Intent(context, OverlayService::class.java))
     }
 
@@ -131,7 +140,7 @@ fun MainScreen() {
                             selectedTextColor = GZPrimary,
                             unselectedIconColor = GZTextTertiary,
                             unselectedTextColor = GZTextTertiary,
-                            indicatorColor = GZPrimaryGlow
+                            indicatorColor = Color.Transparent
                         )
                     )
                 }

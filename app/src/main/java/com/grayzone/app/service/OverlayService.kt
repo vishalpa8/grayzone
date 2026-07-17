@@ -330,6 +330,11 @@ class OverlayService : Service() {
             .putLong("locked_until_$packageName", lockedUntil)
             .apply()
             
+        val intent = Intent("com.grayzone.app.ACTION_SESSION_STARTED").apply {
+            putExtra("package_name", packageName)
+        }
+        sendBroadcast(intent)
+            
         // Schedule lockout check if user is still in the app when session expires
         scheduleLockoutCheck(packageName, sessionMins * 60 * 1000L)
     }

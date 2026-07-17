@@ -1,9 +1,9 @@
 -- Merging decision tree log ---
 manifest
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-50:12
-INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-50:12
-INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-50:12
-INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-50:12
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-51:12
+INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-51:12
+INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-51:12
+INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:2:1-51:12
 MERGED from [androidx.compose.material3:material3:1.1.2] C:\Users\vishalpc\.gradle\caches\transforms-4\213c8435c3bb8c65e27f96f9be8a6f79\transformed\material3-1.1.2\AndroidManifest.xml:17:1-22:12
 MERGED from [com.google.accompanist:accompanist-permissions:0.34.0] C:\Users\vishalpc\.gradle\caches\transforms-4\07d70a6ed2a86b8ca0df95ad6c6b5611\transformed\accompanist-permissions-0.34.0\AndroidManifest.xml:17:1-23:12
 MERGED from [androidx.activity:activity:1.8.2] C:\Users\vishalpc\.gradle\caches\transforms-4\6de48dfbccb9bb4bf5ddbbcd4481d2d3\transformed\activity-1.8.2\AndroidManifest.xml:17:1-22:12
@@ -79,17 +79,21 @@ uses-permission#android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
 ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:9:5-95
 	android:name
 		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:9:22-92
-uses-permission#android.permission.WRITE_SECURE_SETTINGS
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:5-163
-	xmlns:tools
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:78-124
-	tools:ignore
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:125-160
+uses-permission#android.permission.POST_NOTIFICATIONS
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:5-77
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:22-77
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:22-74
+uses-permission#android.permission.WRITE_SECURE_SETTINGS
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:11:5-163
+	xmlns:tools
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:11:78-124
+	tools:ignore
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:11:125-160
+	android:name
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:11:22-77
 application
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:12:5-49:19
-INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:12:5-49:19
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:13:5-50:19
+INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:13:5-50:19
 MERGED from [androidx.compose.ui:ui-test-manifest:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\cd0e90dab7e37c3ca3d57eb03d0a616c\transformed\ui-test-manifest-1.6.0\AndroidManifest.xml:22:5-26:19
 MERGED from [androidx.compose.ui:ui-test-manifest:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\cd0e90dab7e37c3ca3d57eb03d0a616c\transformed\ui-test-manifest-1.6.0\AndroidManifest.xml:22:5-26:19
 MERGED from [androidx.compose.ui:ui-tooling-android:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\98e97ca96767df1e348f8cdaae4994b8\transformed\ui-tooling-release\AndroidManifest.xml:22:5-26:19
@@ -111,65 +115,65 @@ MERGED from [androidx.startup:startup-runtime:1.1.1] C:\Users\vishalpc\.gradle\c
 	android:appComponentFactory
 		ADDED from [androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:28:18-86
 	android:supportsRtl
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:15:9-35
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:16:9-35
 	android:label
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:14:9-41
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:15:9-41
 	android:allowBackup
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:13:9-35
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:14:9-35
 	android:theme
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:16:9-46
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:17:9-46
 activity#com.grayzone.app.MainActivity
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:18:9-26:20
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:19:9-27:20
 	android:exported
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:20:13-36
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:21:13-36
 	android:theme
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:21:13-50
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:22:13-50
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:19:13-41
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:20:13-41
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:22:13-25:29
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:23:13-26:29
 action#android.intent.action.MAIN
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:23:17-69
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:17-69
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:23:25-66
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:25-66
 category#android.intent.category.LAUNCHER
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:17-77
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:25:17-77
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:27-74
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:25:27-74
 service#com.grayzone.app.service.AppAccessibilityService
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:28:9-38:19
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:29:9-39:19
 	android:exported
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:30:13-36
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:31:13-36
 	android:permission
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:31:13-79
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:32:13-79
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:29:13-60
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:30:13-60
 intent-filter#action:name:android.accessibilityservice.AccessibilityService
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:32:13-34:29
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:33:13-35:29
 action#android.accessibilityservice.AccessibilityService
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:33:17-92
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:34:17-92
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:33:25-89
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:34:25-89
 meta-data#android.accessibilityservice
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:35:13-37:72
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:36:13-38:72
 	android:resource
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:37:17-69
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:38:17-69
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:36:17-60
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:37:17-60
 service#com.grayzone.app.service.OverlayService
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:40:9-47:19
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:41:9-48:19
 	android:exported
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:42:13-37
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:43:13-37
 	android:foregroundServiceType
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:43:13-55
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:44:13-55
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:41:13-51
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:42:13-51
 property
-ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:44:13-46:97
+ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:45:13-47:97
 	android:value
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:46:17-94
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:47:17-94
 	android:name
-		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:45:17-76
+		ADDED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:46:17-76
 uses-sdk
 INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml
