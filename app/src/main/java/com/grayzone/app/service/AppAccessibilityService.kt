@@ -22,16 +22,12 @@ class AppAccessibilityService : AccessibilityService() {
         const val TAG = "GrayzoneService"
         const val ACTION_APP_OPENED = "com.grayzone.app.ACTION_APP_OPENED"
         const val ACTION_CHECK_LOCKOUT = "com.grayzone.app.ACTION_CHECK_LOCKOUT"
-        const val ACTION_SESSION_STARTED = "com.grayzone.app.ACTION_SESSION_STARTED"
         const val EXTRA_PACKAGE_NAME = "package_name"
         private const val PREFS_NAME = "GrayzonePrefs"
         private const val KEY_MONITORED = "monitored_apps"
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "active_session_channel"
     }
 
     private var lastForegroundPackage: String? = null
-    private var countdownJob: kotlinx.coroutines.Job? = null
 
     private val lockoutReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -40,24 +36,17 @@ class AppAccessibilityService : AccessibilityService() {
                 if (pkg == lastForegroundPackage) {
                     // They are still in the app when session expired! Kick them out.
                     Log.d(TAG, "Session expired for $pkg while foregrounded, enforcing lock")
+                    
                     val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
                         setPackage(applicationContext?.packageName)
                         putExtra(EXTRA_PACKAGE_NAME, pkg)
-                        putExtra("overlay_mode", 2)
+                        putExtra("overlay_mode", 2) // Lock mode
                         
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        putExtra("locked_until", prefs.getLong("locked_until_$pkg", 0L))
+                        val lockedUntil = prefs.getLong("locked_until_$pkg", 0L)
+                        putExtra("locked_until", lockedUntil)
                     }
                     sendBroadcast(broadcastIntent)
-                }
-            } else if (intent?.action == ACTION_SESSION_STARTED) {
-                val pkg = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
-                if (pkg == lastForegroundPackage) {
-                    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    val activeUntil = prefs.getLong("active_until_$pkg", 0L)
-                    if (activeUntil > System.currentTimeMillis()) {
-                        startCountdownNotification(pkg, activeUntil)
-                    }
                 }
             }
         }
@@ -73,12 +62,9 @@ class AppAccessibilityService : AccessibilityService() {
         }
         serviceInfo = info
         Log.d(TAG, "Grayzone AccessibilityService connected")
-        
-        createNotificationChannel()
 
         val filter = IntentFilter().apply {
             addAction(ACTION_CHECK_LOCKOUT)
-            addAction(ACTION_SESSION_STARTED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(lockoutReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -94,67 +80,20 @@ class AppAccessibilityService : AccessibilityService() {
         try { unregisterReceiver(lockoutReceiver) } catch (_: Exception) {}
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = android.app.NotificationChannel(
-                CHANNEL_ID,
-                "Active Session Timer",
-                android.app.NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Shows the remaining time for your active session"
-                setShowBadge(false)
-            }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-            nm.createNotificationChannel(channel)
-        }
-    }
-
     private fun startCountdownNotification(packageName: String, activeUntil: Long) {
-        countdownJob?.cancel()
-        
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        val pm = packageManager
-        val appName = try {
-            pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
-        } catch (e: Exception) {
-            packageName
+        val intent = Intent(this, OverlayService::class.java).apply {
+            action = "ACTION_START_COUNTDOWN"
+            putExtra("package_name", packageName)
+            putExtra("active_until", activeUntil)
         }
-
-        countdownJob = CoroutineScope(Dispatchers.Main).launch {
-            while (true) {
-                val now = System.currentTimeMillis()
-                val remainingSeconds = ((activeUntil - now) / 1000).coerceAtLeast(0).toInt()
-                
-                if (remainingSeconds <= 0) {
-                    nm.cancel(NOTIFICATION_ID)
-                    break
-                }
-                
-                val mins = remainingSeconds / 60
-                val secs = remainingSeconds % 60
-                val timeStr = String.format("%02d:%02d", mins, secs)
-                
-                val notification = androidx.core.app.NotificationCompat.Builder(this@AppAccessibilityService, CHANNEL_ID)
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setContentTitle("$appName Active")
-                    .setContentText("Time remaining: $timeStr")
-                    .setOngoing(true)
-                    .setOnlyAlertOnce(true)
-                    .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
-                    .build()
-                
-                nm.notify(NOTIFICATION_ID, notification)
-                
-                kotlinx.coroutines.delay(1000)
-            }
-        }
+        startService(intent)
     }
 
     private fun cancelCountdownNotification() {
-        countdownJob?.cancel()
-        countdownJob = null
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        nm.cancel(NOTIFICATION_ID)
+        val intent = Intent(this, OverlayService::class.java).apply {
+            action = "ACTION_STOP_COUNTDOWN"
+        }
+        startService(intent)
     }
 
     private val packageLauncherCache = mutableMapOf<String, Boolean>()

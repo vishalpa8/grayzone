@@ -73,6 +73,7 @@ class OverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var countdownTimer: Timer? = null
+    private var countdownJob: kotlinx.coroutines.Job? = null
     private var secondsRemaining = DEFAULT_WAIT
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -105,8 +106,64 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) { dismissOverlay(); stopSelf() }
+        if (intent?.action == ACTION_STOP) { 
+            dismissOverlay(); stopSelf() 
+        } else if (intent?.action == "ACTION_START_COUNTDOWN") {
+            val pkg = intent.getStringExtra("package_name") ?: ""
+            val activeUntil = intent.getLongExtra("active_until", 0L)
+            if (pkg.isNotEmpty() && activeUntil > 0) {
+                startCountdownNotification(pkg, activeUntil)
+            }
+        } else if (intent?.action == "ACTION_STOP_COUNTDOWN") {
+            cancelCountdownNotification()
+        }
         return START_STICKY
+    }
+
+    private fun startCountdownNotification(packageName: String, activeUntil: Long) {
+        countdownJob?.cancel()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val pm = packageManager
+        val appName = try {
+            pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+        } catch (e: Exception) {
+            packageName
+        }
+
+        countdownJob = CoroutineScope(Dispatchers.Main).launch {
+            while (true) {
+                val now = System.currentTimeMillis()
+                val remainingSeconds = ((activeUntil - now) / 1000).coerceAtLeast(0).toInt()
+                
+                if (remainingSeconds <= 0) {
+                    cancelCountdownNotification()
+                    break
+                }
+                
+                val mins = remainingSeconds / 60
+                val secs = remainingSeconds % 60
+                val timeStr = String.format("%02d:%02d", mins, secs)
+                
+                val notification = NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle("$appName Active")
+                    .setContentText("Time remaining: $timeStr")
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .build()
+                
+                nm.notify(NOTIF_ID, notification)
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+    
+    private fun cancelCountdownNotification() {
+        countdownJob?.cancel()
+        countdownJob = null
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIF_ID, buildNotification())
     }
 
     override fun onDestroy() {
@@ -330,10 +387,7 @@ class OverlayService : Service() {
             .putLong("locked_until_$packageName", lockedUntil)
             .apply()
             
-        val intent = Intent("com.grayzone.app.ACTION_SESSION_STARTED").apply {
-            putExtra("package_name", packageName)
-        }
-        sendBroadcast(intent)
+        startCountdownNotification(packageName, activeUntil)
             
         // Schedule lockout check if user is still in the app when session expires
         scheduleLockoutCheck(packageName, sessionMins * 60 * 1000L)
