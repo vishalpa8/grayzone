@@ -59,7 +59,7 @@ class OverlayService : Service() {
         )
 
         // Hex color int helpers
-        private const val BG          = 0xE607070F.toInt() // 90% opaque
+        private const val BG          = 0xFF07070F.toInt() // 100% opaque
         private const val SURFACE     = 0xFF0F0F1C.toInt()
         private const val PURPLE      = 0xFF7C4DFF.toInt()
         private const val PURPLE_DIM  = 0xFF1E1040.toInt()
