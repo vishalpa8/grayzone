@@ -1,0 +1,194 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.grayzone.app"
+4    android:versionCode="1"
+5    android:versionName="1.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <!-- Permissions requested for Grayzone overlay and services -->
+12    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+12-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:5:5-78
+12-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:5:22-75
+13    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+13-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:6:5-77
+13-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:6:22-74
+14    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+14-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:7:5-77
+14-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:7:22-74
+15    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+15-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:8:5-89
+15-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:8:22-86
+16    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+16-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:9:5-95
+16-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:9:22-92
+17    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+17-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:5-163
+17-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:10:22-77
+18
+19    <permission
+19-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:22:5-24:47
+20        android:name="com.grayzone.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+20-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:23:9-81
+21        android:protectionLevel="signature" />
+21-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:24:9-44
+22
+23    <uses-permission android:name="com.grayzone.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+23-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:26:5-97
+23-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:26:22-94
+24
+25    <application
+25-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:12:5-49:19
+26        android:allowBackup="true"
+26-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:13:9-35
+27        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+27-->[androidx.core:core:1.12.0] C:\Users\vishalpc\.gradle\caches\transforms-4\8f63d6e042fa9cf442289efa65ee342a\transformed\core-1.12.0\AndroidManifest.xml:28:18-86
+28        android:debuggable="true"
+29        android:extractNativeLibs="false"
+30        android:label="@string/app_name"
+30-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:14:9-41
+31        android:supportsRtl="true"
+31-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:15:9-35
+32        android:theme="@style/Theme.Grayzone" >
+32-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:16:9-46
+33        <activity
+33-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:18:9-26:20
+34            android:name="com.grayzone.app.MainActivity"
+34-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:19:13-41
+35            android:exported="true"
+35-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:20:13-36
+36            android:theme="@style/Theme.Grayzone" >
+36-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:21:13-50
+37            <intent-filter>
+37-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:22:13-25:29
+38                <action android:name="android.intent.action.MAIN" />
+38-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:23:17-69
+38-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:23:25-66
+39
+40                <category android:name="android.intent.category.LAUNCHER" />
+40-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:17-77
+40-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:24:27-74
+41            </intent-filter>
+42        </activity>
+43
+44        <service
+44-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:28:9-38:19
+45            android:name="com.grayzone.app.service.AppAccessibilityService"
+45-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:29:13-60
+46            android:exported="true"
+46-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:30:13-36
+47            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
+47-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:31:13-79
+48            <intent-filter>
+48-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:32:13-34:29
+49                <action android:name="android.accessibilityservice.AccessibilityService" />
+49-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:33:17-92
+49-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:33:25-89
+50            </intent-filter>
+51
+52            <meta-data
+52-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:35:13-37:72
+53                android:name="android.accessibilityservice"
+53-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:36:17-60
+54                android:resource="@xml/accessibility_service_config" />
+54-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:37:17-69
+55        </service>
+56        <service
+56-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:40:9-47:19
+57            android:name="com.grayzone.app.service.OverlayService"
+57-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:41:13-51
+58            android:exported="false"
+58-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:42:13-37
+59            android:foregroundServiceType="specialUse" >
+59-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:43:13-55
+60            <property
+60-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:44:13-46:97
+61                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+61-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:45:17-76
+62                android:value="Monitors foreground app to apply distraction friction overlay" />
+62-->E:\My Projects\Grayzone\app\src\main\AndroidManifest.xml:46:17-94
+63        </service>
+64
+65        <activity
+65-->[androidx.compose.ui:ui-test-manifest:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\cd0e90dab7e37c3ca3d57eb03d0a616c\transformed\ui-test-manifest-1.6.0\AndroidManifest.xml:23:9-25:39
+66            android:name="androidx.activity.ComponentActivity"
+66-->[androidx.compose.ui:ui-test-manifest:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\cd0e90dab7e37c3ca3d57eb03d0a616c\transformed\ui-test-manifest-1.6.0\AndroidManifest.xml:24:13-63
+67            android:exported="true" />
+67-->[androidx.compose.ui:ui-test-manifest:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\cd0e90dab7e37c3ca3d57eb03d0a616c\transformed\ui-test-manifest-1.6.0\AndroidManifest.xml:25:13-36
+68        <activity
+68-->[androidx.compose.ui:ui-tooling-android:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\98e97ca96767df1e348f8cdaae4994b8\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
+69            android:name="androidx.compose.ui.tooling.PreviewActivity"
+69-->[androidx.compose.ui:ui-tooling-android:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\98e97ca96767df1e348f8cdaae4994b8\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
+70            android:exported="true" />
+70-->[androidx.compose.ui:ui-tooling-android:1.6.0] C:\Users\vishalpc\.gradle\caches\transforms-4\98e97ca96767df1e348f8cdaae4994b8\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
+71
+72        <provider
+72-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:24:9-32:20
+73            android:name="androidx.startup.InitializationProvider"
+73-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:25:13-67
+74            android:authorities="com.grayzone.app.androidx-startup"
+74-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:26:13-68
+75            android:exported="false" >
+75-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:27:13-37
+76            <meta-data
+76-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:29:13-31:52
+77                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+77-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:30:17-75
+78                android:value="androidx.startup" />
+78-->[androidx.emoji2:emoji2:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\24f34f5b5ad257ab37dc2d01ab7448f7\transformed\emoji2-1.3.0\AndroidManifest.xml:31:17-49
+79            <meta-data
+79-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\vishalpc\.gradle\caches\transforms-4\0c090b99a3b73f16bb71b9b10dd939f6\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:29:13-31:52
+80                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+80-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\vishalpc\.gradle\caches\transforms-4\0c090b99a3b73f16bb71b9b10dd939f6\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:30:17-78
+81                android:value="androidx.startup" />
+81-->[androidx.lifecycle:lifecycle-process:2.7.0] C:\Users\vishalpc\.gradle\caches\transforms-4\0c090b99a3b73f16bb71b9b10dd939f6\transformed\lifecycle-process-2.7.0\AndroidManifest.xml:31:17-49
+82            <meta-data
+82-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:29:13-31:52
+83                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+83-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:30:17-85
+84                android:value="androidx.startup" />
+84-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:31:17-49
+85        </provider>
+86
+87        <receiver
+87-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:34:9-52:20
+88            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+88-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:35:13-76
+89            android:directBootAware="false"
+89-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:36:13-44
+90            android:enabled="true"
+90-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:37:13-35
+91            android:exported="true"
+91-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:38:13-36
+92            android:permission="android.permission.DUMP" >
+92-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:39:13-57
+93            <intent-filter>
+93-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:40:13-42:29
+94                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+94-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:41:17-91
+94-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:41:25-88
+95            </intent-filter>
+96            <intent-filter>
+96-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:43:13-45:29
+97                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+97-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:44:17-85
+97-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:44:25-82
+98            </intent-filter>
+99            <intent-filter>
+99-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:46:13-48:29
+100                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+100-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:47:17-88
+100-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:47:25-85
+101            </intent-filter>
+102            <intent-filter>
+102-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:49:13-51:29
+103                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+103-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:50:17-95
+103-->[androidx.profileinstaller:profileinstaller:1.3.0] C:\Users\vishalpc\.gradle\caches\transforms-4\e9715709f0d5bebd73401b09add18f0c\transformed\profileinstaller-1.3.0\AndroidManifest.xml:50:25-92
+104            </intent-filter>
+105        </receiver>
+106    </application>
+107
+108</manifest>

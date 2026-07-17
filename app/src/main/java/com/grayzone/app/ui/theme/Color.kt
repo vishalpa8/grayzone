@@ -1,0 +1,45 @@
+package com.grayzone.app.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// ── Primary Brand ──────────────────────────────────────────────────────────
+val GZPrimary        = Color(0xFF7C4DFF)  // Electric violet
+val GZPrimaryLight   = Color(0xFFB47EFF)
+val GZPrimaryDark    = Color(0xFF4527A0)
+val GZPrimaryGlow    = Color(0x407C4DFF)
+val GZPrimaryContainer = Color(0xFF1E1040)
+
+// ── Accent ─────────────────────────────────────────────────────────────────
+val GZAccent         = Color(0xFF64FFDA)  // Mint teal
+val GZAccentDim      = Color(0x2064FFDA)
+
+// ── Backgrounds ────────────────────────────────────────────────────────────
+val GZBackground     = Color(0xFF07070F)  // Near-black
+val GZSurface        = Color(0xFF0F0F1C)
+val GZSurfaceElevated= Color(0xFF161628)
+val GZSurfaceHigh    = Color(0xFF1E1E35)
+
+// ── Borders ────────────────────────────────────────────────────────────────
+val GZBorder         = Color(0xFF26263D)
+val GZBorderSubtle   = Color(0xFF1A1A2E)
+
+// ── Text ───────────────────────────────────────────────────────────────────
+val GZTextPrimary    = Color(0xFFF2F2FF)
+val GZTextSecondary  = Color(0xFF7878A0)
+val GZTextTertiary   = Color(0xFF3D3D5C)
+
+// ── Semantic ───────────────────────────────────────────────────────────────
+val GZGreen          = Color(0xFF00E676)
+val GZGreenContainer = Color(0xFF0A2118)
+val GZRed            = Color(0xFFFF5252)
+val GZRedContainer   = Color(0xFF220A0A)
+val GZAmber          = Color(0xFFFFAB40)
+val GZAmberContainer = Color(0xFF221700)
+
+// ── Gradient endpoints ─────────────────────────────────────────────────────
+val GZGradPurple1    = Color(0xFF7C4DFF)
+val GZGradPurple2    = Color(0xFF3D1FA0)
+val GZGradGreen1     = Color(0xFF00E676)
+val GZGradGreen2     = Color(0xFF00897B)
+val GZGradRed1       = Color(0xFFFF5252)
+val GZGradRed2       = Color(0xFFB71C1C)
