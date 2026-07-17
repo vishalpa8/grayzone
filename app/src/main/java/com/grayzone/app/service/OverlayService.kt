@@ -16,6 +16,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
+import com.grayzone.app.OverlayMode
+import com.grayzone.app.PrefsKeys
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -75,28 +77,23 @@ class OverlayService : Service() {
     private var tintView: View? = null
     private var countdownTimer: Timer? = null
     private var countdownJob: kotlinx.coroutines.Job? = null
-    private var secondsRemaining = DEFAULT_WAIT
+    // BUG 4 FIX: @Volatile so Timer thread writes are visible to main thread reads
+    @Volatile private var secondsRemaining = DEFAULT_WAIT
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val appOpenedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == AppAccessibilityService.ACTION_APP_OPENED) {
-                val mode = intent.getIntExtra("overlay_mode", 1)
-                
-                if (mode == 4) {
-                    dismissTint()
-                    return
-                }
-                
-                val pkg = intent.getStringExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME) ?: return
-                
-                if (mode == 3) {
-                    showTint()
-                } else {
+            if (intent?.action != AppAccessibilityService.ACTION_APP_OPENED) return
+            // BUG 8 FIX: Use OverlayMode constants instead of raw integers
+            when (intent.getIntExtra("overlay_mode", OverlayMode.FRICTION)) {
+                OverlayMode.REMOVE_TINT -> { dismissTint(); return }
+                OverlayMode.TINT -> { showTint(); return }
+                else -> {
+                    val pkg = intent.getStringExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME) ?: return
+                    val mode = intent.getIntExtra("overlay_mode", OverlayMode.FRICTION)
                     val lockedUntil = intent.getLongExtra("locked_until", 0L)
-                    val name = getAppName(pkg)
-                    showOverlay(pkg, name, mode, lockedUntil)
+                    showOverlay(pkg, getAppName(pkg), mode, lockedUntil)
                 }
             }
         }
@@ -135,37 +132,30 @@ class OverlayService : Service() {
     private fun startCountdownNotification(packageName: String, activeUntil: Long) {
         countdownJob?.cancel()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val pm = packageManager
         val appName = try {
-            pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
-        } catch (e: Exception) {
-            packageName
-        }
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
+        } catch (_: Exception) { packageName }
 
-        countdownJob = CoroutineScope(Dispatchers.Main).launch {
+        // BUG 3 FIX: Use serviceScope (not a raw new CoroutineScope) so this job is
+        // lifecycle-bound to the service and cancelled when the service is destroyed.
+        countdownJob = serviceScope.launch(Dispatchers.Main) {
             while (true) {
-                val now = System.currentTimeMillis()
-                val remainingSeconds = ((activeUntil - now) / 1000).coerceAtLeast(0).toInt()
-                
-                if (remainingSeconds <= 0) {
+                val remaining = ((activeUntil - System.currentTimeMillis()) / 1000).coerceAtLeast(0).toInt()
+                if (remaining <= 0) {
                     cancelCountdownNotification()
                     break
                 }
-                
-                val mins = remainingSeconds / 60
-                val secs = remainingSeconds % 60
-                val timeStr = String.format("%02d:%02d", mins, secs)
-                
-                val notification = NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setContentTitle("$appName Active")
-                    .setContentText("Time remaining: $timeStr")
-                    .setOngoing(true)
-                    .setOnlyAlertOnce(true)
-                    .setPriority(NotificationCompat.PRIORITY_LOW)
-                    .build()
-                
-                nm.notify(NOTIF_ID, notification)
+                val timeStr = String.format("%02d:%02d", remaining / 60, remaining % 60)
+                nm.notify(NOTIF_ID,
+                    NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
+                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setContentTitle("$appName Active")
+                        .setContentText("Time remaining: $timeStr")
+                        .setOngoing(true)
+                        .setOnlyAlertOnce(true)
+                        .setPriority(NotificationCompat.PRIORITY_LOW)
+                        .build()
+                )
                 kotlinx.coroutines.delay(1000)
             }
         }
@@ -191,8 +181,8 @@ class OverlayService : Service() {
     // ─── Overlay UI ──────────────────────────────────────────────────────────
 
     private fun showTint() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("grayscale_enabled", true)) {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)) {
             dismissTint()
             return
         }
@@ -227,13 +217,13 @@ class OverlayService : Service() {
 
     private fun showOverlay(packageName: String, appName: String, mode: Int, lockedUntil: Long) {
         dismissOverlay()
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        
-        val isLocked = mode == 2
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+
+        val isLocked = mode == OverlayMode.LOCK
         secondsRemaining = if (isLocked) {
             ((lockedUntil - System.currentTimeMillis()) / 1000).coerceAtLeast(0).toInt()
         } else {
-            prefs.getInt("wait_seconds", DEFAULT_WAIT)
+            prefs.getInt(PrefsKeys.WAIT_SECONDS, DEFAULT_WAIT)
         }
         val totalSeconds = secondsRemaining
         val prompt = REFLECTIONS.random()
@@ -385,21 +375,22 @@ class OverlayService : Service() {
         }
 
         // Countdown ticker
+        // BUG 4 FIX: Capture a local snapshot of secondsRemaining per tick so the Timer
+        // thread and main thread never see a torn value. @Volatile on the field handles
+        // the visibility guarantee; the local val makes decrement-then-read atomic per tick.
         countdownTimer = Timer()
         countdownTimer?.scheduleAtFixedRate(object : TimerTask() {
             override fun run() {
-                secondsRemaining--
+                val remaining = --secondsRemaining
                 mainHandler.post {
-                    if (secondsRemaining <= 0) {
-                        if (!isLocked) {
-                            markAppUnlocked(packageName)
-                        }
+                    if (remaining <= 0) {
+                        if (!isLocked) markAppUnlocked(packageName)
                         dismissOverlay()
                     } else {
-                        countdownView.text = if (isLocked) formatTime(secondsRemaining) else "$secondsRemaining"
+                        countdownView.text = if (isLocked) formatTime(remaining) else "$remaining"
                         if (!isLocked) {
-                            subView.text = "Opening in $secondsRemaining seconds…"
-                            progress.progress = secondsRemaining
+                            subView.text = "Opening in $remaining seconds…"
+                            progress.progress = remaining
                         }
                     }
                 }
@@ -422,21 +413,20 @@ class OverlayService : Service() {
     }
 
     private fun markAppUnlocked(packageName: String) {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
-        val sessionMins = prefs.getInt("session_minutes", 10)
-        val lockoutMins = prefs.getInt("lockout_minutes", 30)
-        
+        val sessionMins = prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
+        val lockoutMins = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+
         val activeUntil = now + (sessionMins * 60 * 1000L)
         val lockedUntil = activeUntil + (lockoutMins * 60 * 1000L)
-        
+
         prefs.edit()
-            .putLong("active_until_$packageName", activeUntil)
-            .putLong("locked_until_$packageName", lockedUntil)
+            .putLong(PrefsKeys.ACTIVE_UNTIL + packageName, activeUntil)
+            .putLong(PrefsKeys.LOCKED_UNTIL + packageName, lockedUntil)
             .apply()
-            
+
         startCountdownNotification(packageName, activeUntil)
-            
         // Schedule lockout check if user is still in the app when session expires
         scheduleLockoutCheck(packageName, sessionMins * 60 * 1000L)
     }

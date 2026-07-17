@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.AppAccessibilityService
 import com.grayzone.app.service.OverlayService
 import com.grayzone.app.ui.theme.*
@@ -167,10 +168,25 @@ data class HomeData(
 @Composable
 fun HomeScreen() {
     val context = LocalContext.current
-    val isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
-    val batteryIssue = isBatteryOptimized(context)
-    val prefs = context.getSharedPreferences("GrayzonePrefs", Context.MODE_PRIVATE)
-    val monitoredCount = prefs.getStringSet("monitored_apps", emptySet())?.size ?: 0
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // BUG 10 FIX: Compute once per lifecycle-resume, not on every recomposition.
+    // isAccessibilityServiceEnabled calls ContentResolver; isBatteryOptimized calls PowerManager.
+    var isActive by remember { mutableStateOf(isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)) }
+    var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
+                batteryIssue = isBatteryOptimized(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
+    val monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
     val data = HomeData(monitoredCount = monitoredCount)
 
     LazyColumn(
@@ -298,14 +314,14 @@ fun HomeScreen() {
 @Composable
 fun AppsScreen() {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("GrayzonePrefs", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var monitoredApps by remember {
-        mutableStateOf(prefs.getStringSet("monitored_apps", emptySet()) ?: emptySet())
+        mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
     }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
-    var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean("grayzone_enabled", true)) }
+    var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
@@ -324,8 +340,8 @@ fun AppsScreen() {
     // Check if ANY app is currently locked
     val anyAppLocked = remember(monitoredApps, currentTime) {
         monitoredApps.any { pkg ->
-            val activeUntil = prefs.getLong("active_until_$pkg", 0L)
-            val lockedUntil = prefs.getLong("locked_until_$pkg", 0L)
+            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
             currentTime > activeUntil && currentTime < lockedUntil
         }
     }
@@ -399,7 +415,7 @@ fun AppsScreen() {
                         onCheckedChange = {
                             if (!anyAppLocked || !grayzoneEnabled) {
                                 grayzoneEnabled = it
-                                prefs.edit().putBoolean("grayzone_enabled", it).apply()
+                                prefs.edit().putBoolean(PrefsKeys.GRAYZONE_ENABLED, it).apply()
                             }
                         },
                         enabled = !anyAppLocked || !grayzoneEnabled,
@@ -458,15 +474,23 @@ fun AppsScreen() {
                 GZLoadingSpinner()
             }
         } else {
+            // BUG 5 FIX: Build a single snapshot map of lock state per tick rather than
+            // calling prefs.getLong() inside every LazyColumn item on the main thread.
+            val lockStateMap = remember(monitoredApps, currentTime) {
+                monitoredApps.associateWith { pkg ->
+                    Pair(
+                        prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
+                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+                    )
+                }
+            }
+
             LazyColumn {
                 items(filtered, key = { it.packageName }) { app ->
                     val isMonitored = monitoredApps.contains(app.packageName)
-                    
-                    // Check if this specific app is locked
-                    val activeUntil = prefs.getLong("active_until_${app.packageName}", 0L)
-                    val lockedUntil = prefs.getLong("locked_until_${app.packageName}", 0L)
+                    val (activeUntil, lockedUntil) = lockStateMap[app.packageName] ?: Pair(0L, 0L)
                     val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
-                    
+
                     PremiumAppListItem(
                         app = app,
                         isMonitored = isMonitored,
@@ -479,12 +503,12 @@ fun AppsScreen() {
                             } else {
                                 updated.remove(app.packageName)
                                 prefs.edit()
-                                    .remove("active_until_${app.packageName}")
-                                    .remove("locked_until_${app.packageName}")
+                                    .remove(PrefsKeys.ACTIVE_UNTIL + app.packageName)
+                                    .remove(PrefsKeys.LOCKED_UNTIL + app.packageName)
                                     .apply()
                             }
                             monitoredApps = updated
-                            prefs.edit().putStringSet("monitored_apps", updated).apply()
+                            prefs.edit().putStringSet(PrefsKeys.MONITORED_APPS, updated).apply()
                         }
                     )
                 }
@@ -574,11 +598,19 @@ suspend fun getInstalledApps(context: Context): List<AppInfo> = withContext(Disp
 }
 
 fun drawableToBitmap(drawable: Drawable): Bitmap? {
-    if (drawable is BitmapDrawable && drawable.bitmap != null) return drawable.bitmap
-    val bmp = if (drawable.intrinsicWidth <= 0 || drawable.intrinsicHeight <= 0)
-        Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-    else Bitmap.createBitmap(drawable.intrinsicWidth, drawable.intrinsicHeight, Bitmap.Config.ARGB_8888)
-    val c = Canvas(bmp); drawable.setBounds(0, 0, c.width, c.height); drawable.draw(c)
+    // BUG 11 FIX: Scale down to max 96x96 to prevent OOM with large app icon sets.
+    val maxSize = 96
+    if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        val src = drawable.bitmap
+        return if (src.width <= maxSize && src.height <= maxSize) src
+        else Bitmap.createScaledBitmap(src, maxSize, maxSize, true)
+    }
+    val w = if (drawable.intrinsicWidth > 0) minOf(drawable.intrinsicWidth, maxSize) else maxSize
+    val h = if (drawable.intrinsicHeight > 0) minOf(drawable.intrinsicHeight, maxSize) else maxSize
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val c = Canvas(bmp)
+    drawable.setBounds(0, 0, c.width, c.height)
+    drawable.draw(c)
     return bmp
 }
 

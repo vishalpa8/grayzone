@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.grayzone.app.PrefsKeys
 import com.grayzone.app.ui.theme.*
 
 @Composable
@@ -67,12 +68,13 @@ fun OnboardingScreen(onContinue: () -> Unit) {
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
-    val prefs = context.getSharedPreferences("GrayzonePrefs", Context.MODE_PRIVATE)
-    
-    var grayscaleEnabled by remember { mutableStateOf(prefs.getBoolean("grayscale_enabled", true)) }
-    var waitSeconds by remember { mutableStateOf(prefs.getInt("wait_seconds", 8)) }
-    var sessionMinutes by remember { mutableStateOf(prefs.getInt("session_minutes", 10)) }
-    var lockoutMinutes by remember { mutableStateOf(prefs.getInt("lockout_minutes", 30)) }
+    // BUG 6 FIX: Wrap in remember so SharedPreferences is not re-obtained on every recomposition.
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
+
+    var grayscaleEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)) }
+    var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.WAIT_SECONDS, 8)) }
+    var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)) }
+    var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)) }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp)) {
         Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
@@ -92,7 +94,7 @@ fun SettingsScreen() {
                     checked = grayscaleEnabled,
                     onCheckedChange = {
                         grayscaleEnabled = it
-                        prefs.edit().putBoolean("grayscale_enabled", it).apply()
+                        prefs.edit().putBoolean(PrefsKeys.GRAYSCALE_ENABLED, it).apply()
                     },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
@@ -108,11 +110,11 @@ fun SettingsScreen() {
         
         Text("Wait Duration: $waitSeconds seconds", color = GZTextPrimary, fontWeight = FontWeight.Medium)
         Slider(
-            value = waitSeconds.toFloat(), 
-            onValueChange = { waitSeconds = it.toInt() }, 
-            valueRange = 3f..30f, 
-            steps = 26, 
-            onValueChangeFinished = { prefs.edit().putInt("wait_seconds", waitSeconds).apply() }
+            value = waitSeconds.toFloat(),
+            onValueChange = { waitSeconds = it.toInt() },
+            valueRange = 3f..30f,
+            steps = 26,
+            onValueChangeFinished = { prefs.edit().putInt(PrefsKeys.WAIT_SECONDS, waitSeconds).apply() }
         )
         
         Spacer(Modifier.height(24.dp))
@@ -120,20 +122,15 @@ fun SettingsScreen() {
         Text("Session Limit: $sessionMinutes minutes", color = GZTextPrimary, fontWeight = FontWeight.Medium)
         Text("How long you can use an app after unlocking.", color = GZTextSecondary, fontSize = 12.sp)
         Slider(
-            value = sessionMinutes.toFloat(), 
-            onValueChange = { 
-                sessionMinutes = it.toInt()
-                if (sessionMinutes > lockoutMinutes) {
-                    lockoutMinutes = sessionMinutes
-                }
-            }, 
-            valueRange = 1f..60f, 
-            steps = 58, 
-            onValueChangeFinished = { 
-                prefs.edit()
-                    .putInt("session_minutes", sessionMinutes)
-                    .putInt("lockout_minutes", lockoutMinutes)
-                    .apply()
+            value = sessionMinutes.toFloat(),
+            onValueChange = {
+                sessionMinutes = it.toInt().coerceAtMost(lockoutMinutes)
+            },
+            valueRange = 1f..60f,
+            steps = 58,
+            // BUG 13 FIX: Only save session_minutes — session slider can no longer mutate lockoutMinutes.
+            onValueChangeFinished = {
+                prefs.edit().putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes).apply()
             }
         )
         
@@ -146,19 +143,17 @@ fun SettingsScreen() {
         Text("Lockout Duration: $lockoutText", color = GZTextPrimary, fontWeight = FontWeight.Medium)
         Text("How long the app remains locked after your session expires.", color = GZTextSecondary, fontSize = 12.sp)
         Slider(
-            value = lockoutMinutes.toFloat(), 
-            onValueChange = { 
+            value = lockoutMinutes.toFloat(),
+            onValueChange = {
                 lockoutMinutes = it.toInt()
-                if (sessionMinutes > lockoutMinutes) {
-                    sessionMinutes = lockoutMinutes
-                }
-            }, 
-            valueRange = 15f..300f, 
-            steps = 284, 
-            onValueChangeFinished = { 
+                if (sessionMinutes > lockoutMinutes) sessionMinutes = lockoutMinutes
+            },
+            valueRange = 15f..300f,
+            steps = 284,
+            onValueChangeFinished = {
                 prefs.edit()
-                    .putInt("session_minutes", sessionMinutes)
-                    .putInt("lockout_minutes", lockoutMinutes)
+                    .putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes)
+                    .putInt(PrefsKeys.LOCKOUT_MINUTES, lockoutMinutes)
                     .apply()
             }
         )
@@ -213,10 +208,10 @@ fun GZLoadingSpinner(modifier: Modifier = Modifier, size: Dp = 40.dp, color: Col
 @Composable
 fun LimitsScreen() {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("GrayzonePrefs", Context.MODE_PRIVATE) }
-    
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
+
     var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
-    var monitoredApps by remember { mutableStateOf(prefs.getStringSet("monitored_apps", emptySet()) ?: emptySet()) }
+    var monitoredApps by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()) }
     var isLoading by remember { mutableStateOf(true) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
@@ -254,15 +249,25 @@ fun LimitsScreen() {
                 Text("No apps monitored.", color = GZTextTertiary)
             }
         } else {
+            // BUG 5 FIX: Build a single snapshot map of all per-app timestamps once per tick,
+            // instead of calling prefs.getLong() inside each LazyColumn item (blocking main thread per item).
+            val appStateMap = remember(monitoredApps, currentTime) {
+                monitoredApps.associateWith { pkg ->
+                    Pair(
+                        prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
+                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+                    )
+                }
+            }
+
             androidx.compose.foundation.lazy.LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp)
             ) {
                 items(limitsList.size) { index ->
                     val app = limitsList[index]
-                    val activeUntil = prefs.getLong("active_until_${app.packageName}", 0L)
-                    val lockedUntil = prefs.getLong("locked_until_${app.packageName}", 0L)
-                    
+                    val (activeUntil, lockedUntil) = appStateMap[app.packageName] ?: Pair(0L, 0L)
+
                     val isLocked = currentTime < lockedUntil && currentTime > activeUntil
                     val isActive = currentTime < activeUntil
                     

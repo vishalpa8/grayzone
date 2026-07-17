@@ -54,10 +54,10 @@ Grayzone leverages Android's Accessibility Services and System Alert Windows to 
 
 ## Customization
 
-Currently, the default timers are defined internally, but can be customized in the UI (if sliders are enabled) or by adjusting the constants in `OverlayService.kt` and `AppAccessibilityService.kt`:
-- **Default Wait Time:** 8 Seconds
-- **Session Duration:** 10 Minutes
-- **Lockout Cooldown:** 30 Minutes
+You can customize the friction parameters directly in the **Settings** tab within the app:
+- **Wait Duration:** Slider to adjust the friction overlay time (3-30 seconds).
+- **Session Limit:** Slider to set how long you can use an app (1-60 minutes).
+- **Lockout Duration:** Slider to set the lockout penalty cooldown (15 minutes - 5 hours).
 
 ## License
 
