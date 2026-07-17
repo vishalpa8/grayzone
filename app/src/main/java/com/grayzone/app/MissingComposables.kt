@@ -121,10 +121,20 @@ fun SettingsScreen() {
         Text("How long you can use an app after unlocking.", color = GZTextSecondary, fontSize = 12.sp)
         Slider(
             value = sessionMinutes.toFloat(), 
-            onValueChange = { sessionMinutes = it.toInt() }, 
+            onValueChange = { 
+                sessionMinutes = it.toInt()
+                if (sessionMinutes > lockoutMinutes) {
+                    lockoutMinutes = sessionMinutes
+                }
+            }, 
             valueRange = 1f..60f, 
             steps = 59, 
-            onValueChangeFinished = { prefs.edit().putInt("session_minutes", sessionMinutes).apply() }
+            onValueChangeFinished = { 
+                prefs.edit()
+                    .putInt("session_minutes", sessionMinutes)
+                    .putInt("lockout_minutes", lockoutMinutes)
+                    .apply()
+            }
         )
         
         Spacer(Modifier.height(24.dp))
@@ -137,10 +147,20 @@ fun SettingsScreen() {
         Text("How long the app remains locked after your session expires.", color = GZTextSecondary, fontSize = 12.sp)
         Slider(
             value = lockoutMinutes.toFloat(), 
-            onValueChange = { lockoutMinutes = it.toInt() }, 
+            onValueChange = { 
+                lockoutMinutes = it.toInt()
+                if (sessionMinutes > lockoutMinutes) {
+                    sessionMinutes = lockoutMinutes
+                }
+            }, 
             valueRange = 15f..300f, 
             steps = 285, 
-            onValueChangeFinished = { prefs.edit().putInt("lockout_minutes", lockoutMinutes).apply() }
+            onValueChangeFinished = { 
+                prefs.edit()
+                    .putInt("session_minutes", sessionMinutes)
+                    .putInt("lockout_minutes", lockoutMinutes)
+                    .apply()
+            }
         )
     }
 }
