@@ -37,16 +37,17 @@ class AppAccessibilityService : AccessibilityService() {
                     // They are still in the app when session expired! Kick them out.
                     Log.d(TAG, "Session expired for $pkg while foregrounded, enforcing lock")
                     
-                    val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
-                        setPackage(applicationContext?.packageName)
-                        putExtra(EXTRA_PACKAGE_NAME, pkg)
-                        putExtra("overlay_mode", 2) // Lock mode
-                        
-                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        val lockedUntil = prefs.getLong("locked_until_$pkg", 0L)
-                        putExtra("locked_until", lockedUntil)
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    
+                    val pm = packageManager
+                    val appName = try {
+                        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                    } catch (e: Exception) {
+                        pkg
                     }
-                    sendBroadcast(broadcastIntent)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        android.widget.Toast.makeText(this@AppAccessibilityService, "$appName session expired!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -159,14 +160,18 @@ class AppAccessibilityService : AccessibilityService() {
                 startCountdownNotification(packageName, activeUntil)
             } else if (now < lockedUntil) {
                 // App is HARD LOCKED
-                Log.d(TAG, "App $packageName is LOCKED OUT — triggering lockout overlay")
-                val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
-                    setPackage(applicationContext.packageName)
-                    putExtra(EXTRA_PACKAGE_NAME, packageName)
-                    putExtra("overlay_mode", 2) // Locked mode
-                    putExtra("locked_until", lockedUntil)
+                Log.d(TAG, "App $packageName is LOCKED OUT — kicking to home")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                
+                val pm = packageManager
+                val appName = try {
+                    pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+                } catch (e: Exception) {
+                    packageName
                 }
-                sendBroadcast(broadcastIntent)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(this@AppAccessibilityService, "$appName is currently locked", android.widget.Toast.LENGTH_SHORT).show()
+                }
             } else {
                 // First time or session expired
                 Log.d(TAG, "App $packageName detected: session expired, triggering friction overlay")
