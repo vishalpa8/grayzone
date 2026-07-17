@@ -69,6 +69,7 @@ fun SettingsScreen() {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("GrayzonePrefs", Context.MODE_PRIVATE)
     
+    var grayscaleEnabled by remember { mutableStateOf(prefs.getBoolean("grayscale_enabled", true)) }
     var waitSeconds by remember { mutableStateOf(prefs.getInt("wait_seconds", 8)) }
     var sessionMinutes by remember { mutableStateOf(prefs.getInt("session_minutes", 10)) }
     var lockoutMinutes by remember { mutableStateOf(prefs.getInt("lockout_minutes", 30)) }
@@ -76,6 +77,34 @@ fun SettingsScreen() {
     Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp)) {
         Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(32.dp))
+        
+        // Grayscale toggle
+        GZCard {
+            Row(
+                modifier = Modifier.padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Grayscale Effect", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text("Apply grayscale filter on monitored apps", color = GZTextSecondary, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = grayscaleEnabled,
+                    onCheckedChange = {
+                        grayscaleEnabled = it
+                        prefs.edit().putBoolean("grayscale_enabled", it).apply()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = GZPrimary,
+                        uncheckedThumbColor = GZTextTertiary,
+                        uncheckedTrackColor = GZSurfaceHigh
+                    )
+                )
+            }
+        }
+        
+        Spacer(Modifier.height(24.dp))
         
         Text("Wait Duration: $waitSeconds seconds", color = GZTextPrimary, fontWeight = FontWeight.Medium)
         Slider(

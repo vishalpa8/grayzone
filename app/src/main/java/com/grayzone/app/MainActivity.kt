@@ -293,7 +293,7 @@ fun HomeScreen() {
     }
 }
 
-// â”€â”€â”€ Apps Screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ——— Apps Screen —————————————————————————————————————————————————————————
 
 @Composable
 fun AppsScreen() {
@@ -305,10 +305,29 @@ fun AppsScreen() {
     }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
+    var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean("grayzone_enabled", true)) }
+    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledApps(context)
         isLoading = false
+    }
+    
+    // Ticker for live lock detection
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            currentTime = System.currentTimeMillis()
+        }
+    }
+
+    // Check if ANY app is currently locked
+    val anyAppLocked = remember(monitoredApps, currentTime) {
+        monitoredApps.any { pkg ->
+            val activeUntil = prefs.getLong("active_until_$pkg", 0L)
+            val lockedUntil = prefs.getLong("locked_until_$pkg", 0L)
+            currentTime > activeUntil && currentTime < lockedUntil
+        }
     }
 
     val filtered = remember(installedApps, searchQuery, monitoredApps) {
@@ -337,6 +356,67 @@ fun AppsScreen() {
                 fontSize = 14.sp
             )
             Spacer(Modifier.height(16.dp))
+            
+            // Master Enable/Disable Switch
+            GZCard(
+                background = if (grayzoneEnabled) GZPrimary.copy(alpha = 0.1f) else GZSurface,
+                border = if (grayzoneEnabled) GZPrimary.copy(alpha = 0.3f) else GZBorder
+            ) {
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = if (grayzoneEnabled) GZPrimary else GZTextTertiary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (grayzoneEnabled) "Monitoring Enabled" else "Monitoring Disabled",
+                            color = if (grayzoneEnabled) GZTextPrimary else GZTextSecondary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp
+                        )
+                        if (anyAppLocked && grayzoneEnabled) {
+                            Text(
+                                "Cannot disable while apps are locked",
+                                color = GZRed.copy(alpha = 0.8f),
+                                fontSize = 11.sp
+                            )
+                        } else {
+                            Text(
+                                if (grayzoneEnabled) "Tap to pause all monitoring" else "Tap to resume monitoring",
+                                color = GZTextTertiary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = grayzoneEnabled,
+                        onCheckedChange = {
+                            if (!anyAppLocked || !grayzoneEnabled) {
+                                grayzoneEnabled = it
+                                prefs.edit().putBoolean("grayzone_enabled", it).apply()
+                            }
+                        },
+                        enabled = !anyAppLocked || !grayzoneEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = GZPrimary,
+                            uncheckedThumbColor = GZTextTertiary,
+                            uncheckedTrackColor = GZSurfaceHigh,
+                            disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                            disabledCheckedTrackColor = GZPrimary.copy(alpha = 0.4f)
+                        )
+                    )
+                }
+            }
+            
+            Spacer(Modifier.height(16.dp))
+
             // Search bar
             Row(
                 modifier = Modifier
@@ -358,7 +438,7 @@ fun AppsScreen() {
                     singleLine = true,
                     decorationBox = { inner ->
                         if (searchQuery.isEmpty()) {
-                            Text("Search appsâ€¦", color = GZTextTertiary, fontSize = 15.sp)
+                            Text("Search apps…", color = GZTextTertiary, fontSize = 15.sp)
                         }
                         inner()
                     }
@@ -381,24 +461,32 @@ fun AppsScreen() {
             LazyColumn {
                 items(filtered, key = { it.packageName }) { app ->
                     val isMonitored = monitoredApps.contains(app.packageName)
-                        PremiumAppListItem(
-                            app = app,
-                            isMonitored = isMonitored,
-                            onToggle = { checked ->
-                                val updated = monitoredApps.toMutableSet()
-                                if (checked) {
-                                    updated.add(app.packageName)
-                                } else {
-                                    updated.remove(app.packageName)
-                                    prefs.edit()
-                                        .remove("active_until_${app.packageName}")
-                                        .remove("locked_until_${app.packageName}")
-                                        .apply()
-                                }
-                                monitoredApps = updated
-                                prefs.edit().putStringSet("monitored_apps", updated).apply()
+                    
+                    // Check if this specific app is locked
+                    val activeUntil = prefs.getLong("active_until_${app.packageName}", 0L)
+                    val lockedUntil = prefs.getLong("locked_until_${app.packageName}", 0L)
+                    val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
+                    
+                    PremiumAppListItem(
+                        app = app,
+                        isMonitored = isMonitored,
+                        isLocked = isAppLocked,
+                        isGloballyDisabled = !grayzoneEnabled,
+                        onToggle = { checked ->
+                            val updated = monitoredApps.toMutableSet()
+                            if (checked) {
+                                updated.add(app.packageName)
+                            } else {
+                                updated.remove(app.packageName)
+                                prefs.edit()
+                                    .remove("active_until_${app.packageName}")
+                                    .remove("locked_until_${app.packageName}")
+                                    .apply()
                             }
-                        )
+                            monitoredApps = updated
+                            prefs.edit().putStringSet("monitored_apps", updated).apply()
+                        }
+                    )
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }
@@ -407,12 +495,28 @@ fun AppsScreen() {
 }
 
 @Composable
-fun PremiumAppListItem(app: AppInfo, isMonitored: Boolean, onToggle: (Boolean) -> Unit) {
+fun PremiumAppListItem(
+    app: AppInfo, 
+    isMonitored: Boolean, 
+    isLocked: Boolean = false, 
+    isGloballyDisabled: Boolean = false,
+    onToggle: (Boolean) -> Unit
+) {
+    val isToggleEnabled = !isLocked && !isGloballyDisabled
+    val rowAlpha = if (isGloballyDisabled && !isLocked) 0.5f else 1f
+    
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onToggle(!isMonitored) }
-            .background(if (isMonitored) GZPrimaryGlow else Color.Transparent)
+            .then(
+                if (isToggleEnabled) Modifier.clickable { onToggle(!isMonitored) }
+                else Modifier
+            )
+            .background(
+                if (isLocked) GZRed.copy(alpha = 0.06f)
+                else if (isMonitored && !isGloballyDisabled) GZPrimaryGlow
+                else Color.Transparent
+            )
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -420,26 +524,34 @@ fun PremiumAppListItem(app: AppInfo, isMonitored: Boolean, onToggle: (Boolean) -
             Image(
                 bitmap = app.icon.asImageBitmap(),
                 contentDescription = app.name,
-                modifier = Modifier.size(46.dp).clip(RoundedCornerShape(12.dp))
+                modifier = Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)),
+                alpha = rowAlpha
             )
         } else {
             Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(GZSurfaceElevated))
         }
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(app.name, color = GZTextPrimary, fontWeight = FontWeight.Medium, fontSize = 15.sp,
+            Text(app.name, color = GZTextPrimary.copy(alpha = rowAlpha), fontWeight = FontWeight.Medium, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(app.packageName, color = GZTextTertiary, fontSize = 11.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (isLocked) {
+                Text("🔒 Locked", color = GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            } else {
+                Text(app.packageName, color = GZTextTertiary.copy(alpha = rowAlpha), fontSize = 11.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         Switch(
             checked = isMonitored,
-            onCheckedChange = onToggle,
+            onCheckedChange = { if (isToggleEnabled) onToggle(it) },
+            enabled = isToggleEnabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
-                checkedTrackColor = GZPrimary,
+                checkedTrackColor = if (isLocked) GZRed else GZPrimary,
                 uncheckedThumbColor = GZTextTertiary,
-                uncheckedTrackColor = GZSurfaceHigh
+                uncheckedTrackColor = GZSurfaceHigh,
+                disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                disabledCheckedTrackColor = if (isLocked) GZRed.copy(alpha = 0.5f) else GZPrimary.copy(alpha = 0.4f)
             )
         )
     }

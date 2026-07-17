@@ -34,20 +34,18 @@ class AppAccessibilityService : AccessibilityService() {
             if (intent?.action == ACTION_CHECK_LOCKOUT) {
                 val pkg = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
                 if (pkg == lastForegroundPackage) {
-                    // They are still in the app when session expired! Kick them out.
+                    // They are still in the app when session expired! Show lock overlay.
                     Log.d(TAG, "Session expired for $pkg while foregrounded, enforcing lock")
                     
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    
-                    val pm = packageManager
-                    val appName = try {
-                        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-                    } catch (e: Exception) {
-                        pkg
+                    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    val lockedUntil = prefs.getLong("locked_until_$pkg", 0L)
+                    val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
+                        setPackage(applicationContext?.packageName)
+                        putExtra(EXTRA_PACKAGE_NAME, pkg)
+                        putExtra("overlay_mode", 2) // Lock mode
+                        putExtra("locked_until", lockedUntil)
                     }
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        android.widget.Toast.makeText(this@AppAccessibilityService, "$appName session expired!", android.widget.Toast.LENGTH_SHORT).show()
-                    }
+                    sendBroadcast(broadcastIntent)
                 }
             }
         }
@@ -129,6 +127,9 @@ class AppAccessibilityService : AccessibilityService() {
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+        // Check if Grayzone is globally enabled
+        val isGrayzoneEnabled = prefs.getBoolean("grayzone_enabled", true)
+
         // Clear active session for old app if they left before it expired
         if (oldPackage != null && oldPackage != packageName) {
             cancelCountdownNotification()
@@ -143,6 +144,13 @@ class AppAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "User left $oldPackage before session expired. Cleared timers.")
             }
         }
+
+        // If Grayzone is globally disabled, skip all monitoring (but still respect existing lockouts)
+        if (!isGrayzoneEnabled) {
+            toggleGrayscale(false)
+            return
+        }
+
         val monitoredApps = prefs.getStringSet(KEY_MONITORED, emptySet()) ?: emptySet()
         val isMonitored = monitoredApps.contains(packageName)
 
@@ -159,19 +167,15 @@ class AppAccessibilityService : AccessibilityService() {
                 Log.d(TAG, "App $packageName is in active session, allowing access")
                 startCountdownNotification(packageName, activeUntil)
             } else if (now < lockedUntil) {
-                // App is HARD LOCKED
-                Log.d(TAG, "App $packageName is LOCKED OUT — kicking to home")
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                
-                val pm = packageManager
-                val appName = try {
-                    pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
-                } catch (e: Exception) {
-                    packageName
+                // App is HARD LOCKED - show lock overlay
+                Log.d(TAG, "App $packageName is LOCKED OUT - showing lock overlay")
+                val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
+                    setPackage(applicationContext.packageName)
+                    putExtra(EXTRA_PACKAGE_NAME, packageName)
+                    putExtra("overlay_mode", 2) // Locked mode
+                    putExtra("locked_until", lockedUntil)
                 }
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    android.widget.Toast.makeText(this@AppAccessibilityService, "$appName is currently locked", android.widget.Toast.LENGTH_SHORT).show()
-                }
+                sendBroadcast(broadcastIntent)
             } else {
                 // First time or session expired
                 Log.d(TAG, "App $packageName detected: session expired, triggering friction overlay")
@@ -188,11 +192,18 @@ class AppAccessibilityService : AccessibilityService() {
     private fun toggleGrayscale(enable: Boolean) {
         if (checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) != PackageManager.PERMISSION_GRANTED) return
         
+        // Check if grayscale feature is enabled in settings
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val grayscaleEnabled = prefs.getBoolean("grayscale_enabled", true)
+        
+        // If grayscale is disabled in settings, always turn it off
+        val shouldEnable = enable && grayscaleEnabled
+        
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val cr = contentResolver
-                Settings.Secure.putInt(cr, "accessibility_display_daltonizer_enabled", if (enable) 1 else 0)
-                if (enable) {
+                Settings.Secure.putInt(cr, "accessibility_display_daltonizer_enabled", if (shouldEnable) 1 else 0)
+                if (shouldEnable) {
                     Settings.Secure.putInt(cr, "accessibility_display_daltonizer", 0) // 0 = Grayscale
                 }
             } catch (e: Exception) {
