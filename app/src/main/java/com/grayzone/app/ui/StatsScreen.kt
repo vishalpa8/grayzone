@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -39,6 +40,7 @@ fun StatsScreen() {
     var totalSavedMillis by remember { mutableLongStateOf(0L) }
     var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(emptyList()) }
     var weeklyTotals by remember { mutableStateOf<List<DateTotalRow>>(emptyList()) }
+    var mostDistractingTime by remember { mutableStateOf<String?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -64,6 +66,24 @@ fun StatsScreen() {
                 calendar.add(Calendar.DAY_OF_YEAR, -6)
                 val fromKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
                 weeklyTotals = fillWeeklyTotals(dao.getWeeklyTotals(fromKey))
+                
+                val allEvents = dao.getAllEvents()
+                if (allEvents.isNotEmpty()) {
+                    val groupedByHour = allEvents.groupBy {
+                        val cal = Calendar.getInstance()
+                        cal.timeInMillis = it.startTime
+                        cal.get(Calendar.HOUR_OF_DAY)
+                    }.mapValues { it.value.sumOf { e -> e.durationMillis } }
+                    val maxHour = groupedByHour.maxByOrNull { it.value }?.key
+                    if (maxHour != null) {
+                        val amPm1 = if (maxHour < 12) "AM" else "PM"
+                        val h1 = if (maxHour % 12 == 0) 12 else maxHour % 12
+                        val nextHour = (maxHour + 1) % 24
+                        val amPm2 = if (nextHour < 12) "AM" else "PM"
+                        val h2 = if (nextHour % 12 == 0) 12 else nextHour % 12
+                        mostDistractingTime = "$h1:00 $amPm1 - $h2:00 $amPm2"
+                    }
+                }
             }
         } catch (e: Exception) {
             errorMsg = "Could not load stats. Try again later."
@@ -134,6 +154,11 @@ fun StatsScreen() {
             ) {
                 item {
                     SummaryCard(totalBlocked, totalSavedMillis)
+                }
+                if (mostDistractingTime != null) {
+                    item {
+                        DistractingTimeCard(mostDistractingTime!!)
+                    }
                 }
                 item {
                     Text("Weekly Overview", style = MaterialTheme.typography.titleMedium, color = GZTextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
@@ -265,17 +290,47 @@ private fun WeeklyBarChart(totals: List<DateTotalRow>) {
                         } else {
                             Spacer(Modifier.height(18.dp))
                         }
+                        
+                        var visible by remember { mutableStateOf(false) }
+                        LaunchedEffect(Unit) { visible = true }
+                        val animatedProportion by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = if (visible) proportion else 0f,
+                            animationSpec = androidx.compose.animation.core.tween(durationMillis = 800, delayMillis = 100)
+                        )
 
                         Box(
                             modifier = Modifier
                                 .width(32.dp)
-                                .fillMaxHeight(proportion)
+                                .fillMaxHeight(animatedProportion)
                                 .background(GZAccent, shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(dayName, color = GZTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DistractingTimeCard(timeRange: String) {
+    GZCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(CircleShape).background(GZAmber.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("🔥", fontSize = 24.sp)
+            }
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text("Most Distracting Time", color = GZTextSecondary, fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                Text(timeRange, color = GZTextPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
             }
         }
     }

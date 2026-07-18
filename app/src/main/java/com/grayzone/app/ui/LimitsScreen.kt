@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.*
 import com.grayzone.app.ui.theme.*
+import androidx.compose.animation.core.animateFloat
 
 @Composable
 fun LimitsScreen() {
@@ -94,6 +95,16 @@ fun LimitsScreen() {
                     val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
                     val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + app.packageName, 30) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
 
+                    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
+                    val pulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.4f,
+                        targetValue = 1f,
+                        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                            animation = androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing),
+                            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                        )
+                    )
+
                     GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -101,10 +112,10 @@ fun LimitsScreen() {
                                 Spacer(modifier = Modifier.weight(1f))
                                 if (isAppLocked) {
                                     val remainingMins = ((lockedUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                                    Text("🔒 Locked (${remainingMins}m)", color = GZRed, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("🔒 Locked (${remainingMins}m)", color = GZRed.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 } else if (isActive) {
                                     val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                                    Text("⏳ Active (${remainingMins}m)", color = GZGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("⏳ Active (${remainingMins}m)", color = GZGreen.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 } else if (isPaused) {
                                     val remainingMins = (remaining / (60 * 1000)).coerceAtLeast(1)
                                     Text("⏸ Paused (${remainingMins}m)", color = GZAmber, fontSize = 12.sp, fontWeight = FontWeight.Bold)

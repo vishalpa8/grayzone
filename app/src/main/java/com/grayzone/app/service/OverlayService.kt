@@ -387,6 +387,13 @@ class OverlayService : Service() {
             Log.e(TAG, "addView failed: ${e.message}"); return
         }
 
+        // Smooth fade-in animation
+        val alphaAnim = android.view.animation.AlphaAnimation(0f, 1f).apply {
+            duration = 300
+            fillAfter = true
+        }
+        root.startAnimation(alphaAnim)
+
         countdownJobUI?.cancel()
         countdownJobUI = serviceScope.launch(Dispatchers.Main) {
             while (secondsRemaining > 0) {

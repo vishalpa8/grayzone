@@ -43,6 +43,10 @@ interface UsageDao {
     @Query("SELECT * FROM usage_events WHERE dateKey = :dateKey ORDER BY startTime DESC")
     suspend fun getEventsForDate(dateKey: String): List<UsageEvent>
 
+    /** All events for advanced analytics. */
+    @Query("SELECT * FROM usage_events")
+    suspend fun getAllEvents(): List<UsageEvent>
+
     /** Per-app total usage for the last N days. */
     @Query("SELECT packageName, appName, SUM(durationMillis) as totalMillis, COUNT(*) as sessionCount FROM usage_events WHERE dateKey >= :fromDate GROUP BY packageName ORDER BY totalMillis DESC")
     suspend fun getAppUsageSince(fromDate: String): List<DailySummaryRow>
