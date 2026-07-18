@@ -8,11 +8,8 @@ import androidx.room.*
 @Dao
 interface UsageDao {
 
-    @Insert
-    suspend fun insertEvent(event: UsageEvent): Long
-
-    @Update
-    suspend fun updateEvent(event: UsageEvent)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEvent(event: UsageEvent)
 
     // ── Daily Summaries ────────────────────────────────────────────────────
 

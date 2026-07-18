@@ -44,6 +44,33 @@ fun isAnyAppLocked(
     (now < activeUntil) || (now in (activeUntil + 1)..lockedUntil) || (remaining > 0)
 }
 
+/**
+ * Returns true when every monitored app with a daily budget is still under its limit today.
+ * Apps with budget 0 (unlimited) are ignored.
+ */
+fun stayedUnderAllBudgets(
+    prefs: SharedPreferences,
+    monitoredApps: Set<String>,
+    dateKey: String
+): Boolean = monitoredApps.all { pkg ->
+    val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+    if (budgetMins <= 0) return@all true
+    val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
+    val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) else 0L
+    usedMs < budgetMins * 60 * 1000L
+}
+
+/** Milliseconds until local midnight (start of next calendar day). */
+fun millisUntilMidnight(): Long {
+    val cal = java.util.Calendar.getInstance()
+    cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    cal.set(java.util.Calendar.MINUTE, 0)
+    cal.set(java.util.Calendar.SECOND, 0)
+    cal.set(java.util.Calendar.MILLISECOND, 0)
+    return cal.timeInMillis
+}
+
 // ─── Reflection Prompts (Single Source of Truth) ──────────────────────────────
 
 /**

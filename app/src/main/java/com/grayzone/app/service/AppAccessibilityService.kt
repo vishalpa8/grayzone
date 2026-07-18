@@ -30,6 +30,7 @@ class AppAccessibilityService : AccessibilityService() {
         const val TAG = "GrayzoneService"
         const val ACTION_APP_OPENED   = "com.grayzone.app.ACTION_APP_OPENED"
         const val ACTION_CHECK_LOCKOUT = "com.grayzone.app.ACTION_CHECK_LOCKOUT"
+        const val ACTION_SESSION_STARTED = "com.grayzone.app.ACTION_SESSION_STARTED"
         const val EXTRA_PACKAGE_NAME  = "package_name"
     }
 
@@ -37,10 +38,23 @@ class AppAccessibilityService : AccessibilityService() {
     private var sessionStartTime: Long = 0L
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var scheduleManager: ScheduleManager
+    private var cachedHomeLauncherPkg: String? = null
 
     private val lockoutReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != ACTION_CHECK_LOCKOUT) return
+            when (intent?.action) {
+                ACTION_CHECK_LOCKOUT -> handleLockoutCheck(intent)
+                ACTION_SESSION_STARTED -> {
+                    val pkg = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
+                    if (pkg == lastForegroundPackage) {
+                        sessionStartTime = System.currentTimeMillis()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleLockoutCheck(intent: Intent) {
             val pkg = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
             if (pkg != lastForegroundPackage) return // User already left the app
 
@@ -52,7 +66,7 @@ class AppAccessibilityService : AccessibilityService() {
             if (now < activeUntil) {
                 // Session was paused and resumed, so this check fired early. Reschedule.
                 val delayMs = activeUntil - now
-                startService(Intent(context, OverlayService::class.java).apply {
+                startService(Intent(this, OverlayService::class.java).apply {
                     action = OverlayService.ACTION_SCHEDULE_LOCKOUT_CHECK
                     putExtra("package_name", pkg)
                     putExtra("delay_ms", delayMs)
@@ -69,7 +83,6 @@ class AppAccessibilityService : AccessibilityService() {
                 putExtra("locked_until", lockedUntil)
             }
             sendBroadcast(broadcastIntent)
-        }
     }
 
     override fun onServiceConnected() {
@@ -83,7 +96,10 @@ class AppAccessibilityService : AccessibilityService() {
         }
         Log.d(TAG, "Grayzone AccessibilityService connected")
 
-        val filter = IntentFilter(ACTION_CHECK_LOCKOUT)
+        val filter = IntentFilter().apply {
+            addAction(ACTION_CHECK_LOCKOUT)
+            addAction(ACTION_SESSION_STARTED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(lockoutReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -113,11 +129,13 @@ class AppAccessibilityService : AccessibilityService() {
     }
 
     private fun isHomeLauncher(pkg: String): Boolean {
-        val resolveInfo = packageManager.resolveActivity(
-            Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) },
-            PackageManager.MATCH_DEFAULT_ONLY
-        )
-        return resolveInfo?.activityInfo?.packageName == pkg
+        if (cachedHomeLauncherPkg == null) {
+            cachedHomeLauncherPkg = packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) },
+                PackageManager.MATCH_DEFAULT_ONLY
+            )?.activityInfo?.packageName
+        }
+        return cachedHomeLauncherPkg == pkg
     }
 
     private fun hasLauncherIntent(pkg: String): Boolean =
@@ -136,7 +154,17 @@ class AppAccessibilityService : AccessibilityService() {
                 val appName = getAppName(pkg)
                 
                 val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                dao.insertEvent(UsageEvent(packageName = pkg, appName = appName, startTime = startTime, endTime = now, wasBlocked = false, dateKey = dateKey))
+                dao.insertEvent(
+                    UsageEvent(
+                        packageName = pkg,
+                        appName = appName,
+                        startTime = startTime,
+                        endTime = now,
+                        durationMillis = durationMs,
+                        wasBlocked = false,
+                        dateKey = dateKey
+                    )
+                )
                 
                 // Update budget
                 val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)

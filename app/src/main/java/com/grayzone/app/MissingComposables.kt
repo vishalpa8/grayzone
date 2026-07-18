@@ -170,9 +170,12 @@ fun SettingsScreen() {
                 Switch(
                     checked = grayscaleEnabled,
                     onCheckedChange = {
-                        grayscaleEnabled = it
-                        prefs.edit().putBoolean(PrefsKeys.GRAYSCALE_ENABLED, it).apply()
+                        if (!anyAppLockedOrActive) {
+                            grayscaleEnabled = it
+                            prefs.edit().putBoolean(PrefsKeys.GRAYSCALE_ENABLED, it).apply()
+                        }
                     },
+                    enabled = !anyAppLockedOrActive,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = GZPrimary,
@@ -245,7 +248,13 @@ fun SettingsScreen() {
             onClick = { showCustomPrompts = true },
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryContainer, contentColor = GZTextPrimary)
+            enabled = !anyAppLockedOrActive,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = GZPrimaryContainer,
+                contentColor = GZTextPrimary,
+                disabledContainerColor = GZSurfaceHigh,
+                disabledContentColor = GZTextTertiary
+            )
         ) {
             Text("Manage Custom Prompts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -257,7 +266,13 @@ fun SettingsScreen() {
             onClick = { showSchedule = true },
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryContainer, contentColor = GZTextPrimary)
+            enabled = !anyAppLockedOrActive,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = GZPrimaryContainer,
+                contentColor = GZTextPrimary,
+                disabledContainerColor = GZSurfaceHigh,
+                disabledContentColor = GZTextTertiary
+            )
         ) {
             Text("Manage Schedule Focus Modes", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }

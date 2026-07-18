@@ -20,7 +20,7 @@ abstract class UsageDatabase : RoomDatabase() {
                     context.applicationContext,
                     UsageDatabase::class.java,
                     "grayzone_usage.db"
-                ).build()
+                ).fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance
             }

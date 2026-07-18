@@ -13,9 +13,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.GZCard
 import com.grayzone.app.data.StreakManager
 import com.grayzone.app.ui.theme.*
@@ -24,12 +27,23 @@ import com.grayzone.app.ui.theme.*
 fun StreakCard() {
     val context = LocalContext.current
     val streakManager = remember { StreakManager(context) }
-    
-    // We don't have a reactive flow setup yet, so we just read it on composition.
-    // Real-time updates could use a LaunchedEffect to poll or a Flow from a Room DB.
-    val currentStreak = remember { streakManager.getCurrentStreak() }
-    val bestStreak = remember { streakManager.getLongestStreak() }
-    val achievements = remember { streakManager.getAchievements().filter { it.isUnlocked } }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var currentStreak by remember { mutableIntStateOf(streakManager.getCurrentStreak()) }
+    var bestStreak by remember { mutableIntStateOf(streakManager.getLongestStreak()) }
+    var achievements by remember { mutableStateOf(streakManager.getAchievements().filter { it.isUnlocked }) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                currentStreak = streakManager.getCurrentStreak()
+                bestStreak = streakManager.getLongestStreak()
+                achievements = streakManager.getAchievements().filter { it.isUnlocked }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
         Column(modifier = Modifier.padding(18.dp)) {

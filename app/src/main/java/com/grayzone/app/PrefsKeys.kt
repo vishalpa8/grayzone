@@ -31,7 +31,6 @@ object PrefsKeys {
     const val DAILY_BUDGET_MINUTES    = "daily_budget_"     // 0 = disabled
     const val DAILY_USED_MILLIS       = "daily_used_"
     const val DAILY_RESET_DATE        = "daily_reset_date_" // "yyyy-MM-dd"
-    const val BUDGET_LOCKED_UNTIL     = "budget_locked_"
 
     // ── Schedule / Focus Mode ──────────────────────────────────────────────
     const val SCHEDULE_RULES_JSON     = "schedule_rules_json"

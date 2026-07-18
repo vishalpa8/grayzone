@@ -11,13 +11,12 @@ import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import com.grayzone.app.OverlayMode
 import com.grayzone.app.PrefsKeys
+import com.grayzone.app.GrayscaleManager
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -33,6 +32,12 @@ import com.grayzone.app.MainActivity
 import com.grayzone.app.Prompts
 import com.grayzone.app.formatDuration
 import com.grayzone.app.getAppName
+import com.grayzone.app.data.StreakManager
+import com.grayzone.app.data.UsageDatabase
+import com.grayzone.app.data.UsageEvent
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -173,13 +178,21 @@ class OverlayService : Service() {
 
     // ─── Overlay UI ──────────────────────────────────────────────────────────
 
+    private var daltonizerActive = false
+
     private fun showTint() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         if (!prefs.getBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)) {
             dismissTint()
             return
         }
-        
+
+        dismissOverlayTintFallback()
+        if (GrayscaleManager.enable(this)) {
+            daltonizerActive = true
+            return
+        }
+
         if (tintView != null) return
         val view = View(this).apply { setBackgroundColor(0x80808080.toInt()) }
         val wlp = WindowManager.LayoutParams(
@@ -192,11 +205,17 @@ class OverlayService : Service() {
         try { windowManager?.addView(view, wlp) } catch (e: Exception) {}
     }
 
+    private fun dismissOverlayTintFallback() {
+        tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        tintView = null
+    }
+
     private fun dismissTint() {
-        tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
-        tintView = null
-        tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
-        tintView = null
+        if (daltonizerActive) {
+            GrayscaleManager.disable(this)
+            daltonizerActive = false
+        }
+        dismissOverlayTintFallback()
     }
 
     private fun showOverlay(packageName: String, appName: String, mode: Int, lockedUntil: Long) {
@@ -325,6 +344,10 @@ class OverlayService : Service() {
         }
         val skipParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL }
         skipBtn.setOnClickListener {
+            if (mode == OverlayMode.FRICTION) {
+                val waitedMs = (totalSeconds - secondsRemaining).coerceAtLeast(0) * 1000L
+                recordFrictionSkip(packageName, waitedMs)
+            }
             dismissOverlay()
             val homeIntent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -403,6 +426,43 @@ class OverlayService : Service() {
 
         startCountdownNotification(packageName, activeUntil)
         scheduleLockoutCheck(packageName, sessionMins * 60 * 1000L)
+        showTint()
+        sendBroadcast(Intent(AppAccessibilityService.ACTION_SESSION_STARTED).apply {
+            setPackage(applicationContext.packageName)
+            putExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME, packageName)
+        })
+    }
+
+    private fun recordFrictionSkip(packageName: String, waitedMs: Long) {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
+        val lockoutMins = if (hasCustom) {
+            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 30)
+        } else {
+            prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+        }
+
+        StreakManager(this).recordBlockedSession(lockoutMins)
+
+        serviceScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                UsageDatabase.getInstance(this@OverlayService).usageDao().insertEvent(
+                    UsageEvent(
+                        packageName = packageName,
+                        appName = getAppName(packageName),
+                        startTime = now - waitedMs,
+                        endTime = now,
+                        durationMillis = waitedMs,
+                        wasBlocked = true,
+                        dateKey = dateKey
+                    )
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to log blocked session: ${e.message}")
+            }
+        }
     }
     
     private fun scheduleLockoutCheck(packageName: String, delayMs: Long) {

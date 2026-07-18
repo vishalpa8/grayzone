@@ -13,10 +13,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.GZCard
+import com.grayzone.app.data.DateTotalRow
 import com.grayzone.app.data.UsageDatabase
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -28,13 +32,23 @@ import java.util.*
 @Composable
 fun StatsScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
-    var totalBlocked by remember { mutableStateOf(0) }
-    var totalSavedMillis by remember { mutableStateOf(0L) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var reloadKey by remember { mutableIntStateOf(0) }
+    var totalBlocked by remember { mutableIntStateOf(0) }
+    var totalSavedMillis by remember { mutableLongStateOf(0L) }
     var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(emptyList()) }
-    var weeklyTotals by remember { mutableStateOf<List<com.grayzone.app.data.DateTotalRow>>(emptyList()) }
+    var weeklyTotals by remember { mutableStateOf<List<DateTotalRow>>(emptyList()) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) reloadKey++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(reloadKey) {
         try {
             withContext(Dispatchers.IO) {
                 val dao = UsageDatabase.getInstance(context).usageDao()
@@ -42,13 +56,13 @@ fun StatsScreen(onBack: () -> Unit = {}) {
                 totalSavedMillis = dao.getTotalBlockedDurationMillis() ?: 0L
                 val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
                 dailySummary = dao.getDailySummary(todayKey)
-                
-                // Weekly chart - get last 7 days
+
                 val calendar = Calendar.getInstance()
                 calendar.add(Calendar.DAY_OF_YEAR, -6)
                 val fromKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-                weeklyTotals = dao.getWeeklyTotals(fromKey)
+                weeklyTotals = fillWeeklyTotals(dao.getWeeklyTotals(fromKey))
             }
+            errorMsg = null
         } catch (e: Exception) {
             errorMsg = "Could not load stats: ${e.message}"
         }
@@ -163,18 +177,25 @@ private fun DailyUsageList(rows: List<com.grayzone.app.data.DailySummaryRow>) {
     }
 }
 
+private fun fillWeeklyTotals(raw: List<DateTotalRow>): List<DateTotalRow> {
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val byDate = raw.associateBy { it.dateKey }
+    val cal = Calendar.getInstance()
+    cal.add(Calendar.DAY_OF_YEAR, -6)
+    return buildList {
+        repeat(7) {
+            val key = dateFormat.format(cal.time)
+            add(byDate[key] ?: DateTotalRow(key, 0L))
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+    }
+}
+
 @Composable
-private fun WeeklyBarChart(totals: List<com.grayzone.app.data.DateTotalRow>) {
+private fun WeeklyBarChart(totals: List<DateTotalRow>) {
     GZCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(20.dp)) {
-            if (totals.isEmpty()) {
-                Box(modifier = Modifier.padding(16.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("Not enough data to display weekly trends.", color = GZTextTertiary, fontSize = 14.sp)
-                }
-                return@GZCard
-            }
-            
-            val max = totals.maxOf { it.totalMillis }.coerceAtLeast(1L)
+            val max = totals.maxOfOrNull { it.totalMillis }?.coerceAtLeast(1L) ?: 1L
             val dateFormatIn = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             val dateFormatOut = SimpleDateFormat("EEE", Locale.getDefault())
 
@@ -184,7 +205,11 @@ private fun WeeklyBarChart(totals: List<com.grayzone.app.data.DateTotalRow>) {
                 verticalAlignment = Alignment.Bottom
             ) {
                 totals.forEach { row ->
-                    val proportion = (row.totalMillis.toFloat() / max).coerceIn(0.05f, 1f) // Ensure tiny bars are visible
+                    val proportion = if (row.totalMillis == 0L) {
+                        0f
+                    } else {
+                        (row.totalMillis.toFloat() / max).coerceIn(0.05f, 1f)
+                    }
                     val dateObj = try { dateFormatIn.parse(row.dateKey) } catch (e: Exception) { null }
                     val dayName = if (dateObj != null) dateFormatOut.format(dateObj) else "?"
                     val mins = row.totalMillis / 60000
@@ -194,13 +219,13 @@ private fun WeeklyBarChart(totals: List<com.grayzone.app.data.DateTotalRow>) {
                         verticalArrangement = Arrangement.Bottom,
                         modifier = Modifier.fillMaxHeight()
                     ) {
-                        // Value label
                         if (mins > 0) {
                             Text("${mins}m", color = GZTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.height(4.dp))
+                        } else {
+                            Spacer(Modifier.height(18.dp))
                         }
-                        
-                        // Bar
+
                         Box(
                             modifier = Modifier
                                 .width(32.dp)
@@ -208,8 +233,6 @@ private fun WeeklyBarChart(totals: List<com.grayzone.app.data.DateTotalRow>) {
                                 .background(GZAccent, shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
                         )
                         Spacer(Modifier.height(8.dp))
-                        
-                        // Day Label
                         Text(dayName, color = GZTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }

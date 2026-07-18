@@ -16,6 +16,5 @@ data class UsageEvent(
     val endTime: Long = 0L,        // 0 = still active
     val durationMillis: Long = 0L, // endTime - startTime
     val wasBlocked: Boolean = false,  // true if friction was shown and user left
-    val sessionCompleted: Boolean = false, // true if timer ran out naturally
     val dateKey: String = ""       // "yyyy-MM-dd" for easy daily grouping
 )
