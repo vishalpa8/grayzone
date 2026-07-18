@@ -149,9 +149,6 @@ fun AppsScreen() {
                     )
                 }
             }
-            
-            Spacer(Modifier.height(16.dp))
-
             // Search bar
             Row(
                 modifier = Modifier

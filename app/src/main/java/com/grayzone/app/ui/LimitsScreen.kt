@@ -19,6 +19,11 @@ import androidx.compose.ui.unit.sp
 import com.grayzone.app.*
 import com.grayzone.app.ui.theme.*
 import androidx.compose.animation.core.animateFloat
+import android.net.VpnService
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.grayzone.app.service.vpn.AdBlockVpnService
 
 @Composable
 fun LimitsScreen() {
@@ -30,6 +35,17 @@ fun LimitsScreen() {
     }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isAdBlockEnabled by remember { mutableStateOf(AdBlockVpnService.isRunning) }
+
+    val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val intent = Intent(context, AdBlockVpnService::class.java)
+            context.startService(intent)
+            isAdBlockEnabled = true
+        } else {
+            isAdBlockEnabled = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
@@ -65,6 +81,44 @@ fun LimitsScreen() {
                 color = if (monitoredList.isEmpty()) GZTextSecondary else GZPrimaryLight,
                 fontSize = 14.sp
             )
+        }
+
+        GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("System-Wide Blocker", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Blocks ads, trackers, and adult content (Local VPN)", color = GZTextSecondary, fontSize = 13.sp)
+                }
+                Switch(
+                    checked = isAdBlockEnabled,
+                    onCheckedChange = { checked ->
+                        if (checked) {
+                            val intent = VpnService.prepare(context)
+                            if (intent != null) {
+                                vpnLauncher.launch(intent)
+                            } else {
+                                val serviceIntent = Intent(context, AdBlockVpnService::class.java)
+                                context.startService(serviceIntent)
+                                isAdBlockEnabled = true
+                            }
+                        } else {
+                            val stopIntent = Intent(context, AdBlockVpnService::class.java).apply { action = AdBlockVpnService.ACTION_STOP }
+                            context.startService(stopIntent)
+                            isAdBlockEnabled = false
+                        }
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = androidx.compose.ui.graphics.Color.White,
+                        checkedTrackColor = GZPrimary,
+                        uncheckedThumbColor = GZTextSecondary,
+                        uncheckedTrackColor = GZSurfaceElevated,
+                        uncheckedBorderColor = GZBorder
+                    )
+                )
+            }
         }
 
         if (monitoredList.isEmpty()) {
