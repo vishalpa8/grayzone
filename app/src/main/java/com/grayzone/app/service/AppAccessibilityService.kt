@@ -279,8 +279,8 @@ class AppAccessibilityService : AccessibilityService() {
         // 2. Handle foregrounding the new app (RESUME)
         if (remainingPaused > 0) {
             val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
-            val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 30)
-                              else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+            val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60)
+                              else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
             
             activeUntil = now + remainingPaused
             lockedUntil = activeUntil + (lockoutMins * 60 * 1000L)

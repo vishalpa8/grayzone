@@ -58,7 +58,8 @@ class OverlayService : Service() {
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
         const val ACTION_SCHEDULE_LOCKOUT_CHECK = "com.grayzone.app.ACTION_SCHEDULE_LOCKOUT_CHECK"
-        private const val DEFAULT_WAIT = 8
+        private const val DEFAULT_WAIT = 5
+        private const val DEFAULT_LOCKOUT = 60
 
         // Hex color int helpers
         private const val BG          = 0xFF07070F.toInt() // 100% opaque
@@ -426,7 +427,7 @@ class OverlayService : Service() {
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
         val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-        val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 30) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+        val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
 
         val activeUntil = now + (sessionMins * 60 * 1000L)
         val lockedUntil = activeUntil + (lockoutMins * 60 * 1000L)
@@ -449,9 +450,9 @@ class OverlayService : Service() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
         val lockoutMins = if (hasCustom) {
-            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 30)
+            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60)
         } else {
-            prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+            prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
         }
 
         StreakManager(this).recordBlockedSession(lockoutMins)

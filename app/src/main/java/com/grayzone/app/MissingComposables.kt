@@ -101,9 +101,9 @@ fun SettingsScreen() {
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
     var grayscaleEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)) }
-    var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.WAIT_SECONDS, 8)) }
+    var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.WAIT_SECONDS, 5)) }
     var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)) }
-    var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)) }
+    var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)) }
     
     var showCustomPrompts by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }

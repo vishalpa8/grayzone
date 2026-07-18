@@ -93,7 +93,7 @@ fun LimitsScreen() {
 
                     val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + app.packageName, false)
                     val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-                    val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + app.packageName, 30) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+                    val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + app.packageName, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
 
                     val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
                     val pulseAlpha by infiniteTransition.animateFloat(

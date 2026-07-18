@@ -33,9 +33,9 @@ fun PerAppSettingsSheet(
     var hasCustom by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)) }
     
     // Global defaults
-    val globalWait = remember { prefs.getInt(PrefsKeys.WAIT_SECONDS, 8) }
+    val globalWait = remember { prefs.getInt(PrefsKeys.WAIT_SECONDS, 5) }
     val globalSession = remember { prefs.getInt(PrefsKeys.SESSION_MINUTES, 10) }
-    val globalLockout = remember { prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30) }
+    val globalLockout = remember { prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60) }
     
     var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.PER_APP_WAIT_SECONDS + pkg, globalWait)) }
     var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, globalSession)) }
