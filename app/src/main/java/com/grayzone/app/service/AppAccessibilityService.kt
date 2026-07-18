@@ -12,6 +12,17 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.grayzone.app.OverlayMode
 import com.grayzone.app.PrefsKeys
+import com.grayzone.app.data.ScheduleManager
+import com.grayzone.app.data.UsageDatabase
+import com.grayzone.app.data.UsageEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import com.grayzone.app.getAppName
 
 class AppAccessibilityService : AccessibilityService() {
 
@@ -23,8 +34,10 @@ class AppAccessibilityService : AccessibilityService() {
     }
 
     private var lastForegroundPackage: String? = null
+    private var sessionStartTime: Long = 0L
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private lateinit var scheduleManager: ScheduleManager
 
-    // BUG 1 FIX: Only enforce lock if user is still in the app when session expires.
     private val lockoutReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ACTION_CHECK_LOCKOUT) return
@@ -40,7 +53,7 @@ class AppAccessibilityService : AccessibilityService() {
                 // Session was paused and resumed, so this check fired early. Reschedule.
                 val delayMs = activeUntil - now
                 startService(Intent(context, OverlayService::class.java).apply {
-                    action = "ACTION_SCHEDULE_LOCKOUT_CHECK"
+                    action = OverlayService.ACTION_SCHEDULE_LOCKOUT_CHECK
                     putExtra("package_name", pkg)
                     putExtra("delay_ms", delayMs)
                 })
@@ -61,6 +74,7 @@ class AppAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        scheduleManager = ScheduleManager(this)
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
@@ -86,7 +100,7 @@ class AppAccessibilityService : AccessibilityService() {
 
     private fun startCountdownNotification(packageName: String, activeUntil: Long) {
         startService(Intent(this, OverlayService::class.java).apply {
-            action = "ACTION_START_COUNTDOWN"
+            action = OverlayService.ACTION_START_COUNTDOWN
             putExtra("package_name", packageName)
             putExtra("active_until", activeUntil)
         })
@@ -94,11 +108,10 @@ class AppAccessibilityService : AccessibilityService() {
 
     private fun cancelCountdownNotification() {
         startService(Intent(this, OverlayService::class.java).apply {
-            action = "ACTION_STOP_COUNTDOWN"
+            action = OverlayService.ACTION_STOP_COUNTDOWN
         })
     }
 
-    // BUG 9 FIX: Removed unbounded packageLauncherCache — PackageManager handles its own caching.
     private fun isHomeLauncher(pkg: String): Boolean {
         val resolveInfo = packageManager.resolveActivity(
             Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) },
@@ -109,6 +122,48 @@ class AppAccessibilityService : AccessibilityService() {
 
     private fun hasLauncherIntent(pkg: String): Boolean =
         packageManager.getLaunchIntentForPackage(pkg) != null || isHomeLauncher(pkg)
+
+    private fun logUsageAndCheckBudget(pkg: String, startTime: Long) {
+        val now = System.currentTimeMillis()
+        val durationMs = now - startTime
+        if (durationMs <= 0) return
+        val currentFgPkg = lastForegroundPackage
+        
+        serviceScope.launch {
+            try {
+                // Log the event
+                val dao = UsageDatabase.getInstance(this@AppAccessibilityService).usageDao()
+                val appName = getAppName(pkg)
+                
+                val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                dao.insertEvent(UsageEvent(packageName = pkg, appName = appName, startTime = startTime, endTime = now, wasBlocked = false, dateKey = dateKey))
+                
+                // Update budget
+                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+                if (budgetMins > 0) {
+                    val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
+                    val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) else 0L
+                    
+                    val newUsedMs = usedMs + durationMs
+                    prefs.edit()
+                        .putLong(PrefsKeys.DAILY_USED_MILLIS + pkg, newUsedMs)
+                        .putString(PrefsKeys.DAILY_RESET_DATE + pkg, dateKey)
+                        .apply()
+                        
+                    // If budget exceeded, and we are currently in this app, force a budget lock
+                    if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg) {
+                        sendOverlayBroadcast {
+                            putExtra(EXTRA_PACKAGE_NAME, pkg)
+                            putExtra("overlay_mode", OverlayMode.BUDGET_LOCK)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to log usage: ${e.message}")
+            }
+        }
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
@@ -131,6 +186,12 @@ class AppAccessibilityService : AccessibilityService() {
         // 1. Handle backgrounding the old app (PAUSE)
         if (oldPackage != null) {
             cancelCountdownNotification()
+            // Log usage
+            if (sessionStartTime > 0) {
+                logUsageAndCheckBudget(oldPackage, sessionStartTime)
+                sessionStartTime = 0L
+            }
+            
             val oldActiveUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + oldPackage, 0L)
             if (now < oldActiveUntil) {
                 val remaining = oldActiveUntil - now
@@ -158,6 +219,30 @@ class AppAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Check if schedule/focus mode is active globally
+        if (scheduleManager.isCurrentlyScheduled()) {
+            sendOverlayBroadcast {
+                putExtra(EXTRA_PACKAGE_NAME, packageName)
+                putExtra("overlay_mode", OverlayMode.SCHEDULE_LOCK)
+            }
+            return
+        }
+
+        // Check Daily Budget
+        val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + packageName, 0)
+        if (budgetMins > 0) {
+            val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + packageName, "")
+            val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + packageName, 0L) else 0L
+            if (usedMs >= budgetMins * 60 * 1000L) {
+                sendOverlayBroadcast {
+                    putExtra(EXTRA_PACKAGE_NAME, packageName)
+                    putExtra("overlay_mode", OverlayMode.BUDGET_LOCK)
+                }
+                return
+            }
+        }
+
         // App is monitored — determine its state
         var activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
         var lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
@@ -165,7 +250,10 @@ class AppAccessibilityService : AccessibilityService() {
 
         // 2. Handle foregrounding the new app (RESUME)
         if (remainingPaused > 0) {
-            val lockoutMins = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+            val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
+            val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 30)
+                              else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+            
             activeUntil = now + remainingPaused
             lockedUntil = activeUntil + (lockoutMins * 60 * 1000L)
             
@@ -176,7 +264,7 @@ class AppAccessibilityService : AccessibilityService() {
                 .apply()
             
             startService(Intent(this, OverlayService::class.java).apply {
-                action = "ACTION_SCHEDULE_LOCKOUT_CHECK"
+                action = OverlayService.ACTION_SCHEDULE_LOCKOUT_CHECK
                 putExtra("package_name", packageName)
                 putExtra("delay_ms", remainingPaused)
             })
@@ -187,6 +275,7 @@ class AppAccessibilityService : AccessibilityService() {
             now < activeUntil -> {
                 // Active session — apply tint, no friction
                 Log.d(TAG, "App $packageName is in active session, allowing access")
+                sessionStartTime = now // Start tracking time
                 startCountdownNotification(packageName, activeUntil)
                 sendOverlayBroadcast {
                     putExtra(EXTRA_PACKAGE_NAME, packageName)
@@ -213,7 +302,6 @@ class AppAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Helper to reduce broadcast boilerplate. */
     private inline fun sendOverlayBroadcast(block: Intent.() -> Unit) {
         val intent = Intent(ACTION_APP_OPENED).apply {
             setPackage(applicationContext.packageName)

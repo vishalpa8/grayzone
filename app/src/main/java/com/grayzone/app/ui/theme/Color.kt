@@ -43,3 +43,23 @@ val GZGradGreen1     = Color(0xFF00E676)
 val GZGradGreen2     = Color(0xFF00897B)
 val GZGradRed1       = Color(0xFFFF5252)
 val GZGradRed2       = Color(0xFFB71C1C)
+
+// ── Chart & Stats Colors ───────────────────────────────────────────────────
+val GZChartBlue      = Color(0xFF448AFF)
+val GZChartCyan      = Color(0xFF00E5FF)
+val GZChartPink      = Color(0xFFFF4081)
+val GZChartOrange    = Color(0xFFFF6E40)
+val GZChartYellow    = Color(0xFFFFD740)
+val GZChartTeal      = Color(0xFF1DE9B6)
+
+val GZChartColors = listOf(GZPrimary, GZChartBlue, GZChartPink, GZChartOrange, GZChartCyan, GZChartTeal, GZChartYellow, GZAccent)
+
+// ── Streak & Achievement Colors ────────────────────────────────────────────
+val GZStreakFire      = Color(0xFFFF6D00)
+val GZStreakGold      = Color(0xFFFFD600)
+val GZAchievementBg  = Color(0xFF1A1A30)
+val GZAchievementBorder = Color(0xFF2E2E4A)
+
+// ── Focus Mode ─────────────────────────────────────────────────────────────
+val GZFocusBlue      = Color(0xFF2979FF)
+val GZFocusBlueDim   = Color(0xFF0D1B40)

@@ -14,6 +14,8 @@ import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -54,11 +56,14 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.AppAccessibilityService
 import com.grayzone.app.service.OverlayService
+import com.grayzone.app.ui.StatsScreen
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import com.grayzone.app.AppLockState
+import com.grayzone.app.isAnyAppLocked
 
 // â”€â”€â”€ Activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -78,7 +83,7 @@ class MainActivity : ComponentActivity() {
 // â”€â”€â”€ Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 enum class Screen { ONBOARDING, MAIN }
-enum class Tab { HOME, APPS, LIMITS, SETTINGS }
+enum class Tab { HOME, APPS, STATS, SETTINGS }
 
 @Composable
 fun MainAppContent() {
@@ -128,7 +133,7 @@ fun MainScreen() {
                 listOf(
                     Triple(Tab.HOME, Icons.Filled.Home, "Home"),
                     Triple(Tab.APPS, Icons.AutoMirrored.Filled.List, "Apps"),
-                    Triple(Tab.LIMITS, Icons.Filled.Lock, "Limits"),
+                    Triple(Tab.STATS, Icons.Filled.BarChart, "Stats"),
                     Triple(Tab.SETTINGS, Icons.Filled.Settings, "Settings"),
                 ).forEach { (tab, icon, label) ->
                     NavigationBarItem(
@@ -152,7 +157,7 @@ fun MainScreen() {
             when (selectedTab) {
                 Tab.HOME -> HomeScreen()
                 Tab.APPS -> AppsScreen()
-                Tab.LIMITS -> LimitsScreen()
+                Tab.STATS -> StatsScreen()
                 Tab.SETTINGS -> SettingsScreen()
             }
         }
@@ -174,19 +179,22 @@ fun HomeScreen() {
     // isAccessibilityServiceEnabled calls ContentResolver; isBatteryOptimized calls PowerManager.
     var isActive by remember { mutableStateOf(isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)) }
     var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
+    var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
+    
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
                 batteryIssue = isBatteryOptimized(context)
+                monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
+                com.grayzone.app.data.StreakManager(context).checkDailyStreak(true)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
-    val monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
     val data = HomeData(monitoredCount = monitoredCount)
 
     LazyColumn(
@@ -290,6 +298,14 @@ fun HomeScreen() {
             }
         }
 
+        item {
+            com.grayzone.app.ui.QuickFocusCard()
+        }
+
+        item {
+            com.grayzone.app.ui.StreakCard()
+        }
+
         // â”€â”€ How It Works â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         item {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
@@ -301,7 +317,7 @@ fun HomeScreen() {
                         HowItWorksStep("1", "Open a monitored app", GZPrimary)
                         HowItWorksStep("2", "Grayzone overlays a 8-second pause screen", GZPrimaryLight)
                         HowItWorksStep("3", "A reflection question prompts mindfulness", GZAccent)
-                        HowItWorksStep("4", "Wait the timer or skip â€” your choice", GZGreen)
+                        HowItWorksStep("4", "Wait the timer or skip — your choice", GZGreen)
                     }
                 }
             }
@@ -323,6 +339,7 @@ fun AppsScreen() {
     var isLoading by remember { mutableStateOf(true) }
     var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    var selectedAppForSettings by remember { mutableStateOf<AppInfo?>(null) }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledApps(context)
@@ -339,15 +356,7 @@ fun AppsScreen() {
 
     // Check if ANY app is currently locked, active, or paused
     val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
-        monitoredApps.any { pkg ->
-            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
-            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
-            val remaining = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
-            
-            (currentTime < activeUntil) || 
-            (currentTime > activeUntil && currentTime < lockedUntil) ||
-            (remaining > 0)
-        }
+        isAnyAppLocked(prefs, monitoredApps, currentTime)
     }
 
     val filtered = remember(installedApps, searchQuery, monitoredApps) {
@@ -482,10 +491,10 @@ fun AppsScreen() {
             // calling prefs.getLong() inside every LazyColumn item on the main thread.
             val lockStateMap = remember(monitoredApps, currentTime) {
                 monitoredApps.associateWith { pkg ->
-                    Triple(
-                        prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+                    AppLockState(
+                        activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
+                        lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
+                        remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
                     )
                 }
             }
@@ -493,15 +502,36 @@ fun AppsScreen() {
             LazyColumn {
                 items(filtered, key = { it.packageName }) { app ->
                     val isMonitored = monitoredApps.contains(app.packageName)
-                    val (activeUntil, lockedUntil, remaining) = lockStateMap[app.packageName] ?: Triple(0L, 0L, 0L)
+                    val state = lockStateMap[app.packageName] ?: AppLockState(0L, 0L, 0L)
+                    val activeUntil = state.activeUntil
+                    val lockedUntil = state.lockedUntil
+                    val remaining = state.remainingMillis
+                    
                     val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
                     val isActiveOrPaused = currentTime < activeUntil || remaining > 0
+
+                    val statusText = when {
+                        isAppLocked -> {
+                            val remainingMins = ((lockedUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
+                            "🔒 Locked ($remainingMins m)"
+                        }
+                        currentTime < activeUntil -> {
+                            val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
+                            "⏳ Session Active ($remainingMins m left)"
+                        }
+                        remaining > 0 -> {
+                            val remainingMins = (remaining / (60 * 1000)).coerceAtLeast(1)
+                            "⏳ Session Paused ($remainingMins m left)"
+                        }
+                        else -> null
+                    }
 
                     PremiumAppListItem(
                         app = app,
                         isMonitored = isMonitored,
                         isLocked = isAppLocked,
                         isActiveOrPaused = isActiveOrPaused,
+                        statusText = statusText,
                         isGloballyDisabled = !grayzoneEnabled,
                         onToggle = { checked ->
                             val updated = monitoredApps.toMutableSet()
@@ -516,23 +546,36 @@ fun AppsScreen() {
                             }
                             monitoredApps = updated
                             prefs.edit().putStringSet(PrefsKeys.MONITORED_APPS, updated).apply()
+                        },
+                        onLongPress = {
+                            selectedAppForSettings = app
                         }
                     )
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
+        
+        selectedAppForSettings?.let { app ->
+            com.grayzone.app.ui.PerAppSettingsSheet(
+                app = app,
+                onDismiss = { selectedAppForSettings = null }
+            )
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PremiumAppListItem(
     app: AppInfo, 
     isMonitored: Boolean, 
     isLocked: Boolean = false, 
     isActiveOrPaused: Boolean = false,
+    statusText: String? = null,
     isGloballyDisabled: Boolean = false,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    onLongPress: () -> Unit = {}
 ) {
     val isToggleEnabled = !isLocked && !isActiveOrPaused && !isGloballyDisabled
     val rowAlpha = if (isGloballyDisabled && !isLocked && !isActiveOrPaused) 0.5f else 1f
@@ -541,7 +584,10 @@ fun PremiumAppListItem(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (isToggleEnabled) Modifier.clickable { onToggle(!isMonitored) }
+                if (isToggleEnabled) Modifier.combinedClickable(
+                    onClick = { onToggle(!isMonitored) },
+                    onLongClick = onLongPress
+                )
                 else Modifier
             )
             .background(
@@ -568,9 +614,9 @@ fun PremiumAppListItem(
             Text(app.name, color = GZTextPrimary.copy(alpha = rowAlpha), fontWeight = FontWeight.Medium, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (isLocked) {
-                Text("🔒 Locked", color = GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(statusText ?: "🔒 Locked", color = GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             } else if (isActiveOrPaused) {
-                Text("⏳ Session Active", color = GZGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(statusText ?: "⏳ Session Active", color = GZGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             } else {
                 Text(app.packageName, color = GZTextTertiary.copy(alpha = rowAlpha), fontSize = 11.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -626,13 +672,9 @@ fun drawableToBitmap(drawable: Drawable): Bitmap? {
 }
 
 fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    val expected = "${context.packageName}/${AppAccessibilityService::class.java.canonicalName}"
-    val enabled = Settings.Secure.getString(context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-    val splitter = TextUtils.SimpleStringSplitter(':')
-    splitter.setString(enabled)
-    while (splitter.hasNext()) { if (splitter.next().equals(expected, true)) return true }
-    return false
+    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+    val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)
+    return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
 }
 
 fun isBatteryOptimized(context: Context): Boolean =

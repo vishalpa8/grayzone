@@ -35,6 +35,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.isAnyAppLocked
 
 @Composable
 fun OnboardingScreen(onContinue: () -> Unit) {
@@ -91,9 +92,22 @@ fun SettingsScreen() {
     var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.WAIT_SECONDS, 8)) }
     var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)) }
     var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)) }
+    
+    var showCustomPrompts by remember { mutableStateOf(false) }
+    var showSchedule by remember { mutableStateOf(false) }
 
     // BUG FIX: Block settings changes if any app is active, paused, or locked out
-    val monitoredApps = remember { prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet() }
+    var monitoredApps by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -102,12 +116,7 @@ fun SettingsScreen() {
         }
     }
     val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
-        monitoredApps.any { pkg ->
-            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
-            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
-            val remaining = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
-            (currentTime < activeUntil) || (currentTime in (activeUntil + 1)..<lockedUntil) || (remaining > 0)
-        }
+        isAnyAppLocked(prefs, monitoredApps, currentTime)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp).verticalScroll(rememberScrollState())) {
@@ -228,6 +237,40 @@ fun SettingsScreen() {
                     .apply()
             }
         )
+        
+        Spacer(Modifier.height(32.dp))
+        
+        // Custom Prompts Button
+        Button(
+            onClick = { showCustomPrompts = true },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryContainer, contentColor = GZTextPrimary)
+        ) {
+            Text("Manage Custom Prompts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        
+        Spacer(Modifier.height(16.dp))
+        
+        // Schedule Button
+        Button(
+            onClick = { showSchedule = true },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryContainer, contentColor = GZTextPrimary)
+        ) {
+            Text("Manage Schedule Focus Modes", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        
+        Spacer(Modifier.height(64.dp)) // padding at bottom
+    }
+    
+    if (showCustomPrompts) {
+        com.grayzone.app.ui.CustomPromptsSheet(onDismiss = { showCustomPrompts = false })
+    }
+    
+    if (showSchedule) {
+        com.grayzone.app.ui.ScheduleSheet(onDismiss = { showSchedule = false })
     }
 }
 
@@ -241,8 +284,21 @@ fun ActivePill(isActive: Boolean) {
 }
 
 @Composable
-fun GZCard(modifier: Modifier = Modifier, background: Color = GZSurface, border: Color = GZBorder, content: @Composable () -> Unit) {
-    Box(modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(background).border(1.dp, border, RoundedCornerShape(16.dp))) { content() }
+fun GZCard(
+    modifier: Modifier = Modifier, 
+    background: Color = GZSurface, 
+    border: Color = GZBorder,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(16.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+    ) { content() }
 }
 
 @Composable
@@ -276,127 +332,6 @@ fun GZLoadingSpinner(modifier: Modifier = Modifier, size: Dp = 40.dp, color: Col
     }
 }
 
-@Composable
-fun LimitsScreen() {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
-
-    var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
-    var monitoredApps by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
-
-    LaunchedEffect(Unit) {
-        installedApps = getInstalledApps(context)
-        isLoading = false
-    }
-    
-    // Ticker for live countdown updates
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            currentTime = System.currentTimeMillis()
-        }
-    }
-
-    val limitsList = remember(installedApps, monitoredApps) {
-        installedApps.filter { it.packageName in monitoredApps }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-        // Header
-        Column(modifier = Modifier.fillMaxWidth().background(GZSurface).padding(24.dp, 32.dp, 24.dp, 24.dp)) {
-            Text("Limits Status", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text("Live status of your monitored apps.", color = GZTextSecondary, fontSize = 14.sp)
-        }
-
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                GZLoadingSpinner(color = GZPrimary)
-            }
-        } else if (limitsList.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No apps monitored.", color = GZTextTertiary)
-            }
-        } else {
-            // BUG 5 FIX: Build a single snapshot map of all per-app timestamps once per tick,
-            // instead of calling prefs.getLong() inside each LazyColumn item (blocking main thread per item).
-            val appStateMap = remember(monitoredApps, currentTime) {
-                monitoredApps.associateWith { pkg ->
-                    Triple(
-                        prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
-                    )
-                }
-            }
-
-            androidx.compose.foundation.lazy.LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp)
-            ) {
-                items(limitsList.size) { index ->
-                    val app = limitsList[index]
-                    val (activeUntil, lockedUntil, remainingPaused) = appStateMap[app.packageName] ?: Triple(0L, 0L, 0L)
-
-                    val isLocked = currentTime < lockedUntil && currentTime > activeUntil
-                    val isActive = currentTime < activeUntil
-                    val isPaused = remainingPaused > 0
-                    
-                    val statusText = if (isActive) {
-                        val remaining = ((activeUntil - currentTime) / 1000).coerceAtLeast(0).toInt()
-                        "Active: ${formatTimeRemaining(remaining)} left"
-                    } else if (isPaused) {
-                        "Paused: ${formatTimeRemaining((remainingPaused / 1000).toInt())} left"
-                    } else if (isLocked) {
-                        val remaining = ((lockedUntil - currentTime) / 1000).coerceAtLeast(0).toInt()
-                        "Locked: ${formatTimeRemaining(remaining)} left"
-                    } else {
-                        "Available"
-                    }
-                    
-                    val statusColor = if (isActive) GZGreen else if (isPaused) GZTextPrimary else if (isLocked) GZRed else GZTextTertiary
-                    val bgColor = if (isActive) GZGreen.copy(alpha = 0.05f) else if (isPaused) GZTextPrimary.copy(alpha = 0.05f) else if (isLocked) GZRed.copy(alpha = 0.05f) else GZSurface
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(bgColor)
-                            .border(1.dp, if (isActive) GZGreen.copy(alpha=0.3f) else if (isLocked) GZRed.copy(alpha=0.3f) else GZBorder, RoundedCornerShape(16.dp))
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (app.icon != null) {
-                            androidx.compose.foundation.Image(
-                                bitmap = app.icon.asImageBitmap(),
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-                            )
-                        } else {
-                            Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(GZBorder))
-                        }
-                        
-                        Spacer(Modifier.width(16.dp))
-                        
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(app.name, color = GZTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            Text(statusText, color = statusColor, fontSize = 14.sp, fontWeight = if (isActive || isLocked) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun formatTimeRemaining(seconds: Int): String {
-    val hrs = seconds / 3600
-    val mins = (seconds % 3600) / 60
-    val secs = seconds % 60
-    return if (hrs > 0) String.format("%dh %dm %ds", hrs, mins, secs)
-    else String.format("%dm %ds", mins, secs)
-}
 
 fun shareApk(context: Context) {
     try {
