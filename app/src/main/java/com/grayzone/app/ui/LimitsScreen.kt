@@ -29,9 +29,11 @@ fun LimitsScreen() {
         mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
     }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        installedApps = getInstalledApps(context)
+        installedApps = getInstalledAppsCached(context)
+        isLoading = false
     }
 
     // Ticker for live lock detection

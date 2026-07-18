@@ -12,6 +12,13 @@ import kotlinx.coroutines.withContext
 
 data class AppInfo(val packageName: String, val name: String, val icon: Bitmap?)
 
+private var cachedInstalledApps: List<AppInfo>? = null
+
+suspend fun getInstalledAppsCached(context: Context): List<AppInfo> {
+    if (cachedInstalledApps != null) return cachedInstalledApps!!
+    return getInstalledApps(context).also { cachedInstalledApps = it }
+}
+
 suspend fun getInstalledApps(context: Context): List<AppInfo> = withContext(Dispatchers.IO) {
     val pm = context.packageManager
     val intent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }

@@ -47,7 +47,7 @@ fun AppsScreen() {
     var selectedAppForSettings by remember { mutableStateOf<AppInfo?>(null) }
 
     LaunchedEffect(Unit) {
-        installedApps = getInstalledApps(context)
+        installedApps = getInstalledAppsCached(context)
         isLoading = false
     }
     
