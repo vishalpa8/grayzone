@@ -32,7 +32,21 @@ class AppAccessibilityService : AccessibilityService() {
             if (pkg != lastForegroundPackage) return // User already left the app
 
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
             val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+            val now = System.currentTimeMillis()
+
+            if (now < activeUntil) {
+                // Session was paused and resumed, so this check fired early. Reschedule.
+                val delayMs = activeUntil - now
+                startService(Intent(context, OverlayService::class.java).apply {
+                    action = "ACTION_SCHEDULE_LOCKOUT_CHECK"
+                    putExtra("package_name", pkg)
+                    putExtra("delay_ms", delayMs)
+                })
+                return
+            }
+
             Log.d(TAG, "Session expired for $pkg while foregrounded, enforcing lock")
 
             val broadcastIntent = Intent(ACTION_APP_OPENED).apply {
@@ -114,20 +128,20 @@ class AppAccessibilityService : AccessibilityService() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
 
-        // BUG 1 FIX: Clear session timers for the old app ONLY if:
-        //   - They left while the session was still active (now < activeUntil)
-        //   - They were NOT already in a lockout (now >= lockedUntil)
-        // This prevents a bypass where a user switches away to reset an active lockout.
+        // 1. Handle backgrounding the old app (PAUSE)
         if (oldPackage != null) {
             cancelCountdownNotification()
             val oldActiveUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + oldPackage, 0L)
-            val oldLockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + oldPackage, 0L)
-            if (now < oldActiveUntil && now >= oldLockedUntil) {
-                prefs.edit()
-                    .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
-                    .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
-                    .apply()
-                Log.d(TAG, "User left $oldPackage before session expired. Cleared timers.")
+            if (now < oldActiveUntil) {
+                val remaining = oldActiveUntil - now
+                if (remaining > 0) {
+                    prefs.edit()
+                        .putLong(PrefsKeys.REMAINING_MILLIS + oldPackage, remaining)
+                        .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
+                        .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
+                        .apply()
+                    Log.d(TAG, "User left $oldPackage before session expired. Paused with ${remaining}ms left.")
+                }
             }
         }
 
@@ -145,8 +159,29 @@ class AppAccessibilityService : AccessibilityService() {
         }
 
         // App is monitored — determine its state
-        val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
-        val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
+        var activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
+        var lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
+        val remainingPaused = prefs.getLong(PrefsKeys.REMAINING_MILLIS + packageName, 0L)
+
+        // 2. Handle foregrounding the new app (RESUME)
+        if (remainingPaused > 0) {
+            val lockoutMins = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)
+            activeUntil = now + remainingPaused
+            lockedUntil = activeUntil + (lockoutMins * 60 * 1000L)
+            
+            prefs.edit()
+                .putLong(PrefsKeys.ACTIVE_UNTIL + packageName, activeUntil)
+                .putLong(PrefsKeys.LOCKED_UNTIL + packageName, lockedUntil)
+                .remove(PrefsKeys.REMAINING_MILLIS + packageName)
+                .apply()
+            
+            startService(Intent(this, OverlayService::class.java).apply {
+                action = "ACTION_SCHEDULE_LOCKOUT_CHECK"
+                putExtra("package_name", packageName)
+                putExtra("delay_ms", remainingPaused)
+            })
+            Log.d(TAG, "Resumed session for $packageName with ${remainingPaused}ms left.")
+        }
 
         when {
             now < activeUntil -> {

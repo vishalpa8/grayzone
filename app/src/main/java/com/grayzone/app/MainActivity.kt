@@ -337,12 +337,16 @@ fun AppsScreen() {
         }
     }
 
-    // Check if ANY app is currently locked
-    val anyAppLocked = remember(monitoredApps, currentTime) {
+    // Check if ANY app is currently locked, active, or paused
+    val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
         monitoredApps.any { pkg ->
             val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
             val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
-            currentTime > activeUntil && currentTime < lockedUntil
+            val remaining = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+            
+            (currentTime < activeUntil) || 
+            (currentTime > activeUntil && currentTime < lockedUntil) ||
+            (remaining > 0)
         }
     }
 
@@ -396,9 +400,9 @@ fun AppsScreen() {
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 15.sp
                         )
-                        if (anyAppLocked && grayzoneEnabled) {
+                        if (anyAppLockedOrActive && grayzoneEnabled) {
                             Text(
-                                "Cannot disable while apps are locked",
+                                "Cannot disable while apps are active or locked",
                                 color = GZRed.copy(alpha = 0.8f),
                                 fontSize = 11.sp
                             )
@@ -413,12 +417,12 @@ fun AppsScreen() {
                     Switch(
                         checked = grayzoneEnabled,
                         onCheckedChange = {
-                            if (!anyAppLocked || !grayzoneEnabled) {
+                            if (!anyAppLockedOrActive || !grayzoneEnabled) {
                                 grayzoneEnabled = it
                                 prefs.edit().putBoolean(PrefsKeys.GRAYZONE_ENABLED, it).apply()
                             }
                         },
-                        enabled = !anyAppLocked || !grayzoneEnabled,
+                        enabled = !anyAppLockedOrActive || !grayzoneEnabled,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = GZPrimary,
@@ -478,9 +482,10 @@ fun AppsScreen() {
             // calling prefs.getLong() inside every LazyColumn item on the main thread.
             val lockStateMap = remember(monitoredApps, currentTime) {
                 monitoredApps.associateWith { pkg ->
-                    Pair(
+                    Triple(
                         prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
+                        prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
                     )
                 }
             }
@@ -488,13 +493,15 @@ fun AppsScreen() {
             LazyColumn {
                 items(filtered, key = { it.packageName }) { app ->
                     val isMonitored = monitoredApps.contains(app.packageName)
-                    val (activeUntil, lockedUntil) = lockStateMap[app.packageName] ?: Pair(0L, 0L)
+                    val (activeUntil, lockedUntil, remaining) = lockStateMap[app.packageName] ?: Triple(0L, 0L, 0L)
                     val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
+                    val isActiveOrPaused = currentTime < activeUntil || remaining > 0
 
                     PremiumAppListItem(
                         app = app,
                         isMonitored = isMonitored,
                         isLocked = isAppLocked,
+                        isActiveOrPaused = isActiveOrPaused,
                         isGloballyDisabled = !grayzoneEnabled,
                         onToggle = { checked ->
                             val updated = monitoredApps.toMutableSet()
@@ -523,11 +530,12 @@ fun PremiumAppListItem(
     app: AppInfo, 
     isMonitored: Boolean, 
     isLocked: Boolean = false, 
+    isActiveOrPaused: Boolean = false,
     isGloballyDisabled: Boolean = false,
     onToggle: (Boolean) -> Unit
 ) {
-    val isToggleEnabled = !isLocked && !isGloballyDisabled
-    val rowAlpha = if (isGloballyDisabled && !isLocked) 0.5f else 1f
+    val isToggleEnabled = !isLocked && !isActiveOrPaused && !isGloballyDisabled
+    val rowAlpha = if (isGloballyDisabled && !isLocked && !isActiveOrPaused) 0.5f else 1f
     
     Row(
         modifier = Modifier
@@ -538,6 +546,7 @@ fun PremiumAppListItem(
             )
             .background(
                 if (isLocked) GZRed.copy(alpha = 0.06f)
+                else if (isActiveOrPaused) GZGreen.copy(alpha = 0.06f)
                 else if (isMonitored && !isGloballyDisabled) GZPrimaryGlow
                 else Color.Transparent
             )
@@ -560,6 +569,8 @@ fun PremiumAppListItem(
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (isLocked) {
                 Text("🔒 Locked", color = GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            } else if (isActiveOrPaused) {
+                Text("⏳ Session Active", color = GZGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             } else {
                 Text(app.packageName, color = GZTextTertiary.copy(alpha = rowAlpha), fontSize = 11.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -571,11 +582,11 @@ fun PremiumAppListItem(
             enabled = isToggleEnabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
-                checkedTrackColor = if (isLocked) GZRed else GZPrimary,
+                checkedTrackColor = if (isLocked) GZRed else if (isActiveOrPaused) GZGreen else GZPrimary,
                 uncheckedThumbColor = GZTextTertiary,
                 uncheckedTrackColor = GZSurfaceHigh,
                 disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                disabledCheckedTrackColor = if (isLocked) GZRed.copy(alpha = 0.5f) else GZPrimary.copy(alpha = 0.4f)
+                disabledCheckedTrackColor = if (isLocked) GZRed.copy(alpha = 0.5f) else if (isActiveOrPaused) GZGreen.copy(alpha = 0.5f) else GZPrimary.copy(alpha = 0.4f)
             )
         )
     }

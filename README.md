@@ -5,11 +5,12 @@ Grayzone is an open-source Android digital wellbeing application designed to hel
 ## Features
 
 - **Mindful Active Sessions**: Start a timed session (e.g., 10 minutes) when you open a distracting app. 
-- **Grayscale Filter**: Once an active session begins, the entire screen progressively turns black-and-white to visually break the dopamine feedback loop and reduce the appeal of colorful media feeds.
+- **True System Grayscale**: Once an active session begins, the entire screen progressively turns black-and-white using Android's hardware Daltonizer to visually break the dopamine feedback loop and reduce the appeal of colorful media feeds.
 - **Strict Lockouts**: When a session expires, you are forcibly locked out of the app. A strict cooldown timer (e.g., 30 minutes) begins, during which the app cannot be accessed.
 - **Friction Overlay**: Deliberately slowing you down by making you wait 8 seconds before you can start a new active session.
-- **Real-Time Limits Tab**: Keep track of the active session limits and lockout timers for all of your monitored apps in one central dashboard.
-- **Instant Reset**: If you close a monitored app before your session expires, the timers immediately reset, rewarding you for mindful usage.
+- **Pausable Sessions**: If you close a monitored app before your session expires, the timer pauses. When you return, you bypass the friction screen and instantly resume your remaining time. A full reset is only earned after you drain your time and serve a full lockout.
+- **Anti-Bypass Settings Lock**: The Settings UI and master monitoring toggle are strictly disabled and locked if any monitored app is currently active, paused, or locked out, preventing you from cheating the system by lowering your limits mid-session.
+- **Real-Time Limits Tab**: Keep track of the active session limits, paused times, and lockout timers for all of your monitored apps in one central dashboard.
 
 ## Architecture
 
@@ -25,6 +26,7 @@ Grayzone leverages Android's Accessibility Services and System Alert Windows to 
 - Permissions Required:
   - **Accessibility Service**: To monitor which apps are currently active on screen.
   - **Display over other apps**: To draw the lockout and friction overlays.
+  - **Write Secure Settings**: To toggle Android's true hardware grayscale daltonizer (`WRITE_SECURE_SETTINGS` granted via ADB).
 
 ## Setup & Build Instructions
 

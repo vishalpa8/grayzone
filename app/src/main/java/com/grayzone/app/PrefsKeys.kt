@@ -16,6 +16,7 @@ object PrefsKeys {
     // Per-app state (append packageName)
     const val ACTIVE_UNTIL       = "active_until_"
     const val LOCKED_UNTIL       = "locked_until_"
+    const val REMAINING_MILLIS   = "remaining_millis_"
 
     // App list
     const val MONITORED_APPS     = "monitored_apps"

@@ -115,8 +115,8 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) { 
-            dismissOverlay(); stopSelf() 
+        if (intent?.action == ACTION_STOP) {
+            dismissOverlay(); stopSelf()
         } else if (intent?.action == "ACTION_START_COUNTDOWN") {
             val pkg = intent.getStringExtra("package_name") ?: ""
             val activeUntil = intent.getLongExtra("active_until", 0L)
@@ -125,6 +125,12 @@ class OverlayService : Service() {
             }
         } else if (intent?.action == "ACTION_STOP_COUNTDOWN") {
             cancelCountdownNotification()
+        } else if (intent?.action == "ACTION_SCHEDULE_LOCKOUT_CHECK") {
+            val pkg = intent.getStringExtra("package_name") ?: ""
+            val delayMs = intent.getLongExtra("delay_ms", 0L)
+            if (pkg.isNotEmpty() && delayMs > 0) {
+                scheduleLockoutCheck(pkg, delayMs)
+            }
         }
         return START_STICKY
     }
@@ -187,30 +193,20 @@ class OverlayService : Service() {
             return
         }
         
-        if (tintView != null) return // Already showing
-
-        val ctx = this
-        val view = FrameLayout(ctx).apply {
-            setBackgroundColor(android.graphics.Color.argb(180, 128, 128, 128))
-        }
-
-        val wlp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-
-        tintView = view
-        try { windowManager?.addView(view, wlp) } catch (e: Exception) {
-            Log.e(TAG, "addTintView failed: ${e.message}")
+        try {
+            android.provider.Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer", 0)
+            android.provider.Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer_enabled", 1)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enable system grayscale: ${e.message}")
         }
     }
 
     private fun dismissTint() {
+        try {
+            android.provider.Settings.Secure.putInt(contentResolver, "accessibility_display_daltonizer_enabled", 0)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to disable system grayscale: ${e.message}")
+        }
         tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
         tintView = null
     }

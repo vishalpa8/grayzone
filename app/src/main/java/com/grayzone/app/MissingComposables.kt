@@ -59,8 +59,19 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             Text(if (hasA11y) "Accessibility Granted" else "Grant Accessibility")
         }
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:\${context.packageName}"))) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasOverlay) GZGreen else GZPrimary)) {
+        Button(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasOverlay) GZGreen else GZPrimary)) {
             Text(if (hasOverlay) "Overlay Granted" else "Grant Overlay Permission")
+        }
+        
+        if (hasA11y && hasOverlay) {
+            Spacer(Modifier.height(32.dp))
+            Button(
+                onClick = onContinue, 
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryLight)
+            ) {
+                Text("Continue to App", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -76,8 +87,39 @@ fun SettingsScreen() {
     var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)) }
     var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 30)) }
 
+    // BUG FIX: Block settings changes if any app is active, paused, or locked out
+    val monitoredApps = remember { prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet() }
+    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            currentTime = System.currentTimeMillis()
+        }
+    }
+    val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
+        monitoredApps.any { pkg ->
+            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+            val remaining = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+            (currentTime < activeUntil) || (currentTime in (activeUntil + 1)..<lockedUntil) || (remaining > 0)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp)) {
         Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
+        
+        if (anyAppLockedOrActive) {
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(GZRed.copy(alpha = 0.1f)).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🔒", fontSize = 16.sp)
+                Spacer(Modifier.width(12.dp))
+                Text("Settings are locked while an app is active, paused, or in timeout.", color = GZRed, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+        
         Spacer(Modifier.height(32.dp))
         
         // Grayscale toggle
@@ -114,6 +156,7 @@ fun SettingsScreen() {
             onValueChange = { waitSeconds = it.toInt() },
             valueRange = 3f..30f,
             steps = 26,
+            enabled = !anyAppLockedOrActive,
             onValueChangeFinished = { prefs.edit().putInt(PrefsKeys.WAIT_SECONDS, waitSeconds).apply() }
         )
         
@@ -128,6 +171,7 @@ fun SettingsScreen() {
             },
             valueRange = 1f..60f,
             steps = 58,
+            enabled = !anyAppLockedOrActive,
             // BUG 13 FIX: Only save session_minutes — session slider can no longer mutate lockoutMinutes.
             onValueChangeFinished = {
                 prefs.edit().putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes).apply()
@@ -150,6 +194,7 @@ fun SettingsScreen() {
             },
             valueRange = 15f..300f,
             steps = 284,
+            enabled = !anyAppLockedOrActive,
             onValueChangeFinished = {
                 prefs.edit()
                     .putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes)
@@ -253,9 +298,10 @@ fun LimitsScreen() {
             // instead of calling prefs.getLong() inside each LazyColumn item (blocking main thread per item).
             val appStateMap = remember(monitoredApps, currentTime) {
                 monitoredApps.associateWith { pkg ->
-                    Pair(
+                    Triple(
                         prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
-                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+                        prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
+                        prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
                     )
                 }
             }
@@ -266,14 +312,17 @@ fun LimitsScreen() {
             ) {
                 items(limitsList.size) { index ->
                     val app = limitsList[index]
-                    val (activeUntil, lockedUntil) = appStateMap[app.packageName] ?: Pair(0L, 0L)
+                    val (activeUntil, lockedUntil, remainingPaused) = appStateMap[app.packageName] ?: Triple(0L, 0L, 0L)
 
                     val isLocked = currentTime < lockedUntil && currentTime > activeUntil
                     val isActive = currentTime < activeUntil
+                    val isPaused = remainingPaused > 0
                     
                     val statusText = if (isActive) {
                         val remaining = ((activeUntil - currentTime) / 1000).coerceAtLeast(0).toInt()
                         "Active: ${formatTimeRemaining(remaining)} left"
+                    } else if (isPaused) {
+                        "Paused: ${formatTimeRemaining((remainingPaused / 1000).toInt())} left"
                     } else if (isLocked) {
                         val remaining = ((lockedUntil - currentTime) / 1000).coerceAtLeast(0).toInt()
                         "Locked: ${formatTimeRemaining(remaining)} left"
@@ -281,8 +330,8 @@ fun LimitsScreen() {
                         "Available"
                     }
                     
-                    val statusColor = if (isActive) GZGreen else if (isLocked) GZRed else GZTextTertiary
-                    val bgColor = if (isActive) GZGreen.copy(alpha = 0.05f) else if (isLocked) GZRed.copy(alpha = 0.05f) else GZSurface
+                    val statusColor = if (isActive) GZGreen else if (isPaused) GZTextPrimary else if (isLocked) GZRed else GZTextTertiary
+                    val bgColor = if (isActive) GZGreen.copy(alpha = 0.05f) else if (isPaused) GZTextPrimary.copy(alpha = 0.05f) else if (isLocked) GZRed.copy(alpha = 0.05f) else GZSurface
 
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
