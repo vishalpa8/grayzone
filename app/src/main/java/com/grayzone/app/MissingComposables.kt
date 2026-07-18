@@ -8,10 +8,15 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,8 +110,29 @@ fun SettingsScreen() {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp)) {
-        Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
+    Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp).verticalScroll(rememberScrollState())) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
+            
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(GZPrimary.copy(alpha = 0.15f))
+                    .clickable { shareApk(context) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Share, contentDescription = "Share App", tint = GZPrimary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Share", color = GZPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
         
         if (anyAppLockedOrActive) {
             Spacer(Modifier.height(16.dp))
@@ -370,4 +396,25 @@ private fun formatTimeRemaining(seconds: Int): String {
     val secs = seconds % 60
     return if (hrs > 0) String.format("%dh %dm %ds", hrs, mins, secs)
     else String.format("%dm %ds", mins, secs)
+}
+
+fun shareApk(context: Context) {
+    try {
+        val app = context.applicationInfo
+        val filePath = app.sourceDir
+        val file = java.io.File(filePath)
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.provider",
+            file
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/vnd.android.package-archive"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share Grayzone"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
 }
