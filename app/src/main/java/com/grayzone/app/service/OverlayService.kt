@@ -138,27 +138,25 @@ class OverlayService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val appName = getAppName(packageName)
 
-        countdownJob = serviceScope.launch(Dispatchers.Main) {
-            while (true) {
-                val remaining = ((activeUntil - System.currentTimeMillis()) / 1000).coerceAtLeast(0).toInt()
-                if (remaining <= 0) {
-                    cancelCountdownNotification()
-                    break
-                }
-                val timeStr = String.format("%02d:%02d", remaining / 60, remaining % 60)
-                nm.notify(NOTIF_ID,
-                    NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                        .setSmallIcon(R.mipmap.ic_launcher)
-                        .setContentTitle("$appName Active")
-                        .setContentText("Time remaining: $timeStr")
-                        .setOngoing(true)
-                        .setOnlyAlertOnce(true)
-                        .setPriority(NotificationCompat.PRIORITY_LOW)
-                        .build()
-                )
-                kotlinx.coroutines.delay(1000)
-            }
+        val remainingMs = activeUntil - System.currentTimeMillis()
+        if (remainingMs <= 0) {
+            cancelCountdownNotification()
+            return
         }
+
+        nm.notify(NOTIF_ID,
+            NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("$appName Active")
+                .setContentText("Time remaining:")
+                .setUsesChronometer(true)
+                .setChronometerCountDown(true)
+                .setWhen(activeUntil)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+        )
     }
     
     private fun cancelCountdownNotification() {
@@ -229,6 +227,10 @@ class OverlayService : Service() {
         val isBudgetLock = mode == OverlayMode.BUDGET_LOCK
         val isScheduleLock = mode == OverlayMode.SCHEDULE_LOCK
         val isAnyLock = isLocked || isBudgetLock || isScheduleLock
+        
+        if (isAnyLock) {
+            cancelCountdownNotification()
+        }
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
         val customWait = prefs.getInt(PrefsKeys.PER_APP_WAIT_SECONDS + packageName, DEFAULT_WAIT)
