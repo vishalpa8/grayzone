@@ -1,5 +1,6 @@
 package com.grayzone.app.ui
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -122,10 +123,10 @@ fun HomeScreen() {
                         Spacer(Modifier.width(8.dp))
                         TextButton(
                             onClick = {
-                                ctx.startActivity(
-                                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                @SuppressLint("BatteryLife")
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                                         Uri.parse("package:${ctx.packageName}"))
-                                )
+                                ctx.startActivity(intent)
                             },
                             colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
                         ) { Text("Fix", fontWeight = FontWeight.Bold) }

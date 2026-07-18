@@ -46,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 class OverlayService : Service() {
 
@@ -219,6 +220,7 @@ class OverlayService : Service() {
         dismissOverlayTintFallback()
     }
 
+    @SuppressLint("SetTextI18n")
     private fun showOverlay(packageName: String, appName: String, mode: Int, lockedUntil: Long) {
         dismissOverlay()
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
