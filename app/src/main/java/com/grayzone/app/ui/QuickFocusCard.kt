@@ -79,7 +79,7 @@ fun QuickFocusCard() {
                                     .clickable { selectedMinutes = mins }
                                     .padding(horizontal = 10.dp, vertical = 4.dp)
                             ) {
-                                Text("${mins}m", color = if (selectedMinutes == mins) Color.White else GZTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                Text("${mins}m", color = if (selectedMinutes == mins) Color(0xFF0D2B24) else GZTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
@@ -105,7 +105,7 @@ fun QuickFocusCard() {
                         isFocusMode = true
                         focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZAccent, contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary, contentColor = Color.White),
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                 ) {

@@ -71,10 +71,10 @@ fun HomeScreen() {
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
-                            listOf(GZPrimaryContainer, GZBackground)
+                            listOf(GZPrimary, GZPrimaryContainer, GZBackground)
                         )
                     )
-                    .padding(start = 24.dp, end = 24.dp, top = 52.dp, bottom = 32.dp)
+                    .padding(start = 24.dp, end = 24.dp, top = 60.dp, bottom = 40.dp)
             ) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {

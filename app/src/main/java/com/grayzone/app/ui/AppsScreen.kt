@@ -78,8 +78,9 @@ fun AppsScreen() {
         // Header
         Column(
             modifier = Modifier
-                .background(Brush.verticalGradient(listOf(GZPrimaryContainer, GZBackground)))
-                .padding(start = 24.dp, end = 24.dp, top = 52.dp, bottom = 24.dp)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(GZPrimary, GZPrimaryContainer, GZBackground)))
+                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)
         ) {
             Text("Monitored Apps", color = GZTextPrimary, fontSize = 28.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)

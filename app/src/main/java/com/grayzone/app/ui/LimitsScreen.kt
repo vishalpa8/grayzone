@@ -50,8 +50,9 @@ fun LimitsScreen() {
         // Header
         Column(
             modifier = Modifier
-                .background(Brush.verticalGradient(listOf(GZPrimaryContainer, GZBackground)))
-                .padding(start = 24.dp, end = 24.dp, top = 52.dp, bottom = 24.dp)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(GZPrimary, GZPrimaryContainer, GZBackground)))
+                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)
         ) {
             Text("Limits Dashboard", color = GZTextPrimary, fontSize = 28.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
@@ -111,15 +112,33 @@ fun LimitsScreen() {
                                     Text("Ready", color = GZTextSecondary, fontSize = 12.sp)
                                 }
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Timer, contentDescription = null, tint = GZTextTertiary, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Session Limit: ${sessionMins}m", color = GZTextSecondary, fontSize = 13.sp)
-                                Spacer(Modifier.width(16.dp))
-                                Icon(Icons.Filled.Timer, contentDescription = null, tint = GZTextTertiary, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Lockout: ${lockoutMins}m", color = GZTextSecondary, fontSize = 13.sp)
+                                // Session Pill
+                                Row(
+                                    modifier = Modifier
+                                        .background(GZPrimary.copy(alpha = 0.15f), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZPrimaryLight, modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Session: ${sessionMins}m", color = GZTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
+                                
+                                Spacer(Modifier.width(12.dp))
+                                
+                                // Lockout Pill
+                                Row(
+                                    modifier = Modifier
+                                        .background(GZRed.copy(alpha = 0.15f), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZRed, modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Lockout: ${lockoutMins}m", color = GZTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                }
                             }
                         }
                     }

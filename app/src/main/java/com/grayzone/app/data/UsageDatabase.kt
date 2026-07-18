@@ -20,7 +20,8 @@ abstract class UsageDatabase : RoomDatabase() {
                     context.applicationContext,
                     UsageDatabase::class.java,
                     "grayzone_usage.db"
-                ).fallbackToDestructiveMigration().build()
+                ).setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                 .fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance
             }

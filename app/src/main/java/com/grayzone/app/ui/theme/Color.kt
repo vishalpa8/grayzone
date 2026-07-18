@@ -6,12 +6,12 @@ import androidx.compose.ui.graphics.Color
 val GZPrimary        = Color(0xFF7C4DFF)  // Electric violet
 val GZPrimaryLight   = Color(0xFFB47EFF)
 val GZPrimaryDark    = Color(0xFF4527A0)
-val GZPrimaryGlow    = Color(0x407C4DFF)
-val GZPrimaryContainer = Color(0xFF1E1040)
+val GZPrimaryGlow    = Color(0x157C4DFF)
+val GZPrimaryContainer = Color(0xFF381E72)
 
 // ── Accent ─────────────────────────────────────────────────────────────────
-val GZAccent         = Color(0xFF64FFDA)  // Mint teal
-val GZAccentDim      = Color(0x2064FFDA)
+val GZAccent         = Color(0xFF26C6A6)  // Muted teal — legible on dark
+val GZAccentDim      = Color(0x1A26C6A6)
 
 // ── Backgrounds ────────────────────────────────────────────────────────────
 val GZBackground     = Color(0xFF07070F)  // Near-black

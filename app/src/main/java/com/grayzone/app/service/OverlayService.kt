@@ -17,6 +17,7 @@ import android.util.TypedValue
 import com.grayzone.app.OverlayMode
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.GrayscaleManager
+import com.grayzone.app.R
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -146,7 +147,7 @@ class OverlayService : Service() {
                 val timeStr = String.format("%02d:%02d", remaining / 60, remaining % 60)
                 nm.notify(NOTIF_ID,
                     NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setSmallIcon(R.mipmap.ic_launcher)
                         .setContentTitle("$appName Active")
                         .setContentText("Time remaining: $timeStr")
                         .setOngoing(true)
@@ -508,9 +509,10 @@ class OverlayService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
             .setContentText("Monitoring for distracting apps")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .build()
+
 }

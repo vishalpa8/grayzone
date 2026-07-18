@@ -30,10 +30,11 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatsScreen(onBack: () -> Unit = {}) {
+fun StatsScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var reloadKey by remember { mutableIntStateOf(0) }
+    var isLoading by remember { mutableStateOf(true) }
     var totalBlocked by remember { mutableIntStateOf(0) }
     var totalSavedMillis by remember { mutableLongStateOf(0L) }
     var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(emptyList()) }
@@ -49,6 +50,8 @@ fun StatsScreen(onBack: () -> Unit = {}) {
     }
 
     LaunchedEffect(reloadKey) {
+        isLoading = true
+        errorMsg = null
         try {
             withContext(Dispatchers.IO) {
                 val dao = UsageDatabase.getInstance(context).usageDao()
@@ -62,9 +65,10 @@ fun StatsScreen(onBack: () -> Unit = {}) {
                 val fromKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
                 weeklyTotals = fillWeeklyTotals(dao.getWeeklyTotals(fromKey))
             }
-            errorMsg = null
         } catch (e: Exception) {
-            errorMsg = "Could not load stats: ${e.message}"
+            errorMsg = "Could not load stats. Try again later."
+        } finally {
+            isLoading = false
         }
     }
 
@@ -81,30 +85,66 @@ fun StatsScreen(onBack: () -> Unit = {}) {
         },
         containerColor = GZBackground
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            if (errorMsg != null) {
-                item {
-                    Text(errorMsg!!, color = GZRed, fontSize = 14.sp)
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                com.grayzone.app.GZLoadingSpinner()
+            }
+        } else if (errorMsg != null) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(innerPadding).padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("⚠️", fontSize = 40.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Couldn't load stats", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Try closing and reopening the app.", color = GZTextSecondary, fontSize = 14.sp)
                 }
             }
-            item {
-                SummaryCard(totalBlocked, totalSavedMillis)
+        } else if (totalBlocked == 0 && dailySummary.isEmpty()) {
+            // Clean empty state — no data yet
+            Box(
+                modifier = Modifier.fillMaxSize().padding(innerPadding).padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("📊", fontSize = 48.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("No usage data yet", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Start monitoring apps on the Apps tab.\nYour usage stats will appear here after your first session.",
+                        color = GZTextSecondary,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
             }
-            item {
-                Text("Weekly Overview", style = MaterialTheme.typography.titleMedium, color = GZTextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-                Spacer(Modifier.height(12.dp))
-                WeeklyBarChart(weeklyTotals)
-            }
-            item {
-                Text("Today's Breakdown", style = MaterialTheme.typography.titleMedium, color = GZTextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-                Spacer(Modifier.height(12.dp))
-                DailyUsageList(dailySummary)
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                item {
+                    SummaryCard(totalBlocked, totalSavedMillis)
+                }
+                item {
+                    Text("Weekly Overview", style = MaterialTheme.typography.titleMedium, color = GZTextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                    Spacer(Modifier.height(12.dp))
+                    WeeklyBarChart(weeklyTotals)
+                }
+                item {
+                    Text("Today's Breakdown", style = MaterialTheme.typography.titleMedium, color = GZTextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                    Spacer(Modifier.height(12.dp))
+                    DailyUsageList(dailySummary)
+                }
             }
         }
     }
