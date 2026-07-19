@@ -73,6 +73,9 @@ class AdBlockVpnService : VpnService() {
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer("10.0.0.3")
                 .addRoute("10.0.0.3", 32)
+                .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
+                .addDnsServer("fd00:1:fd00:1:fd00:1:fd00:2")
+                .addRoute("fd00:1:fd00:1:fd00:1:fd00:2", 128)
                 .setSession("Grayzone AdBlock")
                 .setBlocking(true)
 

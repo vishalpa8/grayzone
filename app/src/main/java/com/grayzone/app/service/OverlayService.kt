@@ -48,6 +48,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import android.annotation.SuppressLint
 import android.app.PendingIntent
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
+import android.content.pm.PackageManager
+import com.grayzone.app.data.ScheduleManager
+
 class OverlayService : Service() {
 
     companion object {
@@ -57,7 +62,6 @@ class OverlayService : Service() {
         const val ACTION_STOP = "com.grayzone.app.ACTION_STOP_OVERLAY"
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
-        const val ACTION_SCHEDULE_LOCKOUT_CHECK = "com.grayzone.app.ACTION_SCHEDULE_LOCKOUT_CHECK"
         private const val DEFAULT_WAIT = 5
         private const val DEFAULT_LOCKOUT = 60
 
@@ -81,35 +85,213 @@ class OverlayService : Service() {
     private var secondsRemaining = DEFAULT_WAIT
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val lockoutJobs = java.util.HashMap<String, Job>()
-
-    private val appOpenedReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != AppAccessibilityService.ACTION_APP_OPENED) return
-            when (intent.getIntExtra("overlay_mode", OverlayMode.FRICTION)) {
-                OverlayMode.REMOVE_TINT -> { dismissTint(); return }
-                OverlayMode.TINT -> { showTint(); return }
-                else -> {
-                    val pkg = intent.getStringExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME) ?: return
-                    val mode = intent.getIntExtra("overlay_mode", OverlayMode.FRICTION)
-                    val lockedUntil = intent.getLongExtra("locked_until", 0L)
-                    showOverlay(pkg, getAppName(pkg), mode, lockedUntil)
-                }
-            }
-        }
-    }
+    
+    // Usage stats state
+    private var lastForegroundPackage: String? = null
+    private var sessionStartTime: Long = 0L
+    private var cachedHomeLauncherPkg: String? = null
+    private var monitorJob: Job? = null
+    private lateinit var scheduleManager: ScheduleManager
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        scheduleManager = ScheduleManager(this)
 
-        val filter = IntentFilter(AppAccessibilityService.ACTION_APP_OPENED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(appOpenedReceiver, filter, RECEIVER_NOT_EXPORTED)
+        startUsageMonitoring()
+    }
+
+    private fun startUsageMonitoring() {
+        monitorJob?.cancel()
+        monitorJob = serviceScope.launch {
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            while (true) {
+                checkForegroundApp(usm)
+                delay(1000) // Poll every 1 second
+            }
+        }
+    }
+
+    private fun checkForegroundApp(usm: UsageStatsManager) {
+        val now = System.currentTimeMillis()
+        val events = usm.queryEvents(now - 10000, now) // Look back 10 seconds to catch recent resumes
+        var currentPkg: String? = null
+        val event = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+                currentPkg = event.packageName
+            }
+        }
+        
+        // If we didn't get a recent resumed event, we assume the last known package is still foreground
+        if (currentPkg == null) {
+            currentPkg = lastForegroundPackage
+        }
+
+        if (currentPkg == null) return
+        if (currentPkg == packageName || !hasLauncherIntent(currentPkg)) return
+
+        if (currentPkg == lastForegroundPackage) return
+
+        val oldPackage = lastForegroundPackage
+        lastForegroundPackage = currentPkg
+        Log.d(TAG, "Foreground app changed to: $currentPkg")
+
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+
+        // Handle backgrounding the old app
+        if (oldPackage != null) {
+            cancelCountdownNotification()
+            if (sessionStartTime > 0) {
+                logUsageAndCheckBudget(oldPackage, sessionStartTime)
+                sessionStartTime = 0L
+            }
+
+            val oldActiveUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + oldPackage, 0L)
+            if (now < oldActiveUntil) {
+                val remaining = oldActiveUntil - now
+                if (remaining > 0) {
+                    prefs.edit()
+                        .putLong(PrefsKeys.REMAINING_MILLIS + oldPackage, remaining)
+                        .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
+                        .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
+                        .apply()
+                }
+            }
+        }
+
+        if (!prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) {
+            serviceScope.launch(Dispatchers.Main) { dismissTint() }
+            return
+        }
+
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        if (!monitoredApps.contains(currentPkg)) {
+            serviceScope.launch(Dispatchers.Main) { dismissTint() }
+            return
+        }
+
+        val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + currentPkg, 0L)
+        val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, 0L)
+        val remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + currentPkg, 0L)
+
+        // 1. Enforce Schedule Lock
+        if (scheduleManager.isCurrentlyScheduled()) {
+            serviceScope.launch(Dispatchers.Main) { showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.SCHEDULE_LOCK, 0L) }
+            return
+        }
+
+        // 2. Enforce Daily Budget Lock
+        val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + currentPkg, 0)
+        if (budgetMins > 0) {
+            val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + currentPkg, "")
+            val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + currentPkg, 0L) else 0L
+            if (usedMs >= budgetMins * 60 * 1000L) {
+                serviceScope.launch(Dispatchers.Main) { showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.BUDGET_LOCK, 0L) }
+                return
+            }
+        }
+
+        // 3. Handle Timed Sessions
+        if (now < activeUntil) {
+            serviceScope.launch(Dispatchers.Main) { showTint() }
+            startCountdownNotification(currentPkg, activeUntil)
+            sessionStartTime = now
+            scheduleLockoutCheck(currentPkg, activeUntil - now)
+        } else if (now < lockedUntil) {
+            serviceScope.launch(Dispatchers.Main) { showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.LOCK, lockedUntil) }
+        } else if (remainingMillis > 0) {
+            val newActiveUntil = now + remainingMillis
+            val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + currentPkg, false)
+            val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + currentPkg, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+            val newLockedUntil = newActiveUntil + (lockoutMins * 60 * 1000L)
+            prefs.edit()
+                .putLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, newActiveUntil)
+                .putLong(PrefsKeys.LOCKED_UNTIL + currentPkg, newLockedUntil)
+                .remove(PrefsKeys.REMAINING_MILLIS + currentPkg)
+                .apply()
+            serviceScope.launch(Dispatchers.Main) { showTint() }
+            startCountdownNotification(currentPkg, newActiveUntil)
+            sessionStartTime = now
+            scheduleLockoutCheck(currentPkg, remainingMillis)
         } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(appOpenedReceiver, filter)
+            serviceScope.launch(Dispatchers.Main) { showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L) }
+        }
+    }
+
+    private fun isHomeLauncher(pkg: String): Boolean {
+        if (cachedHomeLauncherPkg == null) {
+            cachedHomeLauncherPkg = packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) },
+                PackageManager.MATCH_DEFAULT_ONLY
+            )?.activityInfo?.packageName
+        }
+        return cachedHomeLauncherPkg == pkg
+    }
+
+    private fun hasLauncherIntent(pkg: String): Boolean =
+        packageManager.getLaunchIntentForPackage(pkg) != null || isHomeLauncher(pkg)
+
+    private fun logUsageAndCheckBudget(pkg: String, startTime: Long) {
+        val now = System.currentTimeMillis()
+        val durationMs = now - startTime
+        if (durationMs <= 0) return
+        val currentFgPkg = lastForegroundPackage
+        
+        serviceScope.launch {
+            try {
+                val dao = UsageDatabase.getInstance(this@OverlayService).usageDao()
+                val appName = getAppName(pkg)
+                
+                val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                dao.insertEvent(
+                    UsageEvent(
+                        packageName = pkg,
+                        appName = appName,
+                        startTime = startTime,
+                        endTime = now,
+                        durationMillis = durationMs,
+                        wasBlocked = false,
+                        dateKey = dateKey
+                    )
+                )
+                
+                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+                if (budgetMins > 0) {
+                    val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
+                    val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) else 0L
+                    
+                    val newUsedMs = usedMs + durationMs
+                    prefs.edit()
+                        .putLong(PrefsKeys.DAILY_USED_MILLIS + pkg, newUsedMs)
+                        .putString(PrefsKeys.DAILY_RESET_DATE + pkg, dateKey)
+                        .apply()
+                        
+                    if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg) {
+                        launch(Dispatchers.Main) { showOverlay(pkg, appName, OverlayMode.BUDGET_LOCK, 0L) }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to log usage: ${e.message}")
+            }
+        }
+    }
+
+    private fun scheduleLockoutCheck(packageName: String, delayMs: Long) {
+        lockoutJobs[packageName]?.cancel()
+        lockoutJobs[packageName] = serviceScope.launch {
+            delay(delayMs)
+            val currentPkg = lastForegroundPackage
+            if (currentPkg == packageName) {
+                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
+                launch(Dispatchers.Main) { showOverlay(packageName, getAppName(packageName), OverlayMode.LOCK, lockedUntil) }
+            }
         }
     }
 
@@ -124,12 +306,6 @@ class OverlayService : Service() {
             }
         } else if (intent?.action == ACTION_STOP_COUNTDOWN) {
             cancelCountdownNotification()
-        } else if (intent?.action == ACTION_SCHEDULE_LOCKOUT_CHECK) {
-            val pkg = intent.getStringExtra("package_name") ?: ""
-            val delayMs = intent.getLongExtra("delay_ms", 0L)
-            if (pkg.isNotEmpty() && delayMs > 0) {
-                scheduleLockoutCheck(pkg, delayMs)
-            }
         }
         return START_STICKY
     }
@@ -172,7 +348,6 @@ class OverlayService : Service() {
         serviceScope.cancel()
         dismissOverlay()
         dismissTint()
-        try { unregisterReceiver(appOpenedReceiver) } catch (_: Exception) {}
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -440,10 +615,7 @@ class OverlayService : Service() {
         startCountdownNotification(packageName, activeUntil)
         scheduleLockoutCheck(packageName, sessionMins * 60 * 1000L)
         showTint()
-        sendBroadcast(Intent(AppAccessibilityService.ACTION_SESSION_STARTED).apply {
-            setPackage(applicationContext.packageName)
-            putExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME, packageName)
-        })
+        sessionStartTime = now
     }
 
     private fun recordFrictionSkip(packageName: String, waitedMs: Long) {
@@ -475,18 +647,6 @@ class OverlayService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to log blocked session: ${e.message}")
             }
-        }
-    }
-    
-    private fun scheduleLockoutCheck(packageName: String, delayMs: Long) {
-        lockoutJobs[packageName]?.cancel()
-        lockoutJobs[packageName] = serviceScope.launch {
-            delay(delayMs)
-            val intent = Intent(AppAccessibilityService.ACTION_CHECK_LOCKOUT).apply {
-                setPackage(applicationContext.packageName)
-                putExtra(AppAccessibilityService.EXTRA_PACKAGE_NAME, packageName)
-            }
-            sendBroadcast(intent)
         }
     }
 

@@ -94,6 +94,7 @@ fun PerAppSettingsSheet(
             
             // Wait Duration
             Text("Wait Duration: $waitSeconds seconds", color = if (slidersEnabled) GZTextPrimary else GZTextTertiary, fontWeight = FontWeight.Medium)
+            Text("How long you have to wait on the block screen before unlocking the app.", color = GZTextSecondary, fontSize = 12.sp)
             Slider(
                 value = waitSeconds.toFloat(),
                 onValueChange = { waitSeconds = it.toInt() },
@@ -107,6 +108,7 @@ fun PerAppSettingsSheet(
             
             // Session Limit
             Text("Session Limit: $sessionMinutes minutes", color = if (slidersEnabled) GZTextPrimary else GZTextTertiary, fontWeight = FontWeight.Medium)
+            Text("How long you can use the app before it locks again.", color = GZTextSecondary, fontSize = 12.sp)
             Slider(
                 value = sessionMinutes.toFloat(),
                 onValueChange = { sessionMinutes = it.toInt().coerceAtMost(lockoutMinutes) },
@@ -123,14 +125,15 @@ fun PerAppSettingsSheet(
             val lockoutMins = lockoutMinutes % 60
             val lockoutText = if (lockoutHours > 0) "${lockoutHours}h ${lockoutMins}m" else "${lockoutMins}m"
             Text("Lockout Duration: $lockoutText", color = if (slidersEnabled) GZTextPrimary else GZTextTertiary, fontWeight = FontWeight.Medium)
+            Text("How long the app remains locked after your session expires.", color = GZTextSecondary, fontSize = 12.sp)
             Slider(
                 value = lockoutMinutes.toFloat(),
                 onValueChange = { 
                     lockoutMinutes = it.toInt()
                     if (sessionMinutes > lockoutMinutes) sessionMinutes = lockoutMinutes
                 },
-                valueRange = 15f..300f,
-                steps = 284,
+                valueRange = 15f..1440f,
+                steps = 94, // (1440-15)/15 - 1 = 94 steps of 15 mins
                 enabled = slidersEnabled,
                 onValueChangeFinished = { 
                     prefs.edit()
@@ -139,6 +142,23 @@ fun PerAppSettingsSheet(
                         .apply() 
                 }
             )
+            
+            Spacer(Modifier.height(24.dp))
+            Divider(color = GZBorder, thickness = 0.5.dp)
+            Spacer(Modifier.height(24.dp))
+
+            // Block Now Button
+            Button(
+                onClick = {
+                    val until = System.currentTimeMillis() + (24 * 60 * 60 * 1000L)
+                    prefs.edit().putLong(PrefsKeys.LOCKED_UNTIL + pkg, until).apply()
+                    onDismiss()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = GZRed)
+            ) {
+                Text("Block Immediately for 24 Hours", color = Color.White)
+            }
             
             Spacer(Modifier.height(24.dp))
             Divider(color = GZBorder, thickness = 0.5.dp)

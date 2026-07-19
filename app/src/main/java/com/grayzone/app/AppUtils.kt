@@ -45,10 +45,14 @@ fun drawableToBitmap(drawable: Drawable): Bitmap? {
     return bmp
 }
 
-fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
-    val enabledServices = am.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)
-    return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
+fun hasUsageStatsPermission(context: Context): Boolean {
+    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+    val mode = appOps.checkOpNoThrow(
+        android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+        android.os.Process.myUid(),
+        context.packageName
+    )
+    return mode == android.app.AppOpsManager.MODE_ALLOWED
 }
 
 fun isBatteryOptimized(context: Context): Boolean =

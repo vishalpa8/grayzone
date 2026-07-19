@@ -41,7 +41,7 @@ import com.grayzone.app.isAnyAppLocked
 fun OnboardingScreen(onContinue: () -> Unit) {
     val context = LocalContext.current
     val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-    var hasA11y by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var hasUsageAccess by remember { mutableStateOf(hasUsageStatsPermission(context)) }
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var hasBatteryOpt by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
 
@@ -49,10 +49,10 @@ fun OnboardingScreen(onContinue: () -> Unit) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasA11y = isAccessibilityServiceEnabled(context)
+                hasUsageAccess = hasUsageStatsPermission(context)
                 hasOverlay = Settings.canDrawOverlays(context)
                 hasBatteryOpt = pm.isIgnoringBatteryOptimizations(context.packageName)
-                if (hasA11y && hasOverlay && hasBatteryOpt) onContinue()
+                if (hasUsageAccess && hasOverlay && hasBatteryOpt) onContinue()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -64,8 +64,8 @@ fun OnboardingScreen(onContinue: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text("To provide friction, Grayzone needs these permissions:", color = GZTextSecondary)
         Spacer(Modifier.height(32.dp))
-        Button(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasA11y) GZGreen else GZPrimary)) {
-            Text(if (hasA11y) "Accessibility Granted" else "Grant Accessibility")
+        Button(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasUsageAccess) GZGreen else GZPrimary)) {
+            Text(if (hasUsageAccess) "Usage Access Granted" else "Grant Usage Access")
         }
         Spacer(Modifier.height(16.dp))
         Button(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasOverlay) GZGreen else GZPrimary)) {
@@ -81,7 +81,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             Text(if (hasBatteryOpt) "Battery Opt Exempt" else "Exclude from Battery Opt")
         }
         
-        if (hasA11y && hasOverlay && hasBatteryOpt) {
+        if (hasUsageAccess && hasOverlay && hasBatteryOpt) {
             Spacer(Modifier.height(32.dp))
             Button(
                 onClick = onContinue, 
@@ -242,8 +242,8 @@ fun SettingsScreen() {
                 lockoutMinutes = it.toInt()
                 if (sessionMinutes > lockoutMinutes) sessionMinutes = lockoutMinutes
             },
-            valueRange = 15f..300f,
-            steps = 284,
+            valueRange = 15f..1440f,
+            steps = 94,
             enabled = !anyAppLockedOrActive,
             onValueChangeFinished = {
                 prefs.edit()

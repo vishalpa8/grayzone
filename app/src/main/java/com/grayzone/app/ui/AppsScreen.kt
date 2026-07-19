@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -322,6 +323,19 @@ fun PremiumAppListItem(
             } else {
                 Text(app.packageName, color = GZTextTertiary.copy(alpha = rowAlpha), fontSize = 11.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (isMonitored) {
+            IconButton(
+                onClick = onLongPress,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Settings,
+                    contentDescription = "Settings",
+                    tint = GZTextTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
         Switch(

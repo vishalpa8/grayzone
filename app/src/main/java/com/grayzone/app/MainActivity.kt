@@ -53,7 +53,7 @@ fun MainAppContent() {
     val context = LocalContext.current
     var currentScreen by remember {
         mutableStateOf(
-            if (isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context))
+            if (hasUsageStatsPermission(context) && Settings.canDrawOverlays(context))
                 Screen.MAIN else Screen.ONBOARDING
         )
     }
