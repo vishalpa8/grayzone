@@ -285,21 +285,15 @@ fun WifiScreen(onBack: () -> Unit = {}) {
                             text = "CONNECTED DEVICES",
                             modifier = Modifier.weight(1f)
                         )
-                        if (isScanning) {
-                            ScanningPulse()
-                        } else {
-                            Text(
-                                "${devices.size} found",
-                                color    = GZTextTertiary,
-                                fontSize = 11.sp
-                            )
-                        }
+                        ScanStatus(isScanning = isScanning, deviceCount = devices.size)
                     }
                 }
 
                 item {
-                    if (devices.isEmpty() && !isScanning) {
-                        EmptyDevicesCard()
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        if (devices.isEmpty() && !isScanning) {
+                            EmptyDevicesCard()
+                        }
                     }
                 }
 
@@ -536,10 +530,10 @@ private fun NetworkInfoGrid(items: List<Pair<String, String>>) {
 }
 
 
-// ─── Scanning pulse ───────────────────────────────────────────────────────
+// ─── Scan Status ──────────────────────────────────────────────────────────
 
 @Composable
-private fun ScanningPulse() {
+private fun ScanStatus(isScanning: Boolean, deviceCount: Int) {
     val alpha by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue  = 0.3f,
         targetValue   = 1f,
@@ -549,15 +543,24 @@ private fun ScanningPulse() {
         ),
         label = "alpha"
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(GZAccent.copy(alpha = alpha))
+    
+    if (isScanning) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(GZAccent.copy(alpha = alpha))
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Scanning…", color = GZAccent.copy(alpha = alpha), fontSize = 11.sp)
+        }
+    } else {
+        Text(
+            "$deviceCount found",
+            color    = GZTextTertiary,
+            fontSize = 11.sp
         )
-        Spacer(Modifier.width(6.dp))
-        Text("Scanning…", color = GZAccent.copy(alpha = alpha), fontSize = 11.sp)
     }
 }
 
