@@ -297,11 +297,13 @@ fun WifiScreen(onBack: () -> Unit = {}) {
                     }
                 }
 
-                if (devices.isEmpty() && !isScanning) {
-                    item { EmptyDevicesCard() }
+                item {
+                    if (devices.isEmpty() && !isScanning) {
+                        EmptyDevicesCard()
+                    }
                 }
 
-                items(items = devices) { device ->
+                items(items = devices, key = { it.ip }) { device ->
                     DeviceCard(
                         device   = device,
                         onBlock  = { ip, block ->
