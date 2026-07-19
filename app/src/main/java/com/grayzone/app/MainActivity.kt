@@ -27,6 +27,7 @@ import com.grayzone.app.ui.AppsScreen
 import com.grayzone.app.ui.HomeScreen
 import com.grayzone.app.ui.LimitsScreen
 import com.grayzone.app.ui.StatsScreen
+import com.grayzone.app.ui.WifiScreen
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -69,8 +70,9 @@ fun MainAppContent() {
 fun MainScreen() {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(Tab.HOME) }
-    // VPN screen is opened from the drawer, not the bottom nav
-    var showVpnScreen by remember { mutableStateOf(false) }
+    // VPN and WiFi screens are opened from the drawer, not the bottom nav
+    var showVpnScreen  by remember { mutableStateOf(false) }
+    var showWifiScreen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -97,7 +99,8 @@ fun MainScreen() {
                 onClose = { scope.launch { drawerState.close() } },
                 onNavigate = { dest ->
                     when (dest) {
-                        com.grayzone.app.ui.DrawerDestination.VPN -> showVpnScreen = true
+                        com.grayzone.app.ui.DrawerDestination.VPN  -> showVpnScreen  = true
+                        com.grayzone.app.ui.DrawerDestination.WIFI -> showWifiScreen = true
                     }
                 }
             )
@@ -107,6 +110,9 @@ fun MainScreen() {
         if (showVpnScreen) {
             // Full-screen VPN view with back navigation
             com.grayzone.app.ui.VpnScreen(onBack = { showVpnScreen = false })
+        } else if (showWifiScreen) {
+            // Full-screen WiFi view with back navigation
+            WifiScreen(onBack = { showWifiScreen = false })
         } else {
             Scaffold(
                 containerColor = GZBackground,

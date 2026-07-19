@@ -2,11 +2,12 @@ package com.grayzone.app.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
-import android.os.Build
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -51,8 +53,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.FileReader
 import java.net.InetAddress
 
 // ─── Data models ──────────────────────────────────────────────────────────
@@ -62,7 +62,8 @@ data class WifiDevice(
     val hostname: String,
     val isBlocked: Boolean = false,
     val customName: String = "",
-    val deviceType: DeviceType = DeviceType.UNKNOWN
+    val deviceType: DeviceType = DeviceType.UNKNOWN,
+    val isGateway: Boolean = false
 )
 
 enum class DeviceType { PHONE, LAPTOP, TABLET, TV, SMART_HOME, ROUTER, UNKNOWN }
@@ -74,6 +75,8 @@ data class WifiNetworkInfo(
     val frequency: Int = 0,
     val linkSpeed: Int = 0,
     val ipAddress: String = "—",
+    val gateway: String = "—",
+    val subnetPrefix: String = "",
     val isConnected: Boolean = false
 ) {
     val signalBars: Int get() = when {
@@ -119,6 +122,42 @@ fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000L     -> "%.1f MB".format(bytes / 1_000_000.0)
     bytes >= 1_000L         -> "%.1f KB".format(bytes / 1_000.0)
     else                    -> "$bytes B"
+}
+
+private fun normalizeHostname(hostname: String, ip: String): String {
+    val raw = hostname.trim().removeSurrounding("\"").trim()
+    if (raw.isBlank() || raw.equals(ip, ignoreCase = true) || raw.contains("::")) return ""
+    return raw.removeSuffix(".local")
+        .removeSuffix(".lan")
+        .removeSuffix(".home")
+        .split(".")
+        .firstOrNull()
+        ?.trim()
+        .orEmpty()
+}
+
+fun inferDeviceDisplayName(ip: String, hostname: String, customName: String, isGateway: Boolean): String {
+    if (customName.isNotBlank()) return customName
+    if (isGateway) return "Router / Gateway"
+
+    val normalizedHost = normalizeHostname(hostname, ip)
+    if (normalizedHost.isNotBlank()) return normalizedHost
+
+    return if (ip.endsWith(".1") || ip.endsWith(".254")) "Router / Gateway" else "Device $ip"
+}
+
+fun inferDeviceType(ip: String, hostname: String, isGateway: Boolean): DeviceType {
+    if (isGateway) return DeviceType.ROUTER
+
+    val normalizedHost = normalizeHostname(hostname, ip).lowercase()
+    return when {
+        normalizedHost.contains("phone") || normalizedHost.contains("android") || normalizedHost.contains("iphone") || normalizedHost.contains("pixel") -> DeviceType.PHONE
+        normalizedHost.contains("laptop") || normalizedHost.contains("desktop") || normalizedHost.contains("pc") || normalizedHost.contains("windows") || normalizedHost.contains("macbook") || normalizedHost.contains("thinkpad") -> DeviceType.LAPTOP
+        normalizedHost.contains("tablet") || normalizedHost.contains("ipad") || normalizedHost.contains("tab") -> DeviceType.TABLET
+        normalizedHost.contains("tv") || normalizedHost.contains("roku") || normalizedHost.contains("chromecast") -> DeviceType.TV
+        normalizedHost.contains("home") || normalizedHost.contains("speaker") || normalizedHost.contains("echo") || normalizedHost.contains("nest") || normalizedHost.contains("hub") -> DeviceType.SMART_HOME
+        else -> DeviceType.UNKNOWN
+    }
 }
 
 
@@ -167,15 +206,26 @@ class WifiRepository(private val context: Context) {
 
         @Suppress("DEPRECATION")
         val rawIp = wifiInfo?.ipAddress ?: 0
+        val formattedIp = if (rawIp != 0) intToIp(rawIp) else "—"
+
+        val dhcpInfo = wifiManager.dhcpInfo
+        val gatewayIp = dhcpInfo.gateway.takeIf { it != 0 }?.let(::intToIp) ?: "—"
+        val subnetPrefix = if (gatewayIp != "—") {
+            gatewayIp.split(".").take(3).joinToString(".")
+        } else {
+            formattedIp.split(".").take(3).joinToString(".")
+        }
 
         WifiNetworkInfo(
-            ssid       = rawSsid,
-            bssid      = bssid,
-            rssi       = rssi,
-            frequency  = freq,
-            linkSpeed  = linkSpeed,
-            ipAddress  = if (rawIp != 0) intToIp(rawIp) else "—",
-            isConnected = true
+            ssid         = rawSsid,
+            bssid        = bssid,
+            rssi         = rssi,
+            frequency    = freq,
+            linkSpeed    = linkSpeed,
+            ipAddress    = formattedIp,
+            gateway      = gatewayIp,
+            subnetPrefix = subnetPrefix,
+            isConnected  = true
         )
     }
 
@@ -187,15 +237,42 @@ class WifiRepository(private val context: Context) {
         val info = readNetworkInfo()
         if (!info.isConnected || info.ipAddress == "—") return@withContext emptyList()
 
-        // Derive subnet prefix, e.g. "192.168.1"
-        val parts = info.ipAddress.split(".")
-        if (parts.size != 4) return@withContext emptyList()
-        val subnet = "${parts[0]}.${parts[1]}.${parts[2]}"
+        val subnet = info.subnetPrefix.ifBlank { info.ipAddress.split(".").take(3).joinToString(".") }
+        if (subnet.isBlank()) return@withContext emptyList()
 
         val blocked = getBlockedIps()
         val results = java.util.concurrent.CopyOnWriteArrayList<WifiDevice>()
 
-        // Parallel ping sweep: using system ping for ICMP
+        val arpHosts = try {
+            parseArpTable(readArpTable())
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        if (arpHosts.isNotEmpty()) {
+            arpHosts.forEach { ip ->
+                if (ip.startsWith(subnet)) {
+                    val hostname = try {
+                        InetAddress.getByName(ip).canonicalHostName.takeIf { it != ip } ?: ip
+                    } catch (_: Exception) { ip }
+                    val isGateway = ip == info.gateway || ip.endsWith(".1")
+
+                    results.add(
+                        WifiDevice(
+                            ip         = ip,
+                            hostname   = hostname,
+                            isBlocked  = blocked.contains(ip),
+                            customName = getCustomName(ip),
+                            deviceType = inferDeviceType(ip, hostname, isGateway),
+                            isGateway  = isGateway
+                        )
+                    )
+                }
+            }
+            return@withContext results.toList()
+        }
+
+        // Fallback: ping sweep for devices that don't appear in the ARP table.
         kotlinx.coroutines.coroutineScope {
             (1..254).map { host ->
                 async {
@@ -209,25 +286,83 @@ class WifiRepository(private val context: Context) {
                                     .takeIf { it != ip } ?: ip
                             } catch (_: Exception) { ip }
 
+                            val isGateway = ip == info.gateway || ip.endsWith(".1")
                             results.add(
                                 WifiDevice(
                                     ip         = ip,
                                     hostname   = hostname,
                                     isBlocked  = blocked.contains(ip),
                                     customName = getCustomName(ip),
-                                    deviceType = DeviceType.UNKNOWN
+                                    deviceType = inferDeviceType(ip, hostname, isGateway),
+                                    isGateway  = isGateway
                                 )
                             )
                         }
                     } catch (_: Exception) { }
                 }
-            }.forEach { it.await() }   // wait for all pings
+            }.forEach { it.await() }
         }
 
         results.toList()
     }
+
+    private fun readArpTable(): String {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", "cat /proc/net/arp"))
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            process.waitFor()
+            output
+        } catch (_: Exception) {
+            ""
+        }
+    }
 }
 
+fun parseArpTable(output: String): List<String> {
+    return output.lines()
+        .drop(1)
+        .mapNotNull { line ->
+            val parts = line.trim().split(Regex("\\s+"))
+            if (parts.size < 6) return@mapNotNull null
+            val ip = parts[0]
+            val flags = parts[2]
+            val mac = parts[3]
+            if (ip.isBlank() || ip == "0.0.0.0" || flags == "0x0" || mac == "00:00:00:00:00:00") {
+                null
+            } else {
+                ip
+            }
+        }
+}
+
+
+private fun openRouterAdminPage(context: Context, routerIp: String) {
+    val urls = listOf(
+        "http://$routerIp",
+        "https://$routerIp",
+        "http://$routerIp:80",
+        "http://$routerIp:8080"
+    )
+
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urls.first())).apply {
+        addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        val fallback = urls.drop(1).firstOrNull()
+        if (fallback != null) {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(fallback)))
+            } catch (_: Exception) {
+                Toast.makeText(context, "Unable to open router admin page", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Unable to open router admin page", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
 
 // ─── Main screen ──────────────────────────────────────────────────────────
 
@@ -242,15 +377,14 @@ fun WifiScreen(onBack: () -> Unit = {}) {
     var devices     by remember { mutableStateOf<List<WifiDevice>>(emptyList()) }
     var isScanning  by remember { mutableStateOf(false) }
 
-    // Only run the scan loop when permission is granted
     LaunchedEffect(locPerm.status.isGranted) {
         if (!locPerm.status.isGranted) return@LaunchedEffect
         while (isActive) {
-            isScanning  = true
+            isScanning = true
             networkInfo = repo.readNetworkInfo()
-            devices     = repo.scanDevices()
-            isScanning  = false
-            delay(10_000) // re-scan every 10 s (ping sweep is slow)
+            devices = repo.scanDevices()
+            isScanning = false
+            delay(8_000)
         }
     }
 
@@ -444,32 +578,33 @@ private fun NetworkInfoPanel(networkInfo: WifiNetworkInfo) {
 
             if (!networkInfo.isConnected) {
                 Text("Not connected to WiFi", color = GZTextTertiary, fontSize = 13.sp)
-                return@Column
-            }
+            } else {
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    SignalBarsRow(bars = networkInfo.signalBars)
+                    Text("${networkInfo.rssi} dBm", color = GZTextSecondary, fontSize = 12.sp)
+                }
 
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                SignalBarsRow(bars = networkInfo.signalBars)
-                Text("${networkInfo.rssi} dBm", color = GZTextSecondary, fontSize = 12.sp)
-            }
+                Spacer(Modifier.height(14.dp))
+                Divider(color = GZBorder, thickness = 1.dp)
+                Spacer(Modifier.height(14.dp))
 
-            Spacer(Modifier.height(14.dp))
-            Divider(color = GZBorder, thickness = 1.dp)
-            Spacer(Modifier.height(14.dp))
-
-            NetworkInfoGrid(
-                listOf(
-                    "IP Address"  to networkInfo.ipAddress,
-                    "BSSID"       to networkInfo.bssid.ifBlank { "—" },
-                    "Band"        to "${networkInfo.band} (ch ${networkInfo.channel})",
-                    "Link Speed"  to "${networkInfo.linkSpeed} Mbps",
-                    "SSID"        to networkInfo.ssid,
-                    "Status"      to "Connected"
+                NetworkInfoGrid(
+                    listOf(
+                        "IP Address"  to networkInfo.ipAddress,
+                        "Gateway"     to networkInfo.gateway,
+                        "Subnet"      to "${networkInfo.subnetPrefix}.0/24",
+                        "BSSID"       to networkInfo.bssid.ifBlank { "—" },
+                        "Band"        to "${networkInfo.band} (ch ${networkInfo.channel})",
+                        "Link Speed"  to "${networkInfo.linkSpeed} Mbps",
+                        "SSID"        to networkInfo.ssid,
+                        "Status"      to "Connected"
+                    )
                 )
-            )
+            }
         }
     }
 }
@@ -617,7 +752,7 @@ private fun DeviceCard(
     val focusRequester = remember { FocusRequester() }
     val focusManager   = LocalFocusManager.current
 
-    val displayName = device.customName.ifBlank { device.hostname }
+    val displayName = inferDeviceDisplayName(device.ip, device.hostname, device.customName, device.isGateway)
     val borderColor = if (device.isBlocked) GZRed.copy(alpha = 0.35f) else GZBorder
     val bgColor     = if (device.isBlocked) GZRed.copy(alpha = 0.04f) else GZSurface
 
@@ -665,7 +800,11 @@ private fun DeviceCard(
                         maxLines   = 1,
                         overflow   = TextOverflow.Ellipsis
                     )
-                    Text(device.ip, color = GZTextTertiary, fontSize = 11.sp)
+                    Text(
+                        if (device.isGateway) "Gateway • router" else device.ip,
+                        color = GZTextTertiary,
+                        fontSize = 11.sp
+                    )
                 }
                 if (device.isBlocked) {
                     Text(
@@ -766,24 +905,43 @@ private fun DeviceCard(
                             )
                         }
 
-                        val blockColor  = if (device.isBlocked) GZGreen else GZRed
-                        val blockIcon   = if (device.isBlocked) Icons.Filled.LockOpen else Icons.Filled.Block
-                        val blockLabel  = if (device.isBlocked) "Unblock" else "Block"
+                        if (device.isGateway) {
+                            val context = LocalContext.current
+                            OutlinedButton(
+                                onClick = { openRouterAdminPage(context, device.ip) },
+                                border = ButtonDefaults.outlinedButtonBorder.copy(
+                                    brush = androidx.compose.ui.graphics.SolidColor(GZPrimary.copy(alpha = 0.5f))
+                                ),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = GZPrimary.copy(alpha = 0.08f)
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Icon(Icons.Filled.Router, null, tint = GZPrimary, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Manage", color = GZPrimary, fontSize = 12.sp)
+                            }
+                        } else {
+                            val blockColor  = if (device.isBlocked) GZGreen else GZRed
+                            val blockIcon   = if (device.isBlocked) Icons.Filled.LockOpen else Icons.Filled.Block
+                            val blockLabel  = if (device.isBlocked) "Unblock" else "Block"
 
-                        OutlinedButton(
-                            onClick  = { onBlock(device.ip, !device.isBlocked) },
-                            border   = ButtonDefaults.outlinedButtonBorder.copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(blockColor.copy(alpha = 0.4f))
-                            ),
-                            colors   = ButtonDefaults.outlinedButtonColors(
-                                containerColor = blockColor.copy(alpha = 0.10f)
-                            ),
-                            shape    = RoundedCornerShape(10.dp),
-                            modifier = Modifier.height(36.dp)
-                        ) {
-                            Icon(blockIcon, null, tint = blockColor, modifier = Modifier.size(15.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(blockLabel, color = blockColor, fontSize = 12.sp)
+                            OutlinedButton(
+                                onClick  = { onBlock(device.ip, !device.isBlocked) },
+                                border   = ButtonDefaults.outlinedButtonBorder.copy(
+                                    brush = androidx.compose.ui.graphics.SolidColor(blockColor.copy(alpha = 0.4f))
+                                ),
+                                colors   = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = blockColor.copy(alpha = 0.10f)
+                                ),
+                                shape    = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Icon(blockIcon, null, tint = blockColor, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(blockLabel, color = blockColor, fontSize = 12.sp)
+                            }
                         }
                     }
                 }

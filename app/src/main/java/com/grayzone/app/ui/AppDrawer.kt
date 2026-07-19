@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,9 +39,19 @@ fun AppDrawerContent(
     onNavigate: (DrawerDestination) -> Unit = {}
 ) {
     var vpnRunning by remember { mutableStateOf(AdBlockVpnService.isRunning) }
+
+    // WiFi connected state
+    val context     = LocalContext.current
+    val wifiManager = remember {
+        context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE)
+            as android.net.wifi.WifiManager
+    }
+    var wifiEnabled by remember { mutableStateOf(wifiManager.isWifiEnabled) }
+
     LaunchedEffect(Unit) {
         while (true) {
-            vpnRunning = AdBlockVpnService.isRunning
+            vpnRunning  = AdBlockVpnService.isRunning
+            wifiEnabled = wifiManager.isWifiEnabled
             kotlinx.coroutines.delay(1000)
         }
     }
@@ -76,6 +87,17 @@ fun AppDrawerContent(
             onClick = { onNavigate(DrawerDestination.VPN); onClose() }
         )
 
+        // ── Nav: WiFi Monitor ─────────────────────────────────────────────
+        DrawerNavRow(
+            icon = { Icon(Icons.Filled.Wifi, contentDescription = null,
+                tint = if (wifiEnabled) GZChartCyan else GZTextTertiary,
+                modifier = Modifier.size(20.dp)) },
+            title = "WiFi Monitor",
+            subtitle = if (wifiEnabled) "Connected — tap to manage" else "WiFi off",
+            subtitleColor = if (wifiEnabled) GZChartCyan else GZTextTertiary,
+            onClick = { onNavigate(DrawerDestination.WIFI); onClose() }
+        )
+
         // ── (Future nav items — add DrawerNavRow() calls here) ────────────
 
         Spacer(modifier = Modifier.weight(1f))
@@ -89,7 +111,7 @@ fun AppDrawerContent(
 
 // ─── Destinations the drawer can navigate to ──────────────────────────────
 
-enum class DrawerDestination { VPN }
+enum class DrawerDestination { VPN, WIFI }
 
 // ─── Reusable nav row ─────────────────────────────────────────────────────
 

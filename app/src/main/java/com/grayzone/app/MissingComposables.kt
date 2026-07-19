@@ -462,7 +462,6 @@ fun GZCard(
             .background(background)
             .border(1.dp, border, RoundedCornerShape(24.dp))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .animateContentSize()
     ) { content() }
 }
 
