@@ -1,0 +1,836 @@
+package com.grayzone.app.ui
+
+import android.Manifest
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
+import android.os.Build
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
+import com.google.accompanist.permissions.shouldShowRationale
+import com.grayzone.app.GZCard
+import com.grayzone.app.SectionLabel
+import com.grayzone.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.FileReader
+import java.net.InetAddress
+
+// ─── Data models ──────────────────────────────────────────────────────────
+
+data class WifiDevice(
+    val ip: String,
+    val hostname: String,
+    val isBlocked: Boolean = false,
+    val customName: String = "",
+    val deviceType: DeviceType = DeviceType.UNKNOWN
+)
+
+enum class DeviceType { PHONE, LAPTOP, TABLET, TV, SMART_HOME, ROUTER, UNKNOWN }
+
+data class WifiNetworkInfo(
+    val ssid: String = "",
+    val bssid: String = "",
+    val rssi: Int = 0,
+    val frequency: Int = 0,
+    val linkSpeed: Int = 0,
+    val ipAddress: String = "—",
+    val isConnected: Boolean = false
+) {
+    val signalBars: Int get() = when {
+        rssi >= -50 -> 4
+        rssi >= -65 -> 3
+        rssi >= -75 -> 2
+        rssi >= -85 -> 1
+        else        -> 0
+    }
+    val band: String get() = when {
+        !isConnected     -> "—"
+        frequency < 3000 -> "2.4 GHz"
+        frequency < 6000 -> "5 GHz"
+        else             -> "6 GHz"
+    }
+    val channel: Int get() = when {
+        frequency in 2412..2484 -> (frequency - 2407) / 5
+        frequency in 5180..5825 -> (frequency - 5000) / 5
+        else                    -> 0
+    }
+}
+
+// ─── Pure utility functions ───────────────────────────────────────────────
+
+fun getDeviceTypeIcon(type: DeviceType): ImageVector = when (type) {
+    DeviceType.PHONE      -> Icons.Filled.PhoneAndroid
+    DeviceType.LAPTOP     -> Icons.Filled.Laptop
+    DeviceType.TABLET     -> Icons.Filled.TabletAndroid
+    DeviceType.TV         -> Icons.Filled.Tv
+    DeviceType.SMART_HOME -> Icons.Filled.Home
+    DeviceType.ROUTER     -> Icons.Filled.Router
+    DeviceType.UNKNOWN    -> Icons.Filled.DeviceUnknown
+}
+
+
+
+/** Little-endian int from WifiInfo → dotted-decimal string. */
+fun intToIp(ip: Int): String =
+    "${ip and 0xFF}.${(ip shr 8) and 0xFF}.${(ip shr 16) and 0xFF}.${(ip shr 24) and 0xFF}"
+
+fun formatBytes(bytes: Long): String = when {
+    bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)
+    bytes >= 1_000_000L     -> "%.1f MB".format(bytes / 1_000_000.0)
+    bytes >= 1_000L         -> "%.1f KB".format(bytes / 1_000.0)
+    else                    -> "$bytes B"
+}
+
+
+// ─── Repository (all IO on Dispatchers.IO) ────────────────────────────────
+
+class WifiRepository(private val context: Context) {
+
+    private val wifiManager: WifiManager =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val prefs = context.getSharedPreferences("wifi_screen_prefs", Context.MODE_PRIVATE)
+
+    // ── Prefs helpers ──────────────────────────────────────────────────────
+    fun getCustomName(ip: String): String = prefs.getString("name_$ip", "") ?: ""
+    fun saveCustomName(ip: String, name: String) =
+        prefs.edit().putString("name_$ip", name).apply()
+    fun getBlockedIps(): Set<String> = prefs.getStringSet("blocked_ips", emptySet()) ?: emptySet()
+    fun setBlocked(ip: String, blocked: Boolean) {
+        val s = getBlockedIps().toMutableSet()
+        if (blocked) s.add(ip) else s.remove(ip)
+        prefs.edit().putStringSet("blocked_ips", s).apply()
+    }
+
+    // ── Network info – must be called on Dispatchers.IO ───────────────────
+    suspend fun readNetworkInfo(): WifiNetworkInfo = withContext(Dispatchers.IO) {
+        val connMgr = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connMgr.activeNetwork
+        val caps    = connMgr.getNetworkCapabilities(network)
+        val isWifi  = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        if (!isWifi) return@withContext WifiNetworkInfo()
+
+        @Suppress("DEPRECATION")
+        val wifiInfo: WifiInfo? = wifiManager.connectionInfo
+
+        val rssi      = wifiInfo?.rssi ?: -100
+        val freq      = wifiInfo?.frequency ?: 0
+        val linkSpeed = wifiInfo?.linkSpeed ?: 0
+
+        @Suppress("DEPRECATION")
+        val rawSsid = wifiInfo?.ssid
+            ?.removePrefix("\"")?.removeSuffix("\"")
+            ?.takeIf { it.isNotBlank() && it != "<unknown ssid>" }
+            ?: "Hidden / No Permission"
+
+        @Suppress("DEPRECATION")
+        val bssid = wifiInfo?.bssid ?: ""
+
+        @Suppress("DEPRECATION")
+        val rawIp = wifiInfo?.ipAddress ?: 0
+
+        WifiNetworkInfo(
+            ssid       = rawSsid,
+            bssid      = bssid,
+            rssi       = rssi,
+            frequency  = freq,
+            linkSpeed  = linkSpeed,
+            ipAddress  = if (rawIp != 0) intToIp(rawIp) else "—",
+            isConnected = true
+        )
+    }
+
+    /**
+     * Ping-sweep the /24 subnet to discover devices.
+     * Runs entirely on Dispatchers.IO.
+     */
+    suspend fun scanDevices(): List<WifiDevice> = withContext(Dispatchers.IO) {
+        val info = readNetworkInfo()
+        if (!info.isConnected || info.ipAddress == "—") return@withContext emptyList()
+
+        // Derive subnet prefix, e.g. "192.168.1"
+        val parts = info.ipAddress.split(".")
+        if (parts.size != 4) return@withContext emptyList()
+        val subnet = "${parts[0]}.${parts[1]}.${parts[2]}"
+
+        val blocked = getBlockedIps()
+        val results = java.util.concurrent.CopyOnWriteArrayList<WifiDevice>()
+
+        // Parallel ping sweep: using system ping for ICMP
+        kotlinx.coroutines.coroutineScope {
+            (1..254).map { host ->
+                async {
+                    val ip = "$subnet.$host"
+                    try {
+                        val process = Runtime.getRuntime().exec("ping -c 1 -W 1 $ip")
+                        val exitValue = process.waitFor()
+                        if (exitValue == 0) {
+                            val hostname = try {
+                                InetAddress.getByName(ip).canonicalHostName
+                                    .takeIf { it != ip } ?: ip
+                            } catch (_: Exception) { ip }
+
+                            results.add(
+                                WifiDevice(
+                                    ip         = ip,
+                                    hostname   = hostname,
+                                    isBlocked  = blocked.contains(ip),
+                                    customName = getCustomName(ip),
+                                    deviceType = DeviceType.UNKNOWN
+                                )
+                            )
+                        }
+                    } catch (_: Exception) { }
+                }
+            }.forEach { it.await() }   // wait for all pings
+        }
+
+        results.toList()
+    }
+}
+
+
+// ─── Main screen ──────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalPermissionsApi::class)
+@Composable
+fun WifiScreen(onBack: () -> Unit = {}) {
+    val context    = LocalContext.current
+    val repo       = remember { WifiRepository(context) }
+    val locPerm    = rememberPermissionState(Manifest.permission.ACCESS_FINE_LOCATION)
+
+    var networkInfo by remember { mutableStateOf(WifiNetworkInfo()) }
+    var devices     by remember { mutableStateOf<List<WifiDevice>>(emptyList()) }
+    var isScanning  by remember { mutableStateOf(false) }
+
+    // Only run the scan loop when permission is granted
+    LaunchedEffect(locPerm.status.isGranted) {
+        if (!locPerm.status.isGranted) return@LaunchedEffect
+        while (isActive) {
+            isScanning  = true
+            networkInfo = repo.readNetworkInfo()
+            devices     = repo.scanDevices()
+            isScanning  = false
+            delay(10_000) // re-scan every 10 s (ping sweep is slow)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GZBackground)
+    ) {
+        WifiHeader(networkInfo = networkInfo, onBack = onBack)
+
+        if (!locPerm.status.isGranted) {
+            // ── Permission gate ────────────────────────────────────────────
+            PermissionGate(
+                shouldShowRationale = locPerm.status.shouldShowRationale,
+                onRequest = { locPerm.launchPermissionRequest() }
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                item { NetworkInfoPanel(networkInfo = networkInfo) }
+
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 24.dp, end = 20.dp, top = 20.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SectionLabel(
+                            text = "CONNECTED DEVICES",
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isScanning) {
+                            ScanningPulse()
+                        } else {
+                            Text(
+                                "${devices.size} found",
+                                color    = GZTextTertiary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                if (devices.isEmpty() && !isScanning) {
+                    item { EmptyDevicesCard() }
+                }
+
+                items(items = devices) { device ->
+                    DeviceCard(
+                        device   = device,
+                        onBlock  = { ip, block ->
+                            repo.setBlocked(ip, block)
+                            devices = devices.map {
+                                if (it.ip == ip) it.copy(isBlocked = block) else it
+                            }
+                        },
+                        onRename = { ip, name ->
+                            repo.saveCustomName(ip, name)
+                            devices = devices.map {
+                                if (it.ip == ip) it.copy(customName = name) else it
+                            }
+                        }
+                    )
+                }
+
+                item { WifiTipCard() }
+            }
+        }
+    }
+}
+
+
+// ─── Header ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun WifiHeader(networkInfo: WifiNetworkInfo, onBack: () -> Unit) {
+    val signalColor = when (networkInfo.signalBars) {
+        4    -> GZGreen
+        3    -> GZAccent
+        2    -> GZAmber
+        1    -> GZRed
+        else -> GZTextTertiary
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Brush.verticalGradient(listOf(GZPrimaryDark, GZPrimaryContainer, GZBackground)))
+            .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 32.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = GZTextPrimary)
+            }
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Filled.Wifi, null,
+                tint     = if (networkInfo.isConnected) signalColor else GZTextTertiary,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    text       = if (networkInfo.isConnected) networkInfo.ssid else "WiFi Monitor",
+                    color      = GZTextPrimary,
+                    fontSize   = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.3).sp
+                )
+                Text(
+                    text  = if (networkInfo.isConnected)
+                        "${networkInfo.rssi} dBm · ${networkInfo.band}"
+                    else
+                        "Not connected to WiFi",
+                    color = if (networkInfo.isConnected) signalColor else GZTextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        }
+    }
+}
+
+// ─── Permission gate ──────────────────────────────────────────────────────
+
+@Composable
+private fun PermissionGate(shouldShowRationale: Boolean, onRequest: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(GZSurface)
+            .border(1.dp, GZBorder, RoundedCornerShape(24.dp))
+            .padding(28.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.LocationOff, null,
+                tint     = GZAmber,
+                modifier = Modifier.size(40.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Location Permission Required",
+                color      = GZTextPrimary,
+                fontSize   = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (shouldShowRationale)
+                    "Android requires Location access to read your WiFi network name (SSID) " +
+                    "and discover nearby devices. No location data is stored or shared."
+                else
+                    "Tap below to grant Location permission so Grayzone can read your WiFi " +
+                    "details and scan for connected devices.",
+                color      = GZTextSecondary,
+                fontSize   = 13.sp,
+                lineHeight = 18.sp
+            )
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = onRequest,
+                colors  = ButtonDefaults.buttonColors(containerColor = GZPrimary),
+                shape   = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Filled.Lock, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Grant Permission", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+// ─── Network info panel ───────────────────────────────────────────────────
+
+@Composable
+private fun NetworkInfoPanel(networkInfo: WifiNetworkInfo) {
+    GZCard(
+        modifier   = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        background = GZSurface,
+        border     = GZBorder
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "Network Details",
+                color      = GZTextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize   = 14.sp
+            )
+            Spacer(Modifier.height(14.dp))
+
+            if (!networkInfo.isConnected) {
+                Text("Not connected to WiFi", color = GZTextTertiary, fontSize = 13.sp)
+                return@Column
+            }
+
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                SignalBarsRow(bars = networkInfo.signalBars)
+                Text("${networkInfo.rssi} dBm", color = GZTextSecondary, fontSize = 12.sp)
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Divider(color = GZBorder, thickness = 1.dp)
+            Spacer(Modifier.height(14.dp))
+
+            NetworkInfoGrid(
+                listOf(
+                    "IP Address"  to networkInfo.ipAddress,
+                    "BSSID"       to networkInfo.bssid.ifBlank { "—" },
+                    "Band"        to "${networkInfo.band} (ch ${networkInfo.channel})",
+                    "Link Speed"  to "${networkInfo.linkSpeed} Mbps",
+                    "SSID"        to networkInfo.ssid,
+                    "Status"      to "Connected"
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun SignalBarsRow(bars: Int) {
+    val color = when (bars) {
+        4    -> GZGreen
+        3    -> GZAccent
+        2    -> GZAmber
+        1    -> GZRed
+        else -> GZTextTertiary
+    }
+    val label = when (bars) {
+        4    -> "Excellent"
+        3    -> "Good"
+        2    -> "Fair"
+        1    -> "Poor"
+        else -> "No Signal"
+    }
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (i in 1..4) {
+            Box(
+                modifier = Modifier
+                    .width(10.dp)
+                    .height((6 + i * 5).dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(if (i <= bars) color else GZSurfaceHigh)
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun NetworkInfoGrid(items: List<Pair<String, String>>) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        items.chunked(2).forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                row.forEach { (label, value) ->
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(label, color = GZTextTertiary, fontSize = 10.sp)
+                        Text(
+                            value,
+                            color      = GZTextPrimary,
+                            fontSize   = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines   = 1,
+                            overflow   = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+
+// ─── Scanning pulse ───────────────────────────────────────────────────────
+
+@Composable
+private fun ScanningPulse() {
+    val alpha by rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue  = 0.3f,
+        targetValue   = 1f,
+        animationSpec = infiniteRepeatable(
+            animation  = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(GZAccent.copy(alpha = alpha))
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("Scanning…", color = GZAccent.copy(alpha = alpha), fontSize = 11.sp)
+    }
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────
+
+@Composable
+private fun EmptyDevicesCard() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(GZSurface)
+            .border(1.dp, GZBorder, RoundedCornerShape(24.dp))
+            .padding(36.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.WifiFind, null,
+                tint     = GZTextTertiary,
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "No devices found",
+                color      = GZTextSecondary,
+                fontSize   = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "A ping sweep is sent across the subnet to populate the ARP table. " +
+                "Devices that block ICMP may not appear.",
+                color      = GZTextTertiary,
+                fontSize   = 12.sp,
+                lineHeight = 17.sp
+            )
+        }
+    }
+}
+
+// ─── Device card ──────────────────────────────────────────────────────────
+
+@Composable
+private fun DeviceCard(
+    device   : WifiDevice,
+    onBlock  : (ip: String, block: Boolean) -> Unit,
+    onRename : (ip: String, name: String)   -> Unit
+) {
+    var expanded       by remember { mutableStateOf(false) }
+    var showRename     by remember { mutableStateOf(false) }
+    var renameText     by remember(device.customName) { mutableStateOf(device.customName) }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager   = LocalFocusManager.current
+
+    val displayName = device.customName.ifBlank { device.hostname }
+    val borderColor = if (device.isBlocked) GZRed.copy(alpha = 0.35f) else GZBorder
+    val bgColor     = if (device.isBlocked) GZRed.copy(alpha = 0.04f) else GZSurface
+
+    GZCard(
+        modifier   = Modifier.padding(horizontal = 20.dp, vertical = 5.dp),
+        background = bgColor,
+        border     = borderColor
+    ) {
+        Column {
+            // ── Collapsed row ────────────────────────────────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Device type icon
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (device.isBlocked) GZRed.copy(alpha = 0.12f)
+                            else GZPrimary.copy(alpha = 0.10f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector        = getDeviceTypeIcon(device.deviceType),
+                        contentDescription = null,
+                        tint               = if (device.isBlocked) GZRed else GZPrimaryLight,
+                        modifier           = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        displayName,
+                        color      = if (device.isBlocked) GZRed else GZTextPrimary,
+                        fontSize   = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis
+                    )
+                    Text(device.ip, color = GZTextTertiary, fontSize = 11.sp)
+                }
+                if (device.isBlocked) {
+                    Text(
+                        "BLOCKED",
+                        color      = GZRed,
+                        fontSize   = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier   = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(GZRed.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint     = GZTextTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // ── Expanded detail (always composed, height controlled) ──────
+            if (expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
+                ) {
+                Divider(color = GZBorder, thickness = 1.dp)
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        InfoPill("IP Address", device.ip)
+                        InfoPill(
+                            "Type",
+                            device.deviceType.name.lowercase().replaceFirstChar { it.uppercase() }
+                        )
+                    }
+                Spacer(Modifier.height(14.dp))
+
+                // Rename field
+                if (showRename) {
+                    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                    OutlinedTextField(
+                            value           = renameText,
+                            onValueChange   = { renameText = it },
+                            label           = { Text("Custom name", fontSize = 12.sp) },
+                            singleLine      = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                onRename(device.ip, renameText.trim())
+                                focusManager.clearFocus()
+                                showRename = false
+                            }),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor   = GZPrimary,
+                                unfocusedBorderColor = GZBorder,
+                                cursorColor          = GZPrimary,
+                                focusedLabelColor    = GZPrimary,
+                                focusedTextColor     = GZTextPrimary,
+                                unfocusedTextColor   = GZTextPrimary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester)
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+
+                    // Action buttons
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                if (showRename) {
+                                    onRename(device.ip, renameText.trim())
+                                    focusManager.clearFocus()
+                                }
+                                showRename = !showRename
+                            },
+                            border   = ButtonDefaults.outlinedButtonBorder.copy(
+                                brush = androidx.compose.ui.graphics.SolidColor(GZPrimary.copy(alpha = 0.5f))
+                            ),
+                            shape    = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Icon(
+                                if (showRename) Icons.Filled.Check else Icons.Filled.Edit,
+                                null, tint = GZPrimary, modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (showRename) "Save" else "Rename",
+                                color = GZPrimary, fontSize = 12.sp
+                            )
+                        }
+
+                        val blockColor  = if (device.isBlocked) GZGreen else GZRed
+                        val blockIcon   = if (device.isBlocked) Icons.Filled.LockOpen else Icons.Filled.Block
+                        val blockLabel  = if (device.isBlocked) "Unblock" else "Block"
+
+                        OutlinedButton(
+                            onClick  = { onBlock(device.ip, !device.isBlocked) },
+                            border   = ButtonDefaults.outlinedButtonBorder.copy(
+                                brush = androidx.compose.ui.graphics.SolidColor(blockColor.copy(alpha = 0.4f))
+                            ),
+                            colors   = ButtonDefaults.outlinedButtonColors(
+                                containerColor = blockColor.copy(alpha = 0.10f)
+                            ),
+                            shape    = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Icon(blockIcon, null, tint = blockColor, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(blockLabel, color = blockColor, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+// ─── Small helpers ────────────────────────────────────────────────────────
+
+@Composable
+private fun InfoPill(label: String, value: String) {
+    Column {
+        Text(label, color = GZTextTertiary, fontSize = 10.sp)
+        Text(
+            value,
+            color      = GZTextPrimary,
+            fontSize   = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun WifiTipCard() {
+    GZCard(
+        modifier   = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        background = GZSurfaceHigh,
+        border     = GZBorder
+    ) {
+        Row(
+            modifier          = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                Icons.Filled.Info, null,
+                tint     = GZTextSecondary,
+                modifier = Modifier
+                    .size(18.dp)
+                    .padding(top = 2.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Device discovery sends ICMP pings across the /24 subnet. " +
+                "Devices that block pings won't appear. The Block button " +
+                "records the IP locally — router-level enforcement requires root or " +
+                "router admin access. Note: Tracking relies on IP; if a device's IP changes, it will appear as new.",
+                color      = GZTextSecondary,
+                fontSize   = 11.sp,
+                lineHeight = 15.sp
+            )
+        }
+    }
+}
