@@ -44,7 +44,7 @@ import com.grayzone.app.isAnyAppLocked
 fun OnboardingScreen(onContinue: () -> Unit) {
     val context = LocalContext.current
     val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-    var hasUsageAccess by remember { mutableStateOf(hasUsageStatsPermission(context)) }
+    var hasUsageAccess by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var hasOverlay by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var hasBatteryOpt by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
 
@@ -52,7 +52,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasUsageAccess = hasUsageStatsPermission(context)
+                hasUsageAccess = isAccessibilityServiceEnabled(context)
                 hasOverlay = Settings.canDrawOverlays(context)
                 hasBatteryOpt = pm.isIgnoringBatteryOptimizations(context.packageName)
                 if (hasUsageAccess && hasOverlay && hasBatteryOpt) onContinue()
@@ -91,13 +91,13 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Usage Access",
+                        "Accessibility Service",
                         color = GZTextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
                     )
                     Text(
-                        "Required to monitor which apps are currently open",
+                        "Required to instantly detect when a monitored app is opened",
                         color = GZTextSecondary,
                         fontSize = 12.sp
                     )
@@ -106,11 +106,11 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             if (!hasUsageAccess) {
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
+                    onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
                 ) {
-                    Text("Grant Usage Access")
+                    Text("Grant Accessibility")
                 }
             }
         }

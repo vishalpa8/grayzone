@@ -79,7 +79,7 @@ class DnsPacketTest {
         minimalPacket[0] = 0x45.toByte()  // IPv4, IHL=5
         minimalPacket[9] = 17.toByte()     // UDP
         
-        val result = DnsPacketHelper.createSinkholeResponse(minimalPacket, minimalPacket.size)
+        DnsPacketHelper.createSinkholeResponse(minimalPacket, minimalPacket.size)
         
         // Should handle gracefully - may return null for malformed packets
         // The key is it doesn't crash
@@ -93,7 +93,7 @@ class DnsPacketTest {
         minimalPacket[0] = 0x45.toByte()  // IPv4
         minimalPacket[9] = 17.toByte()     // UDP
         
-        val result = DnsPacketHelper.createNxDomainResponse(minimalPacket, minimalPacket.size)
+        DnsPacketHelper.createNxDomainResponse(minimalPacket, minimalPacket.size)
         
         assertTrue("Should complete without crashing", true)
     }

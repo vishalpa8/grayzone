@@ -88,16 +88,12 @@ fun drawableToBitmap(drawable: Drawable): Bitmap? {
     return bmp
 }
 
-fun hasUsageStatsPermission(context: Context): Boolean {
-    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
-    // checkOpNoThrow(String, Int, String) is deprecated at API 29+.
-    // unsafeCheckOpNoThrow is the direct replacement for a non-attribution check.
-    val mode = appOps.unsafeCheckOpNoThrow(
-        android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
-        android.os.Process.myUid(),
-        context.packageName
-    )
-    return mode == android.app.AppOpsManager.MODE_ALLOWED
+fun isAccessibilityServiceEnabled(context: Context): Boolean {
+    val enabledServices = android.provider.Settings.Secure.getString(
+        context.contentResolver,
+        android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    return enabledServices.contains(context.packageName + "/" + com.grayzone.app.service.GrayzoneAccessibilityService::class.java.name)
 }
 
 fun isBatteryOptimized(context: Context): Boolean =

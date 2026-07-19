@@ -39,7 +39,7 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var isActive by remember { mutableStateOf(hasUsageStatsPermission(context) && Settings.canDrawOverlays(context)) }
+    var isActive by remember { mutableStateOf(isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)) }
     var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
@@ -48,7 +48,7 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 // BUG 7 FIX: Re-read usage access status dynamically in case it was disabled in settings
-                isActive = hasUsageStatsPermission(context) && Settings.canDrawOverlays(context)
+                isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
                 batteryIssue = isBatteryOptimized(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
                 val monitored = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()

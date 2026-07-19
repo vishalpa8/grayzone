@@ -142,11 +142,12 @@ class OverlayService : Service() {
         }
         
         val filter = IntentFilter(GrayzoneAccessibilityService.ACTION_APP_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(appChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(appChangeReceiver, filter)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            appChangeReceiver, 
+            filter, 
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         
         com.grayzone.app.GrayzoneLogger.i(
             com.grayzone.app.LogComponent.OVERLAY, 
