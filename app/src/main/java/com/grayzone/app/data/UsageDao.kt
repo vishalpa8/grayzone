@@ -47,6 +47,18 @@ interface UsageDao {
     @Query("SELECT * FROM usage_events")
     suspend fun getAllEvents(): List<UsageEvent>
 
+    /**
+     * Returns total durationMillis per startTime bucket for peak-hour detection.
+     * We intentionally avoid SQLite strftime/datetime functions — they are not
+     * available on all Android versions inside Room. Kotlin does the hour extraction.
+     */
+    @Query("SELECT startTime, SUM(durationMillis) as totalMillis FROM usage_events GROUP BY startTime ORDER BY totalMillis DESC")
+    suspend fun getStartTimeTotals(): List<StartTimeTotalRow>
+
+    /** Total number of events ever recorded — used for empty-state detection. */
+    @Query("SELECT COUNT(*) FROM usage_events")
+    suspend fun getTotalEventCount(): Int
+
     /** Per-app total usage for the last N days. */
     @Query("SELECT packageName, appName, SUM(durationMillis) as totalMillis, COUNT(*) as sessionCount FROM usage_events WHERE dateKey >= :fromDate GROUP BY packageName ORDER BY totalMillis DESC")
     suspend fun getAppUsageSince(fromDate: String): List<DailySummaryRow>
@@ -63,5 +75,11 @@ data class DailySummaryRow(
 /** Row returned by weekly total queries. */
 data class DateTotalRow(
     val dateKey: String,
+    val totalMillis: Long
+)
+
+/** Row returned by start-time totals query. */
+data class StartTimeTotalRow(
+    val startTime: Long,
     val totalMillis: Long
 )

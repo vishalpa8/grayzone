@@ -15,37 +15,62 @@ object BlocklistManager {
 
     /**
      * Hardcoded set of known DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT)
-     * resolver endpoints — confirmed alive via probe_urls.ps1 (2026-07-18).
+     * resolver endpoints. Blocking these forces apps like Chrome / Samsung Browser
+     * back to plain DNS-53, which our VPN tunnel can intercept and filter.
      *
-     * Blocking these forces apps like Chrome/Samsung Browser back to plain
-     * DNS-53 which our VPN tunnel can intercept and filter.
+     * NOTE: Android's built-in "Private DNS" (Settings → Network → Private DNS) uses
+     * DoT on port 853 and routes outside our VPN tunnel entirely. There is no reliable
+     * way to block that at the DNS layer — it must be surfaced as a UI warning instead
+     * (see HomeScreen). The domains here cover in-app DoH/DoT libraries only.
+     *
+     * Last verified: 2026-07-19
      */
     private val dohBypassDomains: Set<String> = hashSetOf(
-        // Google
-        "dns.google",
+        // ── Google ────────────────────────────────────────────────────────
+        "dns.google",           // primary canonical name
+        "dns.google.com",       // alternate used by some apps
         "8888.google",
-        // Cloudflare
+        "8844.google",
+        // ── Cloudflare ───────────────────────────────────────────────────
         "cloudflare-dns.com",
         "1dot1dot1dot1.cloudflare-dns.com",
         "mozilla.cloudflare-dns.com",
-        // Quad9
+        "family.cloudflare-dns.com",
+        "security.cloudflare-dns.com",
+        // ── Quad9 ────────────────────────────────────────────────────────
         "dns.quad9.net",
         "dns9.quad9.net",
         "dns10.quad9.net",
         "dns11.quad9.net",
-        // AdGuard
+        // ── AdGuard ──────────────────────────────────────────────────────
         "dns.adguard.com",
         "dns-family.adguard.com",
-        // NextDNS
+        "dns-unfiltered.adguard.com",
+        // ── NextDNS ──────────────────────────────────────────────────────
         "dns.nextdns.io",
-        // OpenDNS
+        // ── OpenDNS / Cisco Umbrella ──────────────────────────────────────
         "doh.opendns.com",
-        // Comcast
+        "doh.familyshield.opendns.com",
+        "resolver1.opendns.com",
+        "resolver2.opendns.com",
+        // ── Comcast / Xfinity ────────────────────────────────────────────
         "doh.xfinity.com",
-        // Alibaba
+        // ── Alibaba / AliDNS ─────────────────────────────────────────────
         "dns.alidns.com",
-        // Samsung / misc
-        "dns.google.com"
+        // ── Tencent DNSPod ────────────────────────────────────────────────
+        "doh.pub",
+        "1.12.12.12.dns.nextdns.io",  // NextDNS alt
+        // ── CleanBrowsing ─────────────────────────────────────────────────
+        "doh.cleanbrowsing.org",
+        "security-filter-dns.cleanbrowsing.org",
+        "family-filter-dns.cleanbrowsing.org",
+        // ── Control D ────────────────────────────────────────────────────
+        "freedns.controld.com",
+        // ── Mullvad ──────────────────────────────────────────────────────
+        "dns.mullvad.net",
+        "adblock.dns.mullvad.net",
+        // ── Firefox canary (already handled separately, but belt+braces) ─
+        "use-application-dns.net"
     )
 
     private val loadStarted = AtomicBoolean(false)
@@ -117,15 +142,23 @@ object BlocklistManager {
      * is in [filter].
      *
      * E.g. "sub.bad-ads.com" → checks "sub.bad-ads.com", then "bad-ads.com"
+     *
+     * TLD guard: parent-domain walk stops before single-label names (bare TLDs
+     * like "com", "net", "org"). A Bloom-filter hash collision on a TLD entry
+     * would otherwise block every domain under that TLD. We require at least
+     * one dot in the candidate string before querying the filter for a parent.
      */
     private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean {
         val lower = domain.lowercase()
+        // Check the full domain first
         if (filter.mightContain(lower)) return true
-        // Walk parent domains
+        // Walk parent domains, but never query a bare TLD (no dot = 0 labels)
         var dotIndex = lower.indexOf('.')
         while (dotIndex != -1 && dotIndex < lower.length - 1) {
             val parent = lower.substring(dotIndex + 1)
-            if (filter.mightContain(parent)) return true
+            // Only check parents that are real domain names (contain at least one dot),
+            // i.e. skip bare TLDs such as "com", "net", "co" etc.
+            if (parent.contains('.') && filter.mightContain(parent)) return true
             dotIndex = lower.indexOf('.', dotIndex + 1)
         }
         return false

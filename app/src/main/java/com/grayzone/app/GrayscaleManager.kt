@@ -16,6 +16,45 @@ object GrayscaleManager {
 
     private var enabledByApp = false
 
+    /**
+     * Must be called on OverlayService.onCreate() — before any session logic runs.
+     *
+     * Problem: [enabledByApp] is an in-memory flag. If the service process is killed by
+     * the OS (common on MIUI / ColorOS), the flag resets to false while Daltonizer is
+     * still turned ON in the global secure settings. The phone stays stuck in
+     * black-and-white with no obvious recovery path.
+     *
+     * Fix: On start-up, read the actual system setting. If Daltonizer is currently ON
+     * but no app has an active session right now, turn it off unconditionally.
+     * If Daltonizer is ON and a session IS active we simply re-adopt the flag so that
+     * the normal [disable] path will clean it up when the session ends.
+     */
+    fun reconcileOnStart(context: Context, hasActiveSession: Boolean) {
+        val isCurrentlyOn = Settings.Secure.getString(
+            context.contentResolver,
+            "accessibility_display_daltonizer_enabled"
+        ) == "1"
+
+        if (!isCurrentlyOn) {
+            // Nothing to do — system is already in the correct off state.
+            enabledByApp = false
+            return
+        }
+
+        if (hasActiveSession) {
+            // Daltonizer is on and a session is legitimately running — re-adopt ownership
+            // so the normal dismissTint() → disable() path will handle cleanup.
+            enabledByApp = true
+            Log.d(TAG, "reconcileOnStart: Daltonizer is ON, active session found — re-adopted ownership")
+        } else {
+            // Daltonizer is on but there is NO active session. This means the service was
+            // killed mid-session and never got to call disable(). Turn it off now.
+            Log.w(TAG, "reconcileOnStart: Daltonizer stuck ON with no active session — force-disabling")
+            enabledByApp = true   // temporarily so disable() won't short-circuit
+            disable(context)
+        }
+    }
+
     /** Returns true if Daltonizer was enabled successfully. */
     fun enable(context: Context): Boolean {
         return try {

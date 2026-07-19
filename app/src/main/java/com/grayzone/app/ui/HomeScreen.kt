@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,7 +35,7 @@ data class HomeData(
 )
 
 @Composable
-fun HomeScreen() {
+fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -80,6 +81,15 @@ fun HomeScreen() {
             ) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onOpenDrawer) {
+                            Icon(
+                                Icons.Filled.Menu,
+                                contentDescription = "Open menu",
+                                tint = GZTextPrimary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "Grayzone",

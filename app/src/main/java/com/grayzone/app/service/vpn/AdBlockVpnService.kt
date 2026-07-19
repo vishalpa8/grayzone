@@ -82,6 +82,10 @@ class AdBlockVpnService : VpnService() {
             vpnInterface = builder.establish()
             isRunning = true
 
+            // Persist the VPN-active flag so BootReceiver can restart it after reboot.
+            getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, true).apply()
+
             vpnThread = Thread { runVpnLoop() }
             vpnThread?.start()
 
@@ -100,6 +104,13 @@ class AdBlockVpnService : VpnService() {
             vpnInterface?.close()
         } catch (e: Exception) { /* ignored */ }
         vpnInterface = null
+
+        DnsTrafficBus.clear()
+
+        // Clear the persisted flag so BootReceiver does not auto-restart after reboot.
+        getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.d(TAG, "VPN Stopped")
@@ -150,22 +161,26 @@ class AdBlockVpnService : VpnService() {
         when {
             // Firefox DoH canary — return NXDOMAIN so Firefox falls back to system DNS
             domain.equals("use-application-dns.net", ignoreCase = true) -> {
+                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
             // Known DoH/DoT resolver — return NXDOMAIN so the app can't resolve
             // the DoH endpoint and is forced to use plain DNS53 (which we intercept)
             BlocklistManager.isDoHBypass(domain) -> {
+                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
             // Ad or adult content domain → sinkhole to 0.0.0.0
             BlocklistManager.isBlocked(domain) -> {
+                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
                 writeSinkhole(packet, length, outputStream)
             }
 
             // Allowed — forward to real DNS with fallback
             else -> {
+                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED))
                 serviceScope.launch {
                     forwardDnsQueryWithFallback(packet, length, outputStream)
                 }
@@ -272,7 +287,7 @@ class AdBlockVpnService : VpnService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AdBlock VPN is active")
             .setContentText("Blocking ads & adult content")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .addAction(0, "Stop", stopPending)

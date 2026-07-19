@@ -48,6 +48,10 @@ object PrefsKeys {
     const val TOTAL_SESSIONS_BLOCKED  = "total_sessions_blocked"
     const val TOTAL_TIME_SAVED_MINS   = "total_time_saved_mins"
     const val ACHIEVEMENTS_JSON       = "achievements_json"
+
+    // ── VPN ────────────────────────────────────────────────────────────────
+    /** True when the user has started AdBlockVpnService and not explicitly stopped it. */
+    const val VPN_ENABLED             = "vpn_enabled"
 }
 
 /** Overlay display modes sent via broadcast intent extra "overlay_mode". */

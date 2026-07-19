@@ -29,6 +29,15 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
+private data class StatsSnapshot(
+    val blocked: Int,
+    val savedMs: Long,
+    val daily: List<com.grayzone.app.data.DailySummaryRow>,
+    val weekly: List<DateTotalRow>,
+    val totalEvents: Int,
+    val peakHour: Int?
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen() {
@@ -41,6 +50,7 @@ fun StatsScreen() {
     var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(emptyList()) }
     var weeklyTotals by remember { mutableStateOf<List<DateTotalRow>>(emptyList()) }
     var mostDistractingTime by remember { mutableStateOf<String?>(null) }
+    var totalEvents by remember { mutableIntStateOf(-1) }  // -1 = not yet loaded
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -55,38 +65,51 @@ fun StatsScreen() {
         isLoading = true
         errorMsg = null
         try {
-            withContext(Dispatchers.IO) {
-                val dao = UsageDatabase.getInstance(context).usageDao()
-                totalBlocked = dao.getTotalSessionsBlocked()
-                totalSavedMillis = dao.getTotalBlockedDurationMillis() ?: 0L
+            val snap = withContext(Dispatchers.IO) {
+                val dao      = UsageDatabase.getInstance(context).usageDao()
+                val blocked  = dao.getTotalSessionsBlocked()
+                val savedMs  = dao.getTotalBlockedDurationMillis() ?: 0L
                 val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                dailySummary = dao.getDailySummary(todayKey)
-
-                val calendar = Calendar.getInstance()
-                calendar.add(Calendar.DAY_OF_YEAR, -6)
-                val fromKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-                weeklyTotals = fillWeeklyTotals(dao.getWeeklyTotals(fromKey))
+                val daily    = dao.getDailySummary(todayKey)
+                val cal      = Calendar.getInstance().also { it.add(Calendar.DAY_OF_YEAR, -6) }
+                val fromKey  = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+                val weekly   = fillWeeklyTotals(dao.getWeeklyTotals(fromKey))
+                val total    = dao.getTotalEventCount()
                 
-                val allEvents = dao.getAllEvents()
-                if (allEvents.isNotEmpty()) {
-                    val groupedByHour = allEvents.groupBy {
-                        val cal = Calendar.getInstance()
-                        cal.timeInMillis = it.startTime
-                        cal.get(Calendar.HOUR_OF_DAY)
-                    }.mapValues { it.value.sumOf { e -> e.durationMillis } }
-                    val maxHour = groupedByHour.maxByOrNull { it.value }?.key
-                    if (maxHour != null) {
-                        val amPm1 = if (maxHour < 12) "AM" else "PM"
-                        val h1 = if (maxHour % 12 == 0) 12 else maxHour % 12
-                        val nextHour = (maxHour + 1) % 24
-                        val amPm2 = if (nextHour < 12) "AM" else "PM"
-                        val h2 = if (nextHour % 12 == 0) 12 else nextHour % 12
-                        mostDistractingTime = "$h1:00 $amPm1 - $h2:00 $amPm2"
+                val totals = dao.getStartTimeTotals()
+                val peak = if (totals.isEmpty()) {
+                    null
+                } else {
+                    val hourTotals = mutableMapOf<Int, Long>()
+                    val hourCal = Calendar.getInstance()
+                    for (row in totals) {
+                        hourCal.timeInMillis = row.startTime
+                        val hour = hourCal.get(Calendar.HOUR_OF_DAY)
+                        hourTotals[hour] = (hourTotals[hour] ?: 0L) + row.totalMillis
                     }
+                    hourTotals.maxByOrNull { it.value }?.key
                 }
+
+                StatsSnapshot(blocked, savedMs, daily, weekly, total, peak)
+            }
+            // All state assignments on main thread — no partial-update races
+            totalBlocked        = snap.blocked
+            totalSavedMillis    = snap.savedMs
+            dailySummary        = snap.daily
+            weeklyTotals        = snap.weekly
+            totalEvents         = snap.totalEvents
+            mostDistractingTime = snap.peakHour?.let { h ->
+                val amPm1 = if (h < 12) "AM" else "PM"
+                val h1    = if (h % 12 == 0) 12 else h % 12
+                val next  = (h + 1) % 24
+                val amPm2 = if (next < 12) "AM" else "PM"
+                val h2    = if (next % 12 == 0) 12 else next % 12
+                "$h1:00 $amPm1 – $h2:00 $amPm2"
             }
         } catch (e: Exception) {
-            errorMsg = "Could not load stats. Try again later."
+            if (e is kotlin.coroutines.cancellation.CancellationException) throw e
+            android.util.Log.e("StatsScreen", "Could not load stats", e)
+            errorMsg = "Could not load stats: ${e.javaClass.simpleName}"
         } finally {
             isLoading = false
         }
@@ -125,8 +148,8 @@ fun StatsScreen() {
                     Text("Try closing and reopening the app.", color = GZTextSecondary, fontSize = 14.sp)
                 }
             }
-        } else if (totalBlocked == 0 && dailySummary.isEmpty()) {
-            // Clean empty state — no data yet
+        } else if (totalEvents == 0) {
+            // Clean empty state — no sessions recorded yet
             Box(
                 modifier = Modifier.fillMaxSize().padding(innerPadding).padding(32.dp),
                 contentAlignment = Alignment.Center
@@ -228,13 +251,15 @@ private fun DailyUsageList(rows: List<com.grayzone.app.data.DailySummaryRow>) {
                 ) {
                     Text(row.appName, color = GZTextPrimary, fontWeight = FontWeight.Medium, fontSize = 16.sp)
                     val mins = row.totalMillis / 60000
+                    val secs = (row.totalMillis % 60000) / 1000
+                    val timeLabel = if (mins > 0) "${mins}m ${secs}s spent" else "${secs}s spent"
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(16.dp))
                             .background(GZPrimary.copy(alpha = 0.1f))
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("${mins}m spent", color = GZPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(timeLabel, color = GZPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             }
@@ -295,7 +320,8 @@ private fun WeeklyBarChart(totals: List<DateTotalRow>) {
                         LaunchedEffect(Unit) { visible = true }
                         val animatedProportion by androidx.compose.animation.core.animateFloatAsState(
                             targetValue = if (visible) proportion else 0f,
-                            animationSpec = androidx.compose.animation.core.tween(durationMillis = 800, delayMillis = 100)
+                            animationSpec = androidx.compose.animation.core.tween(durationMillis = 800, delayMillis = 100),
+                            label = "bar_${row.dateKey}"
                         )
 
                         Box(

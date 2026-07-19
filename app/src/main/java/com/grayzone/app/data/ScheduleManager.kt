@@ -72,19 +72,40 @@ class ScheduleManager(private val context: Context) {
         val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
         val nowMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
 
+        // Calendar day that was "yesterday" — needed for overnight rule check below.
+        val yesterday = ((dayOfWeek - 2 + 7) % 7) + 1  // keeps result in [1..7]
+
         return getScheduleRules().any { rule ->
             if (!rule.enabled) return@any false
-            if (dayOfWeek !in rule.daysOfWeek) return@any false
 
             val startMin = rule.startHour * 60 + rule.startMinute
-            val endMin = rule.endHour * 60 + rule.endMinute
+            val endMin   = rule.endHour   * 60 + rule.endMinute
 
             if (startMin <= endMin) {
-                // Same-day range (e.g., 9:00 - 17:00)
-                nowMinutes in startMin until endMin
+                // ── Same-day range (e.g. 09:00–17:00) ─────────────────────
+                // Today must be in the rule's day set.
+                dayOfWeek in rule.daysOfWeek && nowMinutes in startMin until endMin
             } else {
-                // Overnight range (e.g., 22:00 - 06:00)
-                nowMinutes >= startMin || nowMinutes < endMin
+                // ── Overnight range (e.g. 22:00–06:00) ────────────────────
+                // Two cases:
+                //
+                //   A) nowMinutes >= startMin  →  we are in the FIRST half of the
+                //      overnight window (e.g. 22:30 on Monday). The rule day set
+                //      must contain TODAY.
+                //
+                //   B) nowMinutes < endMin     →  we are in the SECOND half of the
+                //      overnight window (e.g. 02:00 on Tuesday, still inside the
+                //      Mon-night rule). The rule day set must contain YESTERDAY
+                //      (the day the window started).
+                //
+                // Bug before fix: case B used `dayOfWeek in rule.daysOfWeek` which
+                // checked Tuesday — the wrong day — so a Mon–Fri bedtime rule at
+                // 22:00–06:00 would fail to block at 02:00 Tue through Sat morning.
+                when {
+                    nowMinutes >= startMin -> dayOfWeek in rule.daysOfWeek
+                    nowMinutes < endMin    -> yesterday in rule.daysOfWeek
+                    else                   -> false
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.core.*
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -259,7 +260,7 @@ fun SettingsScreen() {
         Button(
             onClick = { showCustomPrompts = true },
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             enabled = !anyAppLockedOrActive,
             colors = ButtonDefaults.buttonColors(
                 containerColor = GZPrimaryContainer,
@@ -277,7 +278,7 @@ fun SettingsScreen() {
         Button(
             onClick = { showSchedule = true },
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             enabled = !anyAppLockedOrActive,
             colors = ButtonDefaults.buttonColors(
                 containerColor = GZPrimaryContainer,
@@ -321,16 +322,17 @@ fun GZCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(background)
-            .border(1.dp, border, RoundedCornerShape(16.dp))
+            .border(1.dp, border, RoundedCornerShape(24.dp))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .animateContentSize()
     ) { content() }
 }
 
 @Composable
-fun SectionLabel(text: String) {
-    Text(text, color = GZTextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier = modifier, color = GZTextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
 }
 
 @Composable

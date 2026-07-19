@@ -47,7 +47,9 @@ fun drawableToBitmap(drawable: Drawable): Bitmap? {
 
 fun hasUsageStatsPermission(context: Context): Boolean {
     val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
-    val mode = appOps.checkOpNoThrow(
+    // checkOpNoThrow(String, Int, String) is deprecated at API 29+.
+    // unsafeCheckOpNoThrow is the direct replacement for a non-attribution check.
+    val mode = appOps.unsafeCheckOpNoThrow(
         android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
         android.os.Process.myUid(),
         context.packageName
@@ -57,3 +59,28 @@ fun hasUsageStatsPermission(context: Context): Boolean {
 
 fun isBatteryOptimized(context: Context): Boolean =
     !context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+
+/**
+ * Returns true when Android's "Private DNS" (DoT on port 853) is active.
+ *
+ * Private DNS routes DNS queries directly over TLS to a third-party resolver
+ * on port 853, completely bypassing our VPN's DNS-interception mechanism.
+ * The user must be warned so they can disable it or understand the limitation.
+ *
+ * Mode values (android.provider.Settings.Global.PRIVATE_DNS_MODE):
+ *   "off"        – feature disabled (safe for us)
+ *   "opportunistic" – uses system DoT if available (may bypass us)
+ *   "hostname"   – strict mode pointed at a custom resolver (definitely bypasses us)
+ */
+fun isPrivateDnsActive(context: Context): Boolean {
+    return try {
+        val mode = android.provider.Settings.Global.getString(
+            context.contentResolver,
+            "private_dns_mode"          // Settings.Global.PRIVATE_DNS_MODE (API 29+)
+        )
+        // "off" or null means disabled; anything else means it's on
+        mode != null && mode != "off"
+    } catch (_: Exception) {
+        false
+    }
+}

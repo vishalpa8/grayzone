@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">Grayzone</string>
-    <string name="accessibility_service_description">Used to detect when you open a distracting app so Grayzone can apply friction.</string>
 </resources>

@@ -20,8 +20,8 @@ val GZSurfaceElevated= Color(0xFF161628)
 val GZSurfaceHigh    = Color(0xFF1E1E35)
 
 // ── Borders ────────────────────────────────────────────────────────────────
-val GZBorder         = Color(0xFF26263D)
-val GZBorderSubtle   = Color(0xFF1A1A2E)
+val GZBorder         = Color(0x337C4DFF)  // 20% opacity primary tint
+val GZBorderSubtle   = Color(0x1A7C4DFF)  // 10% opacity primary tint
 
 // ── Text ───────────────────────────────────────────────────────────────────
 val GZTextPrimary    = Color(0xFFF2F2FF)

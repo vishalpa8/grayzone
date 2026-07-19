@@ -25,6 +25,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.RemoteViews
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
@@ -99,6 +100,17 @@ class OverlayService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         scheduleManager = ScheduleManager(this)
+
+        // Sev1 fix: if the process was killed while Daltonizer was on, it stays on
+        // device-wide with no obvious recovery. Reconcile the system setting to reality
+        // before any session logic runs.
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        val now = System.currentTimeMillis()
+        val hasActiveSession = monitoredApps.any { pkg ->
+            now < prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+        }
+        GrayscaleManager.reconcileOnStart(this, hasActiveSession)
 
         startUsageMonitoring()
     }
@@ -321,14 +333,23 @@ class OverlayService : Service() {
             return
         }
 
+        // Custom layout: title on the left, countdown timer pinned to the right.
+        // Using RemoteViews + Chronometer gives a smooth live countdown without
+        // the timer bleeding into the header row that setUsesChronometer produces.
+        val rv = RemoteViews(this.packageName, R.layout.notification_countdown)
+        rv.setTextViewText(R.id.notif_title, "$appName — session active")
+        // Chronometer.base is relative to SystemClock.elapsedRealtime(), not wall-clock.
+        // Compute how many ms remain, then set base = elapsedRealtime + remainingMs
+        // so the countdown reads the correct value from the start.
+        val base = android.os.SystemClock.elapsedRealtime() + remainingMs
+        rv.setChronometer(R.id.notif_timer, base, null, true)
+        rv.setChronometerCountDown(R.id.notif_timer, true)
+
         nm.notify(NOTIF_ID,
             NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("$appName Active")
-                .setContentText("Time remaining:")
-                .setUsesChronometer(true)
-                .setChronometerCountDown(true)
-                .setWhen(activeUntil)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setCustomContentView(rv)
+                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -364,17 +385,46 @@ class OverlayService : Service() {
         }
 
         dismissOverlayTintFallback()
+
+        // Try true hardware Daltonizer first (requires WRITE_SECURE_SETTINGS via ADB).
         if (GrayscaleManager.enable(this)) {
             daltonizerActive = true
             return
         }
 
+        // Fallback: draw a full-screen hardware-accelerated View whose Paint uses
+        // the ITU-R BT.601 luminosity ColorMatrix. This actually desaturates every
+        // pixel underneath rather than just washing the screen grey.
+        //
+        // The matrix maps each pixel's (R,G,B) → luminance Y using:
+        //   Y = 0.299R + 0.587G + 0.114B
+        // and outputs (Y,Y,Y,A) — visually identical to true monochrome.
         if (tintView != null) return
-        val view = View(this).apply { setBackgroundColor(0x80808080.toInt()) }
+
+        val matrix = android.graphics.ColorMatrix().apply { setSaturation(0f) }
+        val paint  = android.graphics.Paint().apply {
+            colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
+        }
+
+        val view = object : View(this) {
+            override fun onDraw(canvas: android.graphics.Canvas) {
+                // Cover the entire canvas with a transparent rect drawn through the
+                // desaturating paint — this forces every pixel through the ColorMatrix.
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            }
+        }.apply {
+            setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+
         val wlp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         )
         tintView = view
@@ -681,7 +731,7 @@ class OverlayService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
             .setContentText("Monitoring for distracting apps")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Custom notification layout for the active-session countdown.
+    Renders:  [icon]  AppName — session active          [MM:SS ▼]
+    The Chronometer is pinned to the right with countdown mode.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
+
+    <TextView
+        android:id="@+id/notif_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textSize="14sp"
+        android:textColor="#FFFFFFFF"
+        android:fontFamily="sans-serif-medium"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="App — session active" />
+
+    <Chronometer
+        android:id="@+id/notif_timer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:textSize="14sp"
+        android:textColor="#FFB39DDB"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="end" />
+
+</LinearLayout>
