@@ -101,6 +101,25 @@ class ScheduleManager(private val context: Context) {
                 // Bug before fix: case B used `dayOfWeek in rule.daysOfWeek` which
                 // checked Tuesday — the wrong day — so a Mon–Fri bedtime rule at
                 // 22:00–06:00 would fail to block at 02:00 Tue through Sat morning.
+                //
+                // ── DST (Daylight Saving Time) Transitions ────────────────
+                // Spring forward: Clock jumps ahead (e.g., 02:00→03:00 instantly).
+                //   - For a 22:00–06:00 rule, the 02:00–03:00 hour doesn't exist.
+                //   - The rule continues to work correctly; the 1-hour gap is skipped.
+                //   - No special handling needed—Calendar handles DST automatically.
+                //
+                // Fall back: Clock repeats an hour (e.g., 02:00→01:00).
+                //   - For a 22:00–06:00 rule, the 01:00–02:00 hour occurs twice.
+                //   - The rule blocks during both occurrences (technically correct).
+                //   - Users experience 1 extra hour of blocking (acceptable).
+                //
+                // Edge case: If a rule starts/ends exactly at 02:00 during DST:
+                //   - Spring: Rule skips the transition hour entirely (harmless).
+                //   - Fall: Rule blocks during both occurrences of 02:00.
+                //
+                // Summary: No code changes needed. Android's Calendar API handles
+                // DST transitions correctly for our use case. The minor quirks
+                // (1-hour gap/overlap) are acceptable and self-resolve after DST ends.
                 when {
                     nowMinutes >= startMin -> dayOfWeek in rule.daysOfWeek
                     nowMinutes < endMin    -> yesterday in rule.daysOfWeek

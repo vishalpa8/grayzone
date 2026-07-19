@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -185,6 +186,34 @@ fun VpnScreen(onBack: () -> Unit = {}) {
                     color = GZGreen,
                     modifier = Modifier.weight(1f)
                 )
+            }
+            
+            // ── Bloom Filter Disclosure ───────────────────────────────────
+            com.grayzone.app.GZCard(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                background = GZSurfaceHigh,
+                border = GZBorder
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = GZTextSecondary,
+                        modifier = Modifier.size(18.dp).padding(top = 2.dp)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Note: Bloom filters may occasionally block legitimate domains (~0.1% false positive rate, " +
+                        "or about 1 in 1,000 sites). If you encounter blocked sites that shouldn't be, " +
+                        "disable the VPN temporarily or report the domain.",
+                        color = GZTextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
             }
         }
 

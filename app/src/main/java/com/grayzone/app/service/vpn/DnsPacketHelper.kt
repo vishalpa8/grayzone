@@ -1,8 +1,34 @@
 package com.grayzone.app.service.vpn
 
+import com.grayzone.app.GrayzoneLogger
+import com.grayzone.app.LogComponent
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 
 object DnsPacketHelper {
+
+    // Error counters for monitoring DNS packet manipulation failures
+    private val domainParseErrors = AtomicInteger(0)
+    private val sinkholeCreationErrors = AtomicInteger(0)
+    private val nxdomainCreationErrors = AtomicInteger(0)
+    private val responseWrapErrors = AtomicInteger(0)
+    
+    // IPv6 usage statistics
+    private val ipv4PacketsProcessed = AtomicInteger(0)
+    private val ipv6PacketsProcessed = AtomicInteger(0)
+
+    /**
+     * Get error statistics for debugging.
+     * Returns map of error type to count.
+     */
+    fun getErrorStats(): Map<String, Int> = mapOf(
+        "domain_parse_errors" to domainParseErrors.get(),
+        "sinkhole_creation_errors" to sinkholeCreationErrors.get(),
+        "nxdomain_creation_errors" to nxdomainCreationErrors.get(),
+        "response_wrap_errors" to responseWrapErrors.get(),
+        "ipv4_packets_processed" to ipv4PacketsProcessed.get(),
+        "ipv6_packets_processed" to ipv6PacketsProcessed.get()
+    )
 
     fun isDnsQuery(packet: ByteArray, length: Int): Boolean {
         if (length < 28) return false
@@ -29,6 +55,7 @@ object DnsPacketHelper {
     }
 
     fun getDomainName(packet: ByteArray, length: Int): String? {
+        if (length < 28) return null
         try {
             val version = (packet[0].toInt() and 0xF0) shr 4
             val dnsOffset: Int
@@ -60,6 +87,12 @@ object DnsPacketHelper {
             }
             return sb.toString()
         } catch (e: Exception) {
+            domainParseErrors.incrementAndGet()
+            GrayzoneLogger.w(
+                LogComponent.DNS,
+                "Failed to parse domain name from DNS packet: ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -67,8 +100,12 @@ object DnsPacketHelper {
     fun createSinkholeResponse(requestPacket: ByteArray, requestLength: Int): ByteArray? {
         try {
             val version = (requestPacket[0].toInt() and 0xF0) shr 4
-            if (version == 6) return createSinkholeResponseIPv6(requestPacket, requestLength)
+            if (version == 6) {
+                ipv6PacketsProcessed.incrementAndGet()
+                return createSinkholeResponseIPv6(requestPacket, requestLength)
+            }
 
+            ipv4PacketsProcessed.incrementAndGet()
             val ihl = (requestPacket[0].toInt() and 0x0F) * 4
             val dnsOffset = ihl + 8
 
@@ -135,12 +172,18 @@ object DnsPacketHelper {
             response[offset++] = 0
             response[offset++] = 0
             response[offset++] = 0
-            response[offset++] = 0
+            response[offset] = 0
 
             computeIpChecksum(response, ihl)
 
             return response
         } catch (e: Exception) {
+            sinkholeCreationErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to create sinkhole response (IPv4): ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -188,6 +231,12 @@ object DnsPacketHelper {
 
             return response
         } catch (e: Exception) {
+            nxdomainCreationErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to create NXDOMAIN response (IPv4): ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -208,7 +257,7 @@ object DnsPacketHelper {
         packet[11] = (checksum and 0xFF).toByte()
     }
 
-    fun wrapDnsResponse(requestPacket: ByteArray, requestLength: Int, dnsPayload: ByteArray, dnsLength: Int): ByteArray? {
+    fun wrapDnsResponse(requestPacket: ByteArray, dnsPayload: ByteArray, dnsLength: Int): ByteArray? {
         try {
             val version = (requestPacket[0].toInt() and 0xF0) shr 4
             if (version == 6) return wrapDnsResponseIPv6(requestPacket, dnsPayload, dnsLength)
@@ -257,6 +306,12 @@ object DnsPacketHelper {
             computeIpChecksum(response, ihl)
             return response
         } catch (e: Exception) {
+            responseWrapErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to wrap DNS response (IPv4): ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -313,11 +368,17 @@ object DnsPacketHelper {
             response[offset++] = 0
             response[offset++] = 0
             response[offset++] = 0
-            response[offset++] = 0
+            response[offset] = 0
 
             computeUdpChecksumIPv6(response)
             return response
         } catch (e: Exception) {
+            sinkholeCreationErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to create sinkhole response (IPv6): ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -352,6 +413,12 @@ object DnsPacketHelper {
             computeUdpChecksumIPv6(response)
             return response
         } catch (e: Exception) {
+            nxdomainCreationErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to create NXDOMAIN response (IPv6): ${e.message}",
+                e
+            )
             return null
         }
     }
@@ -393,6 +460,12 @@ object DnsPacketHelper {
             computeUdpChecksumIPv6(response)
             return response
         } catch (e: Exception) {
+            responseWrapErrors.incrementAndGet()
+            GrayzoneLogger.e(
+                LogComponent.DNS,
+                "Failed to wrap DNS response (IPv6): ${e.message}",
+                e
+            )
             return null
         }
     }

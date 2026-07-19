@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -65,21 +67,155 @@ fun OnboardingScreen(onContinue: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text("To provide friction, Grayzone needs these permissions:", color = GZTextSecondary)
         Spacer(Modifier.height(32.dp))
-        Button(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasUsageAccess) GZGreen else GZPrimary)) {
-            Text(if (hasUsageAccess) "Usage Access Granted" else "Grant Usage Access")
-        }
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasOverlay) GZGreen else GZPrimary)) {
-            Text(if (hasOverlay) "Overlay Granted" else "Grant Overlay Permission")
-        }
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { 
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
+        
+        // Permission 1: Usage Access
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (hasUsageAccess) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .border(
+                    1.dp, 
+                    if (hasUsageAccess) GZGreen else GZBorder, 
+                    RoundedCornerShape(12.dp)
+                )
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (hasUsageAccess) Icons.Filled.CheckCircle else Icons.Filled.Circle,
+                    contentDescription = null,
+                    tint = if (hasUsageAccess) GZGreen else GZTextTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Usage Access",
+                        color = GZTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        "Required to monitor which apps are currently open",
+                        color = GZTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
             }
-            context.startActivity(intent)
-        }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (hasBatteryOpt) GZGreen else GZPrimary)) {
-            Text(if (hasBatteryOpt) "Battery Opt Exempt" else "Exclude from Battery Opt")
+            if (!hasUsageAccess) {
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                ) {
+                    Text("Grant Usage Access")
+                }
+            }
+        }
+        
+        Spacer(Modifier.height(16.dp))
+        
+        // Permission 2: Overlay
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (hasOverlay) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .border(
+                    1.dp,
+                    if (hasOverlay) GZGreen else GZBorder,
+                    RoundedCornerShape(12.dp)
+                )
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (hasOverlay) Icons.Filled.CheckCircle else Icons.Filled.Circle,
+                    contentDescription = null,
+                    tint = if (hasOverlay) GZGreen else GZTextTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Display Over Other Apps",
+                        color = GZTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        "Required to show friction screens and lockouts over blocked apps",
+                        color = GZTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            if (!hasOverlay) {
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                ) {
+                    Text("Grant Overlay Permission")
+                }
+            }
+        }
+        
+        Spacer(Modifier.height(16.dp))
+        
+        // Permission 3: Battery Optimization
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (hasBatteryOpt) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .border(
+                    1.dp,
+                    if (hasBatteryOpt) GZGreen else GZBorder,
+                    RoundedCornerShape(12.dp)
+                )
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (hasBatteryOpt) Icons.Filled.CheckCircle else Icons.Filled.Circle,
+                    contentDescription = null,
+                    tint = if (hasBatteryOpt) GZGreen else GZTextTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Battery Optimization Exempt",
+                        color = GZTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        "Prevents Android from killing the monitoring service in background",
+                        color = GZTextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            if (!hasBatteryOpt) {
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { 
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                ) {
+                    Text("Exclude from Battery Opt")
+                }
+            }
         }
         
         if (hasUsageAccess && hasOverlay && hasBatteryOpt) {

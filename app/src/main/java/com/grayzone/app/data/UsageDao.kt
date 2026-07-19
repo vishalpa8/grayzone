@@ -62,6 +62,16 @@ interface UsageDao {
     /** Per-app total usage for the last N days. */
     @Query("SELECT packageName, appName, SUM(durationMillis) as totalMillis, COUNT(*) as sessionCount FROM usage_events WHERE dateKey >= :fromDate GROUP BY packageName ORDER BY totalMillis DESC")
     suspend fun getAppUsageSince(fromDate: String): List<DailySummaryRow>
+
+    // ── Data Retention & Cleanup ───────────────────────────────────────────
+
+    /** Delete events older than the specified date (for 90-day retention policy). */
+    @Query("DELETE FROM usage_events WHERE dateKey < :cutoffDate")
+    suspend fun deleteEventsOlderThan(cutoffDate: String): Int
+
+    /** Get total number of events in database (for cleanup monitoring). */
+    @Query("SELECT COUNT(*) FROM usage_events")
+    suspend fun getEventCount(): Int
 }
 
 /** Row returned by daily summary queries. */

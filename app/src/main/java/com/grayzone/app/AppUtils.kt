@@ -12,11 +12,54 @@ import kotlinx.coroutines.withContext
 
 data class AppInfo(val packageName: String, val name: String, val icon: Bitmap?)
 
-private var cachedInstalledApps: List<AppInfo>? = null
+/**
+ * App metadata cache with automatic refresh.
+ * Prevents N+1 query pattern when loading app lists.
+ */
+private object AppMetadataCache {
+    private var cachedApps: List<AppInfo>? = null
+    private var cacheTimestamp = 0L
+    private const val CACHE_VALIDITY_MS = 60_000L  // 1 minute
+    
+    fun get(): List<AppInfo>? {
+        val now = System.currentTimeMillis()
+        return if (cachedApps != null && (now - cacheTimestamp) < CACHE_VALIDITY_MS) {
+            cachedApps
+        } else {
+            null
+        }
+    }
+    
+    fun set(apps: List<AppInfo>) {
+        cachedApps = apps
+        cacheTimestamp = System.currentTimeMillis()
+    }
+    
+    fun invalidate() {
+        cachedApps = null
+        cacheTimestamp = 0L
+    }
+}
 
+/**
+ * Get installed apps with metadata cache (1-minute validity).
+ * Cache is invalidated automatically after 1 minute to detect new installs.
+ */
 suspend fun getInstalledAppsCached(context: Context): List<AppInfo> {
-    if (cachedInstalledApps != null) return cachedInstalledApps!!
-    return getInstalledApps(context).also { cachedInstalledApps = it }
+    val cached = AppMetadataCache.get()
+    if (cached != null) return cached
+    
+    return getInstalledApps(context).also { 
+        AppMetadataCache.set(it)
+    }
+}
+
+/**
+ * Force refresh of app cache (call when user manually refreshes).
+ */
+suspend fun refreshInstalledApps(context: Context): List<AppInfo> {
+    AppMetadataCache.invalidate()
+    return getInstalledAppsCached(context)
 }
 
 suspend fun getInstalledApps(context: Context): List<AppInfo> = withContext(Dispatchers.IO) {
