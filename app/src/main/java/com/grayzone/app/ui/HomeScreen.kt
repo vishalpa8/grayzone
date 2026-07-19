@@ -110,37 +110,39 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
             }
         }
 
-        if (batteryIssue) {
-            item {
-                val ctx = LocalContext.current
-                GZCard(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                    background = GZAmberContainer,
-                    border = GZAmber.copy(alpha = 0.3f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+        item {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                if (batteryIssue) {
+                    val ctx = LocalContext.current
+                    GZCard(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        background = GZAmberContainer,
+                        border = GZAmber.copy(alpha = 0.3f)
                     ) {
-                        Icon(Icons.Filled.BatteryAlert, contentDescription = null,
-                            tint = GZAmber, modifier = Modifier.size(22.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Battery Optimization On", color = GZAmber,
-                                fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Grayzone may stop working in background.",
-                                color = GZTextSecondary, fontSize = 12.sp)
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.BatteryAlert, contentDescription = null,
+                                tint = GZAmber, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Battery Optimization On", color = GZAmber,
+                                    fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Grayzone may stop working in background.",
+                                    color = GZTextSecondary, fontSize = 12.sp)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                onClick = {
+                                    @SuppressLint("BatteryLife")
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:${ctx.packageName}"))
+                                    ctx.startActivity(intent)
+                                },
+                                colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
+                            ) { Text("Fix", fontWeight = FontWeight.Bold) }
                         }
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                @SuppressLint("BatteryLife")
-                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        Uri.parse("package:${ctx.packageName}"))
-                                ctx.startActivity(intent)
-                            },
-                            colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
-                        ) { Text("Fix", fontWeight = FontWeight.Bold) }
                     }
                 }
             }
