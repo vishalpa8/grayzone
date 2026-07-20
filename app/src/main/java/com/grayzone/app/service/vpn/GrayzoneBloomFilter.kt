@@ -79,7 +79,8 @@ class GrayzoneBloomFilter private constructor(
 
                 val bitArray = ByteArray(byteCountLong.toInt())
                 readFully(input, bitArray, "Bloom filter bit array too short")
-                require(input.read() == -1) { "Bloom filter contains trailing bytes" }
+                // Tolerate trailing bytes (like a trailing newline added by some tools/git)
+                // require(input.read() == -1) { "Bloom filter contains trailing bytes" }
 
                 return GrayzoneBloomFilter(bitArray, bitCount, numHashes)
             }

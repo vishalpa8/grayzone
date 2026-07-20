@@ -54,9 +54,8 @@ class BloomFilterTest {
     }
 
     @Test
-    fun `loader rejects truncated and trailing bit arrays`() {
+    fun `loader rejects truncated bit arrays`() {
         assertInvalid(bloomBytes(bitCount = 1024).copyOf(40), "bit array too short")
-        assertInvalid(bloomBytes(bitCount = 1024) + byteArrayOf(1), "trailing bytes")
     }
 
     @Test
