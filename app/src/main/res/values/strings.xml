@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Grayzone</string>
-    <string name="accessibility_service_description">Grayzone monitors which apps you open to enforce session limits and friction overlays. This service does not collect or transmit any data.</string>
+    <string name="accessibility_service_description">Grayzone monitors which apps you open to enforce session limits and friction overlays. This service does NOT: read screen content, capture data, access notifications, or transmit personal information. Window title detection only.</string>
 </resources>
