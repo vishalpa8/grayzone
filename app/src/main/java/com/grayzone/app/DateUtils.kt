@@ -62,6 +62,12 @@ object DateUtils {
     fun formatDateKey(timestamp: Long): String {
         return dateKeyFormatter.get()!!.format(Date(timestamp))
     }
+
+    fun getYesterdayDateKey(): String {
+        val calendar = Calendar.getInstance()
+        calendar.add(Calendar.DAY_OF_YEAR, -1)
+        return dateKeyFormatter.get()!!.format(calendar.time)
+    }
     
     /**
      * Format a timestamp in "yyyy-MM-dd HH:mm:ss" format.
@@ -97,17 +103,7 @@ object DateUtils {
      */
     fun shouldResetDailyRuntimeState(now: Long, lastResetDateKey: String): Boolean {
         val currentDateKey = dateKeyFormatter.get()!!.format(Date(now))
-        val midnightToday = Calendar.getInstance().apply {
-            timeInMillis = now
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-
-        val isAfterMidnight = now >= midnightToday
-        val isNewDay = lastResetDateKey != currentDateKey
-        return isAfterMidnight && isNewDay
+        return lastResetDateKey != currentDateKey
     }
     
     /**

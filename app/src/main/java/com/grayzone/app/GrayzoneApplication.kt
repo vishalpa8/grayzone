@@ -101,7 +101,7 @@ class GrayzoneApplication : Application() {
     }
     
     /**
-     * Clears runtime-only session state once per day after noon while preserving stats.
+     * Clears runtime-only session state once per calendar day while preserving stats.
      */
     private fun resetRuntimeStateIfNeeded() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
@@ -124,7 +124,7 @@ class GrayzoneApplication : Application() {
 
         GrayzoneLogger.i(
             LogComponent.BOOT,
-            "Runtime session state reset for a new day after noon; stats preserved"
+            "Runtime session state reset for a new day; stats preserved"
         )
     }
 

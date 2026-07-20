@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.grayzone.app.R
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 object BlocklistManager {
@@ -76,7 +75,62 @@ object BlocklistManager {
     )
 
     private val loadStarted = AtomicBoolean(false)
-    private val normalizedDomainCache = ConcurrentHashMap<String, String?>()
+    private val ipv4LiteralRegex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+    // Bounded LRU cache to avoid unbounded memory growth from per-request additions.
+    // Access guarded by cacheLock for simple thread-safety.
+    private val cacheLock = Any()
+    private val normalizedDomainCache: MutableMap<String, String?> = object : java.util.LinkedHashMap<String, String?>(1000, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>?): Boolean {
+            return size > 4000
+        }
+    }
+
+    // High-confidence fallback domains for immediate blocking before bloom filters
+    // finish loading or when a specific domain is known to be a strong ad/tracker
+    // or adult-content endpoint.
+    private val highConfidenceAdDomains: Set<String> = hashSetOf(
+        "adservice.google.com",
+        "doubleclick.net",
+        "googleadservices.com",
+        "googlesyndication.com",
+        "googletagmanager.com",
+        "googletagservices.com",
+        "google-analytics.com",
+        "adnxs.com",
+        "taboola.com",
+        "outbrain.com",
+        "amazon-adsystem.com",
+        "scorecardresearch.com",
+        "quantserve.com",
+        "criteo.com",
+        "pubmatic.com",
+        "openx.net",
+        "rubiconproject.com",
+        "lijit.com",
+        "demdex.net",
+        "yieldmo.com",
+        "tapad.com",
+        "teads.tv",
+        "media.net",
+        "adform.net",
+        "advertising.com"
+    )
+
+    private val highConfidenceAdultDomains: Set<String> = hashSetOf(
+        "pornhub.com",
+        "redtube.com",
+        "xvideos.com",
+        "xhamster.com",
+        "youporn.com",
+        "tube8.com",
+        "xnxx.com",
+        "spankbang.com",
+        "livejasmin.com",
+        "chaturbate.com",
+        "cam4.com",
+        "myfreecams.com",
+        "onlyfans.com"
+    )
 
     @Volatile var isLoaded = false
         private set
@@ -91,6 +145,10 @@ object BlocklistManager {
                 adultFilter = loadFilter(context, R.raw.adult_bloom,   "adult")
                 isLoaded = true
             } catch (e: Exception) {
+                adFilter = null
+                adultFilter = null
+                isLoaded = false
+                loadStarted.set(false)
                 Log.e(TAG, "Error loading bloom filters", e)
             }
         }.start()
@@ -100,34 +158,35 @@ object BlocklistManager {
     fun normalizeDomain(domain: String): String? {
         try {
             // Fast path: return cached value when present (including explicit nulls).
-            if (normalizedDomainCache.containsKey(domain)) return normalizedDomainCache[domain]
+            synchronized(cacheLock) {
+                if (normalizedDomainCache.containsKey(domain)) return normalizedDomainCache[domain]
+            }
 
             val trimmed = domain.trim().lowercase(Locale.US)
             val withoutTrailingDot = trimmed.removeSuffix(".")
 
             if (withoutTrailingDot.isEmpty() || withoutTrailingDot.contains(" ")) {
-                normalizedDomainCache[domain] = null
+                synchronized(cacheLock) { normalizedDomainCache[domain] = null }
                 return null
             }
 
             // IPv4 literal (e.g. 8.8.8.8) or IPv6 (contains ':') → reject
-            val ipv4Regex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
-            if (ipv4Regex.matches(withoutTrailingDot) || withoutTrailingDot.contains(':')) {
-                normalizedDomainCache[domain] = null
+            if (ipv4LiteralRegex.matches(withoutTrailingDot) || withoutTrailingDot.contains(':')) {
+                synchronized(cacheLock) { normalizedDomainCache[domain] = null }
                 return null
             }
 
             // Require at least one dot (skip single-label hosts like "localhost")
             if (!withoutTrailingDot.contains('.')) {
-                normalizedDomainCache[domain] = null
+                synchronized(cacheLock) { normalizedDomainCache[domain] = null }
                 return null
             }
 
-            normalizedDomainCache[domain] = withoutTrailingDot
+            synchronized(cacheLock) { normalizedDomainCache[domain] = withoutTrailingDot }
             return withoutTrailingDot
         } catch (e: Exception) {
             // Defensive: any unexpected parsing error should not crash the caller.
-            normalizedDomainCache[domain] = null
+            synchronized(cacheLock) { normalizedDomainCache[domain] = null }
             return null
         }
     }
@@ -138,18 +197,28 @@ object BlocklistManager {
         return dohBypassDomains.contains(normalized)
     }
 
-    /** True if domain matches the ad/tracking bloom filter. */
-    fun isAdBlocked(domain: String): Boolean {
-        if (!isLoaded) return false
-        val filter = adFilter ?: return false
-        return matchesFilter(domain, filter)
+    fun isHighConfidenceBlock(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        return matchesHighConfidence(normalized, highConfidenceAdDomains) ||
+               matchesHighConfidence(normalized, highConfidenceAdultDomains)
     }
 
-    /** True if domain matches the adult-content bloom filter. */
+    /** True if domain matches the ad/tracking bloom filter or a high-confidence fallback domain. */
+    fun isAdBlocked(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        if (matchesHighConfidence(normalized, highConfidenceAdDomains)) return true
+        if (!isLoaded) return false
+        val filter = adFilter ?: return false
+        return matchesFilter(normalized, filter)
+    }
+
+    /** True if domain matches the adult-content bloom filter or a high-confidence fallback domain. */
     fun isAdultBlocked(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        if (matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
         if (!isLoaded) return false
         val filter = adultFilter ?: return false
-        return matchesFilter(domain, filter)
+        return matchesFilter(normalized, filter)
     }
 
     /**
@@ -161,6 +230,8 @@ object BlocklistManager {
     fun isBlocked(domain: String): Boolean {
         if (isDoHBypass(domain)) return true
         val normalized = normalizeDomain(domain) ?: return false
+        if (matchesHighConfidence(normalized, highConfidenceAdDomains) ||
+            matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
         if (!isLoaded) return false
         val ad    = adFilter
         val adult = adultFilter
@@ -189,18 +260,31 @@ object BlocklistManager {
      * would otherwise block every domain under that TLD. We require at least
      * one dot in the candidate string before querying the filter for a parent.
      */
+    private fun matchesHighConfidence(domain: String, matchSet: Set<String>): Boolean {
+        // Caller guarantees `domain` is already lowercased via normalizeDomain(), avoid extra allocations.
+        if (matchSet.contains(domain)) return true
+
+        var dotIndex = domain.indexOf('.')
+        while (dotIndex != -1 && dotIndex < domain.length - 1) {
+            val parent = domain.substring(dotIndex + 1)
+            if (parent.contains('.') && matchSet.contains(parent)) return true
+            dotIndex = domain.indexOf('.', dotIndex + 1)
+        }
+        return false
+    }
+
     private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean {
-        val lower = domain.lowercase(Locale.US)
+        // Caller guarantees `domain` is already lowercased via normalizeDomain(), avoid extra allocations.
         // Check the full domain first
-        if (filter.mightContain(lower)) return true
+        if (filter.mightContain(domain)) return true
         // Walk parent domains, but never query a bare TLD (no dot = 0 labels)
-        var dotIndex = lower.indexOf('.')
-        while (dotIndex != -1 && dotIndex < lower.length - 1) {
-            val parent = lower.substring(dotIndex + 1)
+        var dotIndex = domain.indexOf('.')
+        while (dotIndex != -1 && dotIndex < domain.length - 1) {
+            val parent = domain.substring(dotIndex + 1)
             // Only check parents that are real domain names (contain at least one dot),
             // i.e. skip bare TLDs such as "com", "net", "co" etc.
             if (parent.contains('.') && filter.mightContain(parent)) return true
-            dotIndex = lower.indexOf('.', dotIndex + 1)
+            dotIndex = domain.indexOf('.', dotIndex + 1)
         }
         return false
     }

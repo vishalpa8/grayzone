@@ -40,11 +40,14 @@ class AdBlockVpnService : VpnService() {
             "9.9.9.9"    // Quad9 (fallback 2)
         )
 
-        private const val DNS_TIMEOUT_MS = 4000
+        private const val DNS_TIMEOUT_MS = 2000
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
+    // Shared protected UDP socket to avoid socket churn. Access synchronized on sharedUdpLock.
+    private val sharedUdpLock = Any()
+    private var sharedUdpSocket: DatagramSocket? = null
     
     // Exception handler for coroutines to prevent silent failures
     private val coroutineExceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
@@ -59,8 +62,8 @@ class AdBlockVpnService : VpnService() {
         Dispatchers.IO + SupervisorJob() + coroutineExceptionHandler
     )
     
-    // DNS request deduplication: prevent multiple identical queries in flight
-    private val pendingQueries = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<ByteArray?>>()
+    // DNS request deduplication: prevent multiple identical questions from hitting upstream at once.
+    private val pendingQueries = java.util.concurrent.ConcurrentHashMap<DnsPacketHelper.DnsQuestionKey, CompletableDeferred<ByteArray?>>()
 
 
     override fun onCreate() {
@@ -130,22 +133,46 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        shutdownVpn(clearPersistedFlag = true, stopService = true)
+        Log.d(TAG, "VPN Stopped")
+    }
+
+    private fun shutdownVpn(clearPersistedFlag: Boolean, stopService: Boolean) {
         isRunning = false
         vpnThread?.interrupt()
         try {
             vpnInterface?.close()
         } catch (e: Exception) { /* ignored */ }
         vpnInterface = null
+        vpnThread = null
+        pendingQueries.clear()
 
         DnsTrafficBus.clear()
 
-        // Clear the persisted flag so BootReceiver does not auto-restart after reboot.
-        getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-            .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+        synchronized(sharedUdpLock) {
+            try {
+                sharedUdpSocket?.close()
+            } catch (e: Exception) { /* ignore */ }
+            sharedUdpSocket = null
+        }
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-        Log.d(TAG, "VPN Stopped")
+        if (clearPersistedFlag) {
+            getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+        }
+
+        if (stopService) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun restartVpnAfterDelay(delayMs: Long) {
+        serviceScope.launch {
+            shutdownVpn(clearPersistedFlag = false, stopService = false)
+            kotlinx.coroutines.delay(delayMs)
+            startVpn()
+        }
     }
 
     override fun onDestroy() {
@@ -172,23 +199,25 @@ class AdBlockVpnService : VpnService() {
         // 3. Graceful shutdown via isRunning flag
         
         try {
+            val packet = ByteArray(32767) // reuse large buffer to avoid per-iteration GC pressure
             while (isRunning) {
                 try {
-                    val packet = ByteArray(32767)
                     val length = inputStream.read(packet)
 
                     if (length > 0) {
                         if (DnsPacketHelper.isDnsQuery(packet, length)) {
                             val domain = DnsPacketHelper.getDomainName(packet, length)
                             if (domain != null) {
-                                handleDnsQuery(domain, packet, length, outputStream)
+                                // Copy only the used slice for async handling to avoid races with reused buffer
+                                val pktCopy = packet.copyOf(length)
+                                handleDnsQuery(domain, pktCopy, pktCopy.size, outputStream)
                             }
                         }
                     }
-                    
+
                     // Reset error counter on successful iteration
                     consecutiveErrors = 0
-                    
+
                 } catch (e: java.io.IOException) {
                     val now = System.currentTimeMillis()
                     consecutiveErrors++
@@ -211,14 +240,7 @@ class AdBlockVpnService : VpnService() {
                             e
                         )
                         
-                        // Restart VPN service with cooldown
-                        serviceScope.launch {
-                            stopVpn()
-                            kotlinx.coroutines.delay(2000)  // Brief cooldown
-                            if (isRunning) {
-                                startVpn()
-                            }
-                        }
+                        restartVpnAfterDelay(2000)
                         break
                     }
                     
@@ -239,11 +261,7 @@ class AdBlockVpnService : VpnService() {
                     "Fatal VPN error",
                     e
                 )
-                // Try one last restart
-                serviceScope.launch {
-                    kotlinx.coroutines.delay(3000)
-                    if (isRunning) startVpn()
-                }
+                restartVpnAfterDelay(3000)
             }
         }
     }
@@ -261,6 +279,8 @@ class AdBlockVpnService : VpnService() {
         length: Int,
         outputStream: FileOutputStream
     ) {
+        val normalizedDomain = BlocklistManager.normalizeDomain(domain)
+
         when {
             // Firefox DoH canary — return NXDOMAIN so Firefox falls back to system DNS
             domain.equals("use-application-dns.net", ignoreCase = true) -> {
@@ -270,13 +290,13 @@ class AdBlockVpnService : VpnService() {
 
             // Known DoH/DoT resolver — return NXDOMAIN so the app can't resolve
             // the DoH endpoint and is forced to use plain DNS53 (which we intercept)
-            BlocklistManager.isDoHBypass(domain) -> {
+            normalizedDomain != null && BlocklistManager.isDoHBypass(normalizedDomain) -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
             // Ad or adult content domain → sinkhole to 0.0.0.0
-            BlocklistManager.isBlocked(domain) -> {
+            normalizedDomain != null && BlocklistManager.isBlocked(normalizedDomain) -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
                 writeSinkhole(packet, length, outputStream)
             }
@@ -285,7 +305,7 @@ class AdBlockVpnService : VpnService() {
             else -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED))
                 serviceScope.launch {
-                    forwardDnsQueryWithDeduplication(domain, packet, length, outputStream)
+                    forwardDnsQueryWithDeduplication(domain, normalizedDomain, packet, length, outputStream)
                 }
             }
         }
@@ -316,43 +336,34 @@ class AdBlockVpnService : VpnService() {
      */
     private suspend fun forwardDnsQueryWithDeduplication(
         domain: String,
+        normalizedDomain: String?,
         packet: ByteArray,
         length: Int,
         outputStream: FileOutputStream
     ) {
-        // Check if there's already a query in flight for this domain
-        val existingQuery = pendingQueries[domain]
+        val key = normalizedDomain?.let { DnsPacketHelper.getQuestionKey(packet, length, it) }
+        if (key == null) {
+            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
+            writeForwardedResponse(packet, dnsPayload, outputStream)
+            return
+        }
+
+        val deferred = CompletableDeferred<ByteArray?>()
+        val existingQuery = pendingQueries.putIfAbsent(key, deferred)
         if (existingQuery != null) {
             com.grayzone.app.GrayzoneLogger.d(
                 com.grayzone.app.LogComponent.DNS,
                 "Deduplicating DNS query",
-                mapOf("domain" to domain)
+                mapOf("domain" to domain, "type" to key.qType, "class" to key.qClass)
             )
-            // Wait for the existing query to complete and reuse its result
-            val result = existingQuery.await()
-            if (result != null) {
-                synchronized(outputStream) { outputStream.write(result) }
-            }
+            writeForwardedResponse(packet, existingQuery.await(), outputStream)
             return
         }
-        
-        // Create a new deferred for this query
-        val deferred = CompletableDeferred<ByteArray?>()
-        pendingQueries[domain] = deferred
-        
+
         try {
-            // Perform the actual DNS query
-            val result = withContext(Dispatchers.IO) {
-                performDnsQuery(packet, length)
-            }
-            
-            // Complete the deferred with the result
-            deferred.complete(result)
-            
-            // Write the response
-            if (result != null) {
-                synchronized(outputStream) { outputStream.write(result) }
-            }
+            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
+            deferred.complete(dnsPayload)
+            writeForwardedResponse(packet, dnsPayload, outputStream)
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.DNS,
@@ -361,14 +372,23 @@ class AdBlockVpnService : VpnService() {
             )
             deferred.complete(null)
         } finally {
-            // Remove from pending queries
-            pendingQueries.remove(domain)
+            pendingQueries.remove(key, deferred)
         }
+    }
+
+    private fun writeForwardedResponse(
+        requestPacket: ByteArray,
+        dnsPayload: ByteArray?,
+        outputStream: FileOutputStream
+    ) {
+        if (dnsPayload == null) return
+        val wrapped = DnsPacketHelper.wrapDnsResponse(requestPacket, dnsPayload, dnsPayload.size) ?: return
+        synchronized(outputStream) { outputStream.write(wrapped) }
     }
     
     /**
      * Perform the actual DNS query with server fallback.
-     * Returns the wrapped DNS response packet, or null on failure.
+     * Returns the DNS response payload, or null on failure.
      */
     private fun performDnsQuery(packet: ByteArray, length: Int): ByteArray? {
         for ((index, serverIp) in DNS_SERVERS.withIndex()) {
@@ -398,55 +418,55 @@ class AdBlockVpnService : VpnService() {
 
     /**
      * Try forwarding a DNS query to a single upstream server.
-     * @return wrapped DNS response packet if successful, null otherwise.
+     * @return DNS response payload if successful, null otherwise.
      */
     private fun trySingleDnsServer(
         packet: ByteArray,
         length: Int,
         server: InetAddress
     ): ByteArray? {
-        var udpSocket: DatagramSocket? = null
         val startTime = System.nanoTime()
-        
         return try {
-            udpSocket = DatagramSocket()
-            protect(udpSocket)
-            udpSocket.soTimeout = DNS_TIMEOUT_MS
+            val dnsOffset = DnsPacketHelper.getDnsPayloadOffset(packet, length) ?: return null
+            val dnsPayloadLength = DnsPacketHelper.getDnsPayloadLength(packet, length) ?: return null
 
-            val ihl = (packet[0].toInt() and 0x0F) * 4
-            val dnsPayloadLength = length - ihl - 8
-            if (dnsPayloadLength <= 0) return null
+            // Use a shared protected UDP socket to avoid creating/closing sockets frequently.
+            synchronized(sharedUdpLock) {
+                if (sharedUdpSocket == null) {
+                    sharedUdpSocket = DatagramSocket()
+                    try {
+                        protect(sharedUdpSocket)
+                    } catch (_: Exception) {
+                        // protect may fail on older devices; continue without crashing.
+                    }
+                }
 
-            val outPacket = DatagramPacket(packet, ihl + 8, dnsPayloadLength, server, 53)
-            udpSocket.send(outPacket)
+                val udpSocket = sharedUdpSocket!!
+                udpSocket.soTimeout = DNS_TIMEOUT_MS
 
-            val respBuf = ByteArray(4096)
-            val respPacket = DatagramPacket(respBuf, respBuf.size)
-            udpSocket.receive(respPacket)
-            
-            val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
-            
-            // Log warning if DNS query is slow (>50ms)
-            if (elapsedMs > 50) {
-                com.grayzone.app.GrayzoneLogger.w(
-                    com.grayzone.app.LogComponent.DNS,
-                    "Slow DNS query: ${elapsedMs}ms via $server"
-                )
-            } else {
-                com.grayzone.app.GrayzoneLogger.d(
-                    com.grayzone.app.LogComponent.DNS,
-                    "DNS query latency: ${elapsedMs}ms via $server"
-                )
+                val outPacket = DatagramPacket(packet, dnsOffset, dnsPayloadLength, server, 53)
+                udpSocket.send(outPacket)
+
+                val respBuf = ByteArray(4096)
+                val respPacket = DatagramPacket(respBuf, respBuf.size)
+                udpSocket.receive(respPacket)
+
+                val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
+                // Log warning if DNS query is slow (>50ms)
+                if (elapsedMs > 50) {
+                    com.grayzone.app.GrayzoneLogger.w(
+                        com.grayzone.app.LogComponent.DNS,
+                        "Slow DNS query: ${elapsedMs}ms via $server"
+                    )
+                } else {
+                    com.grayzone.app.GrayzoneLogger.d(
+                        com.grayzone.app.LogComponent.DNS,
+                        "DNS query latency: ${elapsedMs}ms via $server"
+                    )
+                }
+
+                respBuf.copyOf(respPacket.length)
             }
-
-            val wrapped = DnsPacketHelper.wrapDnsResponse(packet, respBuf, respPacket.length)
-            if (wrapped == null) {
-                com.grayzone.app.GrayzoneLogger.e(
-                    com.grayzone.app.LogComponent.DNS,
-                    "Failed to wrap DNS response from $server"
-                )
-            }
-            wrapped
         } catch (e: Exception) {
             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
             com.grayzone.app.GrayzoneLogger.w(
@@ -454,8 +474,6 @@ class AdBlockVpnService : VpnService() {
                 "DNS forward error via $server after ${elapsedMs}ms: ${e.message}"
             )
             null
-        } finally {
-            udpSocket?.close()
         }
     }
     

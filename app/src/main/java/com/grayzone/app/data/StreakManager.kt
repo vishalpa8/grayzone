@@ -51,24 +51,21 @@ class StreakManager(private val context: Context) {
     }
 
     /**
-     * Called at end of day or when app opens to check if the streak continues.
-     * A streak day is counted if the user stayed under all daily budgets.
+     * Records a completed calendar day. The current in-progress day is never awarded.
      */
     fun checkDailyStreak(stayedUnderBudget: Boolean) {
-        val today = dateFormat.format(Date())
-        val lastDate = prefs.getString(PrefsKeys.STREAK_LAST_DATE, null)
+        checkDailyStreakForDate(previousDateKey(dateFormat.format(Date())), stayedUnderBudget)
+    }
 
-        if (lastDate == today) return // Already checked today
+    fun checkDailyStreakForDate(completedDateKey: String, stayedUnderBudget: Boolean) {
+        val lastDate = prefs.getString(PrefsKeys.STREAK_LAST_DATE, null)
+        if (lastDate == completedDateKey) return
 
         val currentStreak = getCurrentStreak()
-        val yesterday = run {
-            val cal = Calendar.getInstance()
-            cal.add(Calendar.DAY_OF_YEAR, -1)
-            dateFormat.format(cal.time)
-        }
+        val previousCompletedDate = previousDateKey(completedDateKey)
 
         val newStreak = if (stayedUnderBudget) {
-            if (lastDate == yesterday || lastDate == null) currentStreak + 1 else 1
+            if (lastDate == previousCompletedDate || lastDate == null) currentStreak + 1 else 1
         } else {
             0
         }
@@ -78,10 +75,17 @@ class StreakManager(private val context: Context) {
         prefs.edit()
             .putInt(PrefsKeys.CURRENT_STREAK, newStreak)
             .putInt(PrefsKeys.LONGEST_STREAK, longest)
-            .putString(PrefsKeys.STREAK_LAST_DATE, today)
+            .putString(PrefsKeys.STREAK_LAST_DATE, completedDateKey)
             .apply()
 
         checkAndUnlockAchievements()
+    }
+
+    private fun previousDateKey(dateKey: String): String {
+        val cal = Calendar.getInstance()
+        cal.time = dateFormat.parse(dateKey) ?: Date()
+        cal.add(Calendar.DAY_OF_YEAR, -1)
+        return dateFormat.format(cal.time)
     }
 
     // ── Achievements ──────────────────────────────────────────────────────

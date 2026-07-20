@@ -48,12 +48,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.pm.PackageManager
 import com.grayzone.app.data.ScheduleManager
-import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.content.ContextCompat
 
 class OverlayService : Service() {
@@ -107,8 +106,9 @@ class OverlayService : Service() {
     private var homeLauncherCacheTime: Long = 0L
     private lateinit var scheduleManager: ScheduleManager
     
-    // Atomic state management to prevent race conditions when switching apps rapidly
-    private val processingTransition = AtomicBoolean(false)
+    private val transitionLock = Any()
+    private var queuedForegroundPackage: String? = null
+    private var transitionJob: Job? = null
     
     // Broadcast receiver for AccessibilityService events (replaces polling)
     private var appChangeReceiver: BroadcastReceiver? = null
@@ -158,7 +158,7 @@ class OverlayService : Service() {
 
     /**
      * Handles foreground app changes from AccessibilityService.
-     * Uses atomic state management to prevent race conditions when rapidly switching apps.
+     * Serializes app transitions and keeps the latest foreground package while processing.
      * 
      * Benefits over polling:
      * - ~95% reduction in battery usage (event-driven vs 1-second polling)
@@ -166,47 +166,55 @@ class OverlayService : Service() {
      * - More reliable across all Android OEMs
      */
     private fun handleForegroundAppChanged(currentPkg: String) {
-        // Prevent concurrent processing to avoid race conditions
-        // Example: User switches A→B→A rapidly, second A detection must wait
-        if (!processingTransition.compareAndSet(false, true)) {
-            com.grayzone.app.GrayzoneLogger.d(
-                com.grayzone.app.LogComponent.OVERLAY,
-                "Transition already in progress, ignoring",
-                mapOf("package" to currentPkg)
-            )
-            return
+        synchronized(transitionLock) {
+            queuedForegroundPackage = currentPkg
+            if (transitionJob?.isActive == true) return
+            transitionJob = serviceScope.launch { drainForegroundTransitions() }
         }
-        
+    }
+
+    private suspend fun drainForegroundTransitions() {
+        while (true) {
+            val currentPkg = synchronized(transitionLock) {
+                val next = queuedForegroundPackage
+                if (next == null) {
+                    transitionJob = null
+                    return
+                }
+                queuedForegroundPackage = null
+                next
+            }
+            processForegroundAppChanged(currentPkg)
+        }
+    }
+
+    private suspend fun processForegroundAppChanged(currentPkg: String) {
         try {
             // Skip system packages and apps without launcher intent
             if (currentPkg == packageName || !hasLauncherIntent(currentPkg)) {
                 return
             }
-            
+
             // Early exit if same app (before updating state)
             if (currentPkg == lastForegroundPackage) {
                 return
             }
-            
+
             val oldPackage = lastForegroundPackage
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
-            
+
             com.grayzone.app.GrayzoneLogger.d(
                 com.grayzone.app.LogComponent.OVERLAY,
                 "Foreground app changed",
                 mapOf("from" to (oldPackage ?: "null"), "to" to currentPkg)
             )
 
-            // Handle backgrounding the old app (synchronous to prevent race)
             if (oldPackage != null) {
                 cancelCountdownNotification()
-                
-                // Block until logging completes to prevent race conditions
+
                 if (sessionStartTime > 0) {
-                    runBlocking(Dispatchers.IO) {
-                        logUsageAndCheckBudget(oldPackage, sessionStartTime)
-                    }
+                    logUsageAndCheckBudget(oldPackage, sessionStartTime)
                     sessionStartTime = 0L
                 }
 
@@ -219,7 +227,7 @@ class OverlayService : Service() {
                             .putLong(PrefsKeys.REMAINING_MILLIS + oldPackage, remaining)
                             .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
                             .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
-                            .commit()  // Synchronous for atomicity
+                            .commit()
                     } else {
                         prefs.edit()
                             .remove(PrefsKeys.REMAINING_MILLIS + oldPackage)
@@ -230,7 +238,6 @@ class OverlayService : Service() {
                 }
             }
 
-            // NOW update state after old app is fully handled
             lastForegroundPackage = currentPkg
 
             // Check if monitoring is globally disabled
@@ -252,8 +259,8 @@ class OverlayService : Service() {
 
             // 1. Enforce Schedule Lock
             if (scheduleManager.isCurrentlyScheduled()) {
-                serviceScope.launch(Dispatchers.Main) { 
-                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.SCHEDULE_LOCK, 0L) 
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.SCHEDULE_LOCK, 0L)
                 }
                 return
             }
@@ -266,10 +273,10 @@ class OverlayService : Service() {
                 val usedMs = if (lastReset == dateKey) {
                     prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + currentPkg, 0L)
                 } else 0L
-                
+
                 if (usedMs >= budgetMins * 60 * 1000L) {
-                    serviceScope.launch(Dispatchers.Main) { 
-                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.BUDGET_LOCK, 0L) 
+                    serviceScope.launch(Dispatchers.Main) {
+                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.BUDGET_LOCK, 0L)
                     }
                     return
                 }
@@ -284,8 +291,8 @@ class OverlayService : Service() {
                 scheduleLockoutCheck(currentPkg, activeUntil - now)
             } else if (now < lockedUntil) {
                 // Show lockout screen
-                serviceScope.launch(Dispatchers.Main) { 
-                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.LOCK, lockedUntil) 
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.LOCK, lockedUntil)
                 }
             } else {
                 val normalizedRemainingMillis = getNormalizedRemainingMillis(remainingMillis)
@@ -307,7 +314,7 @@ class OverlayService : Service() {
                             .putLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, newActiveUntil)
                             .putLong(PrefsKeys.LOCKED_UNTIL + currentPkg, newLockedUntil)
                             .remove(PrefsKeys.REMAINING_MILLIS + currentPkg)
-                            .commit()  // Synchronous for atomicity
+                            .commit()
 
                         serviceScope.launch(Dispatchers.Main) { showTint() }
                         startCountdownNotification(currentPkg, newActiveUntil)
@@ -332,11 +339,14 @@ class OverlayService : Service() {
                     }
                 }
             }
-        } finally {
-            processingTransition.set(false)
+        } catch (e: Exception) {
+            GrayzoneLogger.e(
+                LogComponent.OVERLAY,
+                "Failed to process foreground app change",
+                e
+            )
         }
     }
-
     /**
      * Check if package is the home launcher.
      * Cache refreshes every 30 seconds to detect launcher changes.
@@ -358,68 +368,59 @@ class OverlayService : Service() {
     private fun hasLauncherIntent(pkg: String): Boolean =
         packageManager.getLaunchIntentForPackage(pkg) != null || isHomeLauncher(pkg)
 
-    private fun logUsageAndCheckBudget(pkg: String, startTime: Long) {
+    private suspend fun logUsageAndCheckBudget(pkg: String, startTime: Long) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val durationMs = now - startTime
-        if (durationMs <= 0) return
+        if (durationMs <= 0) return@withContext
         val currentFgPkg = lastForegroundPackage
-        
-        serviceScope.launch {
-            try {
-                val dao = UsageDatabase.getInstance(this@OverlayService).usageDao()
-                val appName = getAppName(pkg)
-                
-                val dateKey = DateUtils.getCurrentDateKey()
-                dao.insertEvent(
-                    UsageEvent(
-                        packageName = pkg,
-                        appName = appName,
-                        startTime = startTime,
-                        endTime = now,
-                        durationMillis = durationMs,
-                        wasBlocked = false,
-                        dateKey = dateKey
-                    )
+
+        try {
+            val dao = UsageDatabase.getInstance(this@OverlayService).usageDao()
+            val appName = getAppName(pkg)
+
+            val dateKey = DateUtils.getCurrentDateKey()
+            dao.insertEvent(
+                UsageEvent(
+                    packageName = pkg,
+                    appName = appName,
+                    startTime = startTime,
+                    endTime = now,
+                    durationMillis = durationMs,
+                    wasBlocked = false,
+                    dateKey = dateKey
                 )
-                
-                // Update daily budget with atomic check-and-set to prevent race conditions
-                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-                val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
-                if (budgetMins > 0) {
-                    val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
-                    
-                    // Calculate new used time based on whether we're on the same day
-                    val newUsedMs = if (lastReset == dateKey) {
-                        // Same day - add to existing total
-                        val currentUsed = prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L)
-                        currentUsed + durationMs
-                    } else {
-                        // New day - reset to current duration
-                        durationMs
-                    }
-                    
-                    // Use commit() for synchronous, atomic operation
-                    prefs.edit()
-                        .putLong(PrefsKeys.DAILY_USED_MILLIS + pkg, newUsedMs)
-                        .putString(PrefsKeys.DAILY_RESET_DATE + pkg, dateKey)
-                        .commit()  // Synchronous to prevent race at midnight
-                        
-                    if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg) {
-                        launch(Dispatchers.Main) { 
-                            showOverlay(pkg, appName, OverlayMode.BUDGET_LOCK, 0L) 
-                        }
+            )
+
+            val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+            val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+            if (budgetMins > 0) {
+                val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
+
+                val newUsedMs = if (lastReset == dateKey) {
+                    prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) + durationMs
+                } else {
+                    durationMs
+                }
+
+                prefs.edit()
+                    .putLong(PrefsKeys.DAILY_USED_MILLIS + pkg, newUsedMs)
+                    .putString(PrefsKeys.DAILY_RESET_DATE + pkg, dateKey)
+                    .commit()
+
+                if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg) {
+                    withContext(Dispatchers.Main) {
+                        showOverlay(pkg, appName, OverlayMode.BUDGET_LOCK, 0L)
                     }
                 }
-            } catch (e: Exception) {
-                com.grayzone.app.GrayzoneLogger.e(
-                    com.grayzone.app.LogComponent.DATABASE,
-                    "Failed to log usage",
-                    e
-                )
             }
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.e(
+                com.grayzone.app.LogComponent.DATABASE,
+                "Failed to log usage",
+                e
+            )
         }
     }
-
     private fun scheduleLockoutCheck(packageName: String, delayMs: Long) {
         lockoutJobs[packageName]?.cancel()
         lockoutJobs[packageName] = serviceScope.launch {
@@ -561,11 +562,21 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         )
         tintView = view
-        try { windowManager?.addView(view, wlp) } catch (e: Exception) {}
+        try {
+            windowManager?.addView(view, wlp)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to add grayscale tint overlay: ${e.message}")
+        }
     }
 
     private fun dismissOverlayTintFallback() {
-        tintView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        tintView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to remove grayscale tint overlay: ${e.message}")
+            }
+        }
         tintView = null
     }
 
@@ -812,7 +823,13 @@ class OverlayService : Service() {
 
     private fun dismissOverlay() {
         countdownJobUI?.cancel(); countdownJobUI = null
-        overlayView?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        overlayView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to remove overlay: ${e.message}")
+            }
+        }
         overlayView = null
     }
 

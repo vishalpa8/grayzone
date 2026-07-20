@@ -7,6 +7,12 @@ import java.util.concurrent.atomic.AtomicInteger
 
 object DnsPacketHelper {
 
+    data class DnsQuestionKey(
+        val domain: String,
+        val qType: Int,
+        val qClass: Int
+    )
+
     // Error counters for monitoring DNS packet manipulation failures
     private val domainParseErrors = AtomicInteger(0)
     private val sinkholeCreationErrors = AtomicInteger(0)
@@ -39,7 +45,7 @@ object DnsPacketHelper {
             if (protocol != 17) return false
 
             val ihl = (packet[0].toInt() and 0x0F) * 4
-            if (length < ihl + 8) return false
+            if (ihl < 20 || length < ihl + 8) return false
 
             val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
             return dstPort == 53
@@ -54,6 +60,50 @@ object DnsPacketHelper {
         return false
     }
 
+    fun getDnsPayloadOffset(packet: ByteArray, length: Int): Int? {
+        if (length < 28) return null
+
+        return when ((packet[0].toInt() and 0xF0) shr 4) {
+            4 -> {
+                val ihl = (packet[0].toInt() and 0x0F) * 4
+                if (ihl < 20 || length < ihl + 8) null else ihl + 8
+            }
+            6 -> if (length < 48) null else 48
+            else -> null
+        }
+    }
+
+    fun getDnsPayloadLength(packet: ByteArray, length: Int): Int? {
+        val dnsOffset = getDnsPayloadOffset(packet, length) ?: return null
+        val dnsLength = length - dnsOffset
+        return if (dnsLength > 0) dnsLength else null
+    }
+
+    fun getQuestionKey(packet: ByteArray, length: Int, normalizedDomain: String): DnsQuestionKey? {
+        return try {
+            val dnsOffset = getDnsPayloadOffset(packet, length) ?: return null
+            if (length < dnsOffset + 12) return null
+
+            var offset = dnsOffset + 12
+            while (offset < length) {
+                val labelLength = packet[offset].toInt() and 0xFF
+                offset++
+                if (labelLength == 0) break
+                if ((labelLength and 0xC0) == 0xC0) return null
+                if (labelLength > 63 || offset + labelLength > length) return null
+                offset += labelLength
+            }
+
+            if (offset + 4 > length) return null
+            val qType = ((packet[offset].toInt() and 0xFF) shl 8) or (packet[offset + 1].toInt() and 0xFF)
+            val qClass = ((packet[offset + 2].toInt() and 0xFF) shl 8) or (packet[offset + 3].toInt() and 0xFF)
+            DnsQuestionKey(normalizedDomain, qType, qClass)
+        } catch (e: Exception) {
+            domainParseErrors.incrementAndGet()
+            null
+        }
+    }
+
     fun getDomainName(packet: ByteArray, length: Int): String? {
         if (length < 28) return null
         try {
@@ -61,13 +111,16 @@ object DnsPacketHelper {
             val dnsOffset: Int
             if (version == 4) {
                 val ihl = (packet[0].toInt() and 0x0F) * 4
+                if (ihl < 20 || length < ihl + 20) return null
                 dnsOffset = ihl + 8
             } else if (version == 6) {
+                if (length < 60) return null
                 dnsOffset = 48
             } else {
                 return null
             }
 
+            if (length < dnsOffset + 12) return null
             val qdCount = ((packet[dnsOffset + 4].toInt() and 0xFF) shl 8) or (packet[dnsOffset + 5].toInt() and 0xFF)
             if (qdCount == 0) return null
 
@@ -78,6 +131,7 @@ object DnsPacketHelper {
                 val len = packet[offset].toInt() and 0xFF
                 if (len == 0) break
                 if ((len and 0xC0) == 0xC0) break
+                if (len > 63) return null
                 offset++
                 if (offset + len > length) return null
                 val label = String(packet, offset, len, StandardCharsets.US_ASCII)
@@ -98,90 +152,16 @@ object DnsPacketHelper {
     }
 
     fun createSinkholeResponse(requestPacket: ByteArray, requestLength: Int): ByteArray? {
+        // For robustness and RFC compliance, respond with NXDOMAIN rather than serving
+        // an A record. This avoids providing A/AAAA mismatched records and is broadly
+        // accepted by clients as an authoritative negative answer for blocked domains.
         try {
-            val version = (requestPacket[0].toInt() and 0xF0) shr 4
-            if (version == 6) {
-                ipv6PacketsProcessed.incrementAndGet()
-                return createSinkholeResponseIPv6(requestPacket, requestLength)
-            }
-
-            ipv4PacketsProcessed.incrementAndGet()
-            val ihl = (requestPacket[0].toInt() and 0x0F) * 4
-            val dnsOffset = ihl + 8
-
-            val newTotalLength = requestLength + 16
-            val response = ByteArray(newTotalLength)
-            System.arraycopy(requestPacket, 0, response, 0, requestLength)
-
-            // Update IP Total Length
-            response[2] = (newTotalLength shr 8).toByte()
-            response[3] = (newTotalLength and 0xFF).toByte()
-
-            // Swap IP addresses
-            for (i in 0..3) {
-                val tmp = response[12 + i]
-                response[12 + i] = response[16 + i]
-                response[16 + i] = tmp
-            }
-
-            // Update UDP Length
-            val newUdpLength = requestLength - ihl + 16
-            response[ihl + 4] = (newUdpLength shr 8).toByte()
-            response[ihl + 5] = (newUdpLength and 0xFF).toByte()
-
-            // Swap UDP ports
-            val sp1 = response[ihl]
-            val sp2 = response[ihl + 1]
-            response[ihl] = response[ihl + 2]
-            response[ihl + 1] = response[ihl + 3]
-            response[ihl + 2] = sp1
-            response[ihl + 3] = sp2
-
-            // UDP checksum optional in IPv4
-            response[ihl + 6] = 0
-            response[ihl + 7] = 0
-
-            // Modify DNS Flags to Standard Response (No error)
-            response[dnsOffset + 2] = 0x81.toByte()
-            response[dnsOffset + 3] = 0x80.toByte()
-
-            // Answer RRs = 1
-            response[dnsOffset + 6] = 0
-            response[dnsOffset + 7] = 1
-
-            // Append Answer Record (A record pointing to 0.0.0.0)
-            var offset = requestLength
-            // Name pointer to offset 12 in DNS header
-            response[offset++] = 0xC0.toByte()
-            response[offset++] = 0x0C.toByte()
-            // Type A (1)
-            response[offset++] = 0
-            response[offset++] = 1
-            // Class IN (1)
-            response[offset++] = 0
-            response[offset++] = 1
-            // TTL 60
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 60
-            // Data length 4
-            response[offset++] = 0
-            response[offset++] = 4
-            // IP 0.0.0.0
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset] = 0
-
-            computeIpChecksum(response, ihl)
-
-            return response
+            return createNxDomainResponse(requestPacket, requestLength)
         } catch (e: Exception) {
             sinkholeCreationErrors.incrementAndGet()
             GrayzoneLogger.e(
                 LogComponent.DNS,
-                "Failed to create sinkhole response (IPv4): ${e.message}",
+                "Failed to create sinkhole response (delegated to NXDOMAIN): ${e.message}",
                 e
             )
             return null
@@ -300,8 +280,11 @@ object DnsPacketHelper {
             response[ihl + 6] = 0
             response[ihl + 7] = 0
 
-            // Copy DNS payload
+            // Copy DNS payload and preserve the transaction ID expected by this request.
             System.arraycopy(dnsPayload, 0, response, ihl + 8, dnsLength)
+            val requestDnsOffset = getDnsPayloadOffset(requestPacket, requestPacket.size) ?: return null
+            response[ihl + 8] = requestPacket[requestDnsOffset]
+            response[ihl + 9] = requestPacket[requestDnsOffset + 1]
 
             computeIpChecksum(response, ihl)
             return response
@@ -456,6 +439,9 @@ object DnsPacketHelper {
             response[47] = 0
 
             System.arraycopy(dnsPayload, 0, response, 48, dnsLength)
+            val requestDnsOffset = getDnsPayloadOffset(requestPacket, requestPacket.size) ?: return null
+            response[48] = requestPacket[requestDnsOffset]
+            response[49] = requestPacket[requestDnsOffset + 1]
 
             computeUdpChecksumIPv6(response)
             return response

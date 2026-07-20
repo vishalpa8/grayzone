@@ -27,8 +27,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.*
 import com.grayzone.app.ui.theme.*
-import java.text.SimpleDateFormat
-import java.util.*
 
 data class HomeData(
     val monitoredCount: Int = 0
@@ -52,9 +50,10 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
                 batteryIssue = isBatteryOptimized(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
                 val monitored = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-                val dateKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                com.grayzone.app.data.StreakManager(context).checkDailyStreak(
-                    stayedUnderAllBudgets(prefs, monitored, dateKey)
+                val completedDateKey = DateUtils.getYesterdayDateKey()
+                com.grayzone.app.data.StreakManager(context).checkDailyStreakForDate(
+                    completedDateKey,
+                    stayedUnderAllBudgets(prefs, monitored, completedDateKey)
                 )
             }
         }
