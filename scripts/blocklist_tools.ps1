@@ -26,26 +26,30 @@ $ProgressPreference    = "SilentlyContinue"
 # BLOOM FILTER PARAMETERS
 # m = ceil(-n*ln(p)/ln(2)^2), k = round(m/n*ln(2))
 # p = 0.001 (0.1% FPR), k = 10 for both
+#
+# UPDATED BITS: Scaled up to support the massive ~2.5M+ domains 
+# from HaGeZi, OISD, and Block List Project to maintain a 0.1% FPR.
 # =============================================================================
-$AD_BITS    = [long]12222208   # 1.5 MB,  optimal for n=850k
-$ADULT_BITS = [long]2449408    # 299 KB,  optimal for n=180k
+$AD_BITS    = [long]33554432   # 4.0 MB, optimal for n ~2.3 million
+$ADULT_BITS = [long]41943040   # 5.0 MB, optimal for n ~2.9 million
 $K          = [int]10
 
 # =============================================================================
-# SOURCES  (all verified alive 2026-07-18)
+# SOURCES  (Aggressive & Updated for 2026)
+# Plain domain lists and Hosts formats are supported by the C# parser.
 # =============================================================================
 $AdSources = [ordered]@{
-    "StevenBlack unified"  = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
-    "Peter Lowe"           = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"
-    "AdGuard DNS filter 1" = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
-    "Hagezi Multi Pro"     = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt"
+    "HaGeZi Ultimate"        = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/ultimate.txt"
+    "OISD Big"               = "https://big.oisd.nl/"
+    "Block List Project Ads" = "https://blocklistproject.github.io/Lists/ads.txt"
+    "StevenBlack Unified"    = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
 }
 
 $AdultSources = [ordered]@{
-    "StevenBlack porn-only"              = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts"
-    "StevenBlack fakenews+gambling+porn" = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts"
-    "StevenBlack gambling+porn"          = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
-    "AdGuard DNS filter 2"               = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt"
+    "HaGeZi NSFW"             = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/nsfw.txt"
+    "OISD NSFW"               = "https://nsfw.oisd.nl/"
+    "Block List Project Porn" = "https://blocklistproject.github.io/Lists/porn.txt"
+    "StevenBlack Porn-Only"   = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts"
 }
 
 $DohDomains = @(
@@ -74,6 +78,7 @@ public static class BloomBuilder {
         if (h2 == 0) h2 = 1;
         for (int i = 0; i < k; i++) {
             long idx = (h1 + (long)i * h2) % bitCount;
+            if (idx < 0) idx += bitCount; // Safety for negative modulo
             bits[idx / 8] |= (byte)(1 << (int)(idx % 8));
         }
     }
@@ -107,7 +112,7 @@ public static class BloomBuilder {
 # =============================================================================
 
 function Invoke-Download([string]$Url) {
-    try { return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 60).Content -split "`n" }
+    try { return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 120).Content -split "`n" }
     catch { Write-Warning "Failed: $Url`n  $_"; return @() }
 }
 
@@ -125,7 +130,7 @@ function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label
                 [BloomBuilder]::AddDomain($bits, $BitCount, $NumHashes, $d)
             }
         }
-        Write-Host "  -> $($seen.Count) unique domains" -ForegroundColor DarkGray
+        Write-Host "  -> $($seen.Count) total unique domains so far" -ForegroundColor DarkGray
     }
     Write-Host "[$Label] $($seen.Count) unique domains inserted into filter" -ForegroundColor Green
     return @{ Bits = $bits; Count = $seen.Count }
@@ -135,7 +140,7 @@ function Save-BloomFile([string]$Path, [byte[]]$Bits, [long]$BitCount, [int]$Num
     # Header: magic(4) + version(4) + numHashes(4) + bitCount(8) = 20 bytes
     $hdr = New-Object byte[] 20
     $hdr[0]=0x47; $hdr[1]=0x5A; $hdr[2]=0x42; $hdr[3]=0x4C  # GZBL
-    $hdr[7]=1                                                  # version
+    $hdr[7]=1                                               # version
     # numHashes big-endian int32
     $hdr[8]  = [byte](($NumHashes -shr 24) -band 0xFF)
     $hdr[9]  = [byte](($NumHashes -shr 16) -band 0xFF)
@@ -155,7 +160,9 @@ function Save-BloomFile([string]$Path, [byte[]]$Bits, [long]$BitCount, [int]$Num
     $all = New-Object byte[] ($hdr.Length + $Bits.Length)
     [Array]::Copy($hdr,  0, $all, 0,           $hdr.Length)
     [Array]::Copy($Bits, 0, $all, $hdr.Length, $Bits.Length)
-    [System.IO.File]::WriteAllBytes((Resolve-Path .).Path + '\' + $Path, $all)
+    
+    $fullPath = Join-Path (Resolve-Path .).Path $Path
+    [System.IO.File]::WriteAllBytes($fullPath, $all)
 
     $kb = [int]($all.Length / 1024)
     Write-Host "  Saved: $Path  ($kb KB)" -ForegroundColor Cyan
