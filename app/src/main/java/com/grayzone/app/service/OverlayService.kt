@@ -1,4 +1,4 @@
-package com.grayzone.app.service
+﻿package com.grayzone.app.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -446,26 +446,34 @@ class OverlayService : Service() {
             return
         }
 
-        // Custom layout: title on the left, countdown timer pinned to the right.
-        // Using RemoteViews + Chronometer gives a smooth live countdown without
-        // the timer bleeding into the header row that setUsesChronometer produces.
         val rv = RemoteViews(this.packageName, R.layout.notification_countdown)
-        rv.setTextViewText(R.id.notif_title, "$appName — session active")
-        // Chronometer.base is relative to SystemClock.elapsedRealtime(), not wall-clock.
-        // Compute how many ms remain, then set base = elapsedRealtime + remainingMs
-        // so the countdown reads the correct value from the start.
+        rv.setTextViewText(R.id.notif_title, appName)
+        rv.setTextViewText(R.id.notif_subtitle, "Session active")
+
         val base = android.os.SystemClock.elapsedRealtime() + remainingMs
         rv.setChronometer(R.id.notif_timer, base, null, true)
         rv.setChronometerCountDown(R.id.notif_timer, true)
 
         nm.notify(NOTIF_ID,
             NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
+                .setSmallIcon(R.drawable.ic_stat_grayzone)
+                .setContentTitle(appName)
+                .setContentText("Session active")
+                .setSubText("Grayzone")
+                .setShowWhen(false)
                 .setCustomContentView(rv)
                 .setStyle(NotificationCompat.DecoratedCustomViewStyle())
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setColor(ContextCompat.getColor(this, android.R.color.black))
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        this, 0,
+                        Intent(this, MainActivity::class.java),
+                        PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
                 .build()
         )
     }
@@ -486,7 +494,7 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ─── Overlay UI ──────────────────────────────────────────────────────────
+    // â”€â”€â”€ Overlay UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private var daltonizerActive = false
 
@@ -509,9 +517,9 @@ class OverlayService : Service() {
         // the ITU-R BT.601 luminosity ColorMatrix. This actually desaturates every
         // pixel underneath rather than just washing the screen grey.
         //
-        // The matrix maps each pixel's (R,G,B) → luminance Y using:
+        // The matrix maps each pixel's (R,G,B) â†’ luminance Y using:
         //   Y = 0.299R + 0.587G + 0.114B
-        // and outputs (Y,Y,Y,A) — visually identical to true monochrome.
+        // and outputs (Y,Y,Y,A) â€” visually identical to true monochrome.
         if (tintView != null) return
 
         // Check if we still have overlay permission before attempting to add the tint view
@@ -531,7 +539,7 @@ class OverlayService : Service() {
         val view = object : View(this) {
             override fun onDraw(canvas: android.graphics.Canvas) {
                 // Cover the entire canvas with a transparent rect drawn through the
-                // desaturating paint — this forces every pixel through the ColorMatrix.
+                // desaturating paint â€” this forces every pixel through the ColorMatrix.
                 canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
             }
         }.apply {
@@ -703,7 +711,7 @@ class OverlayService : Service() {
         }
 
         val countdownView = TextView(ctx).apply {
-            text = if (isLocked) formatDuration(secondsRemaining) else if (isBudgetLock || isScheduleLock) "—" else "$secondsRemaining"
+            text = if (isLocked) formatDuration(secondsRemaining) else if (isBudgetLock || isScheduleLock) "â€”" else "$secondsRemaining"
             textSize = if (isLocked) 42f else 72f
             setTextColor(PURPLE)
             gravity = Gravity.CENTER
@@ -727,7 +735,7 @@ class OverlayService : Service() {
                 isLocked -> "Remaining lockout time"
                 isBudgetLock -> "Resets tomorrow"
                 isScheduleLock -> "Try again later"
-                else -> "Opening in $secondsRemaining seconds…"
+                else -> "Opening in $secondsRemaining secondsâ€¦"
             }
             textSize = 12f
             setTextColor(GREY)
@@ -736,7 +744,7 @@ class OverlayService : Service() {
         val subParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4); bottomMargin = dp(24) }
 
         val skipBtn = Button(ctx).apply {
-            text = if (isAnyLock) "← Leave App" else "← I'll Skip This"
+            text = if (isAnyLock) "â† Leave App" else "â† I'll Skip This"
             setTextColor(GREY)
             background = makeOutlineDrawable()
             textSize = 14f
@@ -799,9 +807,9 @@ class OverlayService : Service() {
                     if (!isAnyLock) markAppUnlocked(packageName)
                     dismissOverlay()
                 } else {
-                    countdownView.text = if (isLocked) formatDuration(remaining) else if (isBudgetLock || isScheduleLock) "—" else "$remaining"
+                    countdownView.text = if (isLocked) formatDuration(remaining) else if (isBudgetLock || isScheduleLock) "â€”" else "$remaining"
                     if (!isAnyLock) {
-                        subView.text = "Opening in $remaining seconds…"
+                        subView.text = "Opening in $remaining secondsâ€¦"
                         progress.progress = remaining
                     }
                 }
@@ -925,11 +933,13 @@ class OverlayService : Service() {
         NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
             .setContentText("Monitoring app usage to help you stay focused.")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
+            .setSmallIcon(R.drawable.ic_stat_grayzone)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .build()
 
 }
+
+
+

@@ -1,4 +1,4 @@
-package com.grayzone.app.service.vpn
+﻿package com.grayzone.app.service.vpn
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -273,10 +273,10 @@ class AdBlockVpnService : VpnService() {
 
     /**
      * Route a parsed DNS query domain:
-     *  1. Firefox DoH canary → NXDOMAIN (so Firefox disables DoH and uses system DNS)
-     *  2. Known DoH/DoT bypass endpoint → NXDOMAIN (force apps back to plain DNS53)
-     *  3. Blocked ad/adult domain → sinkhole (0.0.0.0)
-     *  4. Everything else → forward to real DNS with fallback servers
+     *  1. Firefox DoH canary â†’ NXDOMAIN (so Firefox disables DoH and uses system DNS)
+     *  2. Known DoH/DoT bypass endpoint â†’ NXDOMAIN (force apps back to plain DNS53)
+     *  3. Blocked ad/adult domain â†’ sinkhole (0.0.0.0)
+     *  4. Everything else â†’ forward to real DNS with fallback servers
      */
     private fun handleDnsQuery(
         domain: String,
@@ -287,26 +287,26 @@ class AdBlockVpnService : VpnService() {
         val normalizedDomain = BlocklistManager.normalizeDomain(domain)
 
         when {
-            // Firefox DoH canary — return NXDOMAIN so Firefox falls back to system DNS
+            // Firefox DoH canary â€” return NXDOMAIN so Firefox falls back to system DNS
             domain.equals("use-application-dns.net", ignoreCase = true) -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
-            // Known DoH/DoT resolver — return NXDOMAIN so the app can't resolve
+            // Known DoH/DoT resolver â€” return NXDOMAIN so the app can't resolve
             // the DoH endpoint and is forced to use plain DNS53 (which we intercept)
             normalizedDomain != null && BlocklistManager.isDoHBypass(normalizedDomain) -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
-            // Ad or adult content domain → sinkhole to 0.0.0.0
+            // Ad or adult content domain â†’ sinkhole to 0.0.0.0
             normalizedDomain != null && BlocklistManager.isBlocked(normalizedDomain) -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
                 writeSinkhole(packet, length, outputStream)
             }
 
-            // Allowed — forward to real DNS with fallback and deduplication
+            // Allowed â€” forward to real DNS with fallback and deduplication
             else -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED))
                 serviceScope.launch {
@@ -416,7 +416,7 @@ class AdBlockVpnService : VpnService() {
             }
             com.grayzone.app.GrayzoneLogger.w(
                 com.grayzone.app.LogComponent.DNS,
-                "DNS server $serverIp failed, trying next…"
+                "DNS server $serverIp failed, trying nextâ€¦"
             )
         }
         com.grayzone.app.GrayzoneLogger.e(
@@ -448,8 +448,7 @@ class AdBlockVpnService : VpnService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone Protection Active")
             .setContentText("DNS monitoring is securing your network.")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
+            .setSmallIcon(R.drawable.ic_stat_grayzone)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .addAction(0, "Stop", stopPending)
@@ -463,3 +462,4 @@ class AdBlockVpnService : VpnService() {
             .build()
     }
 }
+
