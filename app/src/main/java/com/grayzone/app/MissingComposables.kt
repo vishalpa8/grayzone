@@ -260,7 +260,7 @@ fun SettingsScreen() {
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(2000)
             currentTime = System.currentTimeMillis()
         }
     }

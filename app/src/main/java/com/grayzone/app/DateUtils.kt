@@ -90,6 +90,25 @@ object DateUtils {
     fun isSameDay(timestamp1: Long, timestamp2: Long): Boolean {
         return formatDateKey(timestamp1) == formatDateKey(timestamp2)
     }
+
+    /**
+     * Returns true when the runtime session state should be reset for a new day.
+     * Reset occurs once per day at midnight local time, keeping stats intact.
+     */
+    fun shouldResetDailyRuntimeState(now: Long, lastResetDateKey: String): Boolean {
+        val currentDateKey = dateKeyFormatter.get()!!.format(Date(now))
+        val midnightToday = Calendar.getInstance().apply {
+            timeInMillis = now
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val isAfterMidnight = now >= midnightToday
+        val isNewDay = lastResetDateKey != currentDateKey
+        return isAfterMidnight && isNewDay
+    }
     
     /**
      * Get the start of today (midnight) in milliseconds.

@@ -176,7 +176,7 @@ class AdBlockVpnService : VpnService() {
                 try {
                     val packet = ByteArray(32767)
                     val length = inputStream.read(packet)
-                    
+
                     if (length > 0) {
                         if (DnsPacketHelper.isDnsQuery(packet, length)) {
                             val domain = DnsPacketHelper.getDomainName(packet, length)

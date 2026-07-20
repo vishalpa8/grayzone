@@ -37,7 +37,7 @@ fun QuickFocusCard() {
                     isFocusMode = false
                     break
                 }
-                delay(1000)
+                delay(2000)
             }
         }
     }

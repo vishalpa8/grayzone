@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 
 data class AppInfo(val packageName: String, val name: String, val icon: Bitmap?)
 
+private const val APP_ICON_SIZE_PX = 40
+
 /**
  * App metadata cache with automatic refresh.
  * Prevents N+1 query pattern when loading app lists.
@@ -68,20 +70,25 @@ suspend fun getInstalledApps(context: Context): List<AppInfo> = withContext(Disp
     pm.queryIntentActivities(intent, 0).mapNotNull { info ->
         val pkg = info.activityInfo.packageName
         if (pkg == context.packageName) return@mapNotNull null
-        AppInfo(pkg, info.loadLabel(pm).toString(), drawableToBitmap(info.loadIcon(pm)))
+        val appName = info.loadLabel(pm).toString()
+        val icon = try {
+            drawableToBitmap(info.loadIcon(pm), APP_ICON_SIZE_PX)
+        } catch (_: Exception) {
+            null
+        }
+        AppInfo(pkg, appName, icon)
     }.distinctBy { it.packageName }.sortedBy { it.name.lowercase() }
 }
 
-fun drawableToBitmap(drawable: Drawable): Bitmap? {
-    val maxSize = 96
+fun drawableToBitmap(drawable: Drawable, maxSize: Int = APP_ICON_SIZE_PX): Bitmap? {
     if (drawable is BitmapDrawable && drawable.bitmap != null) {
         val src = drawable.bitmap
-        return if (src.width <= maxSize && src.height <= maxSize) src
-        else Bitmap.createScaledBitmap(src, maxSize, maxSize, true)
+        val scaled = if (src.width <= maxSize && src.height <= maxSize) src else Bitmap.createScaledBitmap(src, maxSize, maxSize, true)
+        return if (scaled.config == Bitmap.Config.RGB_565) scaled else scaled.copy(Bitmap.Config.RGB_565, false)
     }
     val w = if (drawable.intrinsicWidth > 0) minOf(drawable.intrinsicWidth, maxSize) else maxSize
     val h = if (drawable.intrinsicHeight > 0) minOf(drawable.intrinsicHeight, maxSize) else maxSize
-    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
     val c = Canvas(bmp)
     drawable.setBounds(0, 0, c.width, c.height)
     drawable.draw(c)

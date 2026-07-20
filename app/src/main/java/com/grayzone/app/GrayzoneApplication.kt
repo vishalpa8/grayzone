@@ -1,6 +1,7 @@
 package com.grayzone.app
 
 import android.app.Application
+import android.content.Context
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -26,6 +27,7 @@ class GrayzoneApplication : Application() {
         )
         
         validateConfiguration()
+        resetRuntimeStateIfNeeded()
         schedulePeriodicCleanup()
     }
     
@@ -98,6 +100,34 @@ class GrayzoneApplication : Application() {
         }
     }
     
+    /**
+     * Clears runtime-only session state once per day after noon while preserving stats.
+     */
+    private fun resetRuntimeStateIfNeeded() {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        val lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + "runtime", "") ?: ""
+        val now = System.currentTimeMillis()
+
+        if (!DateUtils.shouldResetDailyRuntimeState(now, lastResetDateKey)) {
+            return
+        }
+
+        val editor = prefs.edit()
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        monitoredApps.forEach { pkg ->
+            editor.remove(PrefsKeys.ACTIVE_UNTIL + pkg)
+                .remove(PrefsKeys.LOCKED_UNTIL + pkg)
+                .remove(PrefsKeys.REMAINING_MILLIS + pkg)
+        }
+        editor.putString(PrefsKeys.DAILY_RESET_DATE + "runtime", DateUtils.getCurrentDateKey())
+            .apply()
+
+        GrayzoneLogger.i(
+            LogComponent.BOOT,
+            "Runtime session state reset for a new day after noon; stats preserved"
+        )
+    }
+
     /**
      * Schedule weekly database cleanup to prevent unbounded growth.
      */

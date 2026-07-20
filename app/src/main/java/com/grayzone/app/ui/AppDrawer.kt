@@ -52,7 +52,7 @@ fun AppDrawerContent(
         while (true) {
             vpnRunning  = AdBlockVpnService.isRunning
             wifiEnabled = wifiManager.isWifiEnabled
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(3000)
         }
     }
 

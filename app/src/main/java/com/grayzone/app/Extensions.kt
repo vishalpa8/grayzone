@@ -24,6 +24,18 @@ fun formatDuration(seconds: Int): String {
     else String.format("%dm %ds", mins, secs)
 }
 
+private const val MAX_PAUSED_SESSION_MILLIS = 24L * 60 * 60 * 1000L
+
+/**
+ * Returns a pause duration only while it is still within the supported 24-hour window.
+ * Any stale or oversized values are treated as expired and reset to zero.
+ */
+fun getNormalizedRemainingMillis(remainingMillis: Long): Long = when {
+    remainingMillis <= 0L -> 0L
+    remainingMillis >= MAX_PAUSED_SESSION_MILLIS -> 0L
+    else -> remainingMillis
+}
+
 // ─── Lock-State Guard ─────────────────────────────────────────────────────────
 
 /**
@@ -40,7 +52,7 @@ fun isAnyAppLocked(
 ): Boolean = monitoredApps.any { pkg ->
     val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL  + pkg, 0L)
     val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL  + pkg, 0L)
-    val remaining   = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+    val remaining   = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
     (now < activeUntil) || (now in (activeUntil + 1)..lockedUntil) || (remaining > 0)
 }
 

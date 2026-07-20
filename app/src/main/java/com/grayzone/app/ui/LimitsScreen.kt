@@ -36,10 +36,10 @@ fun LimitsScreen() {
         isLoading = false
     }
 
-    // Ticker for live lock detection
+    // Ticker for live lock detection; refresh at a lower cadence to reduce wakeups.
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(2000)
             currentTime = System.currentTimeMillis()
         }
     }
@@ -89,9 +89,10 @@ fun LimitsScreen() {
                     val lockedUntil = state.lockedUntil
                     val remaining = state.remainingMillis
                     
+                    val normalizedRemaining = getNormalizedRemainingMillis(remaining)
                     val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
                     val isActive = currentTime < activeUntil
-                    val isPaused = remaining > 0
+                    val isPaused = normalizedRemaining > 0
 
                     val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + app.packageName, false)
                     val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
@@ -119,7 +120,7 @@ fun LimitsScreen() {
                                     val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
                                     Text("⏳ Active (${remainingMins}m)", color = GZGreen.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 } else if (isPaused) {
-                                    val remainingMins = (remaining / (60 * 1000)).coerceAtLeast(1)
+                                    val remainingMins = (normalizedRemaining / (60 * 1000)).coerceAtLeast(1)
                                     Text("⏸ Paused (${remainingMins}m)", color = GZAmber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 } else {
                                     Text("Ready", color = GZTextSecondary, fontSize = 12.sp)

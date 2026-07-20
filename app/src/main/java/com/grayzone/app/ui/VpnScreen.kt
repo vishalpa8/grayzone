@@ -45,11 +45,11 @@ fun VpnScreen(onBack: () -> Unit = {}) {
 
     var vpnRunning by remember { mutableStateOf(AdBlockVpnService.isRunning) }
 
-    // Poll VPN state every second — lightweight, no broadcast needed
+    // Poll VPN state less frequently to reduce wakeups.
     LaunchedEffect(Unit) {
         while (true) {
             vpnRunning = AdBlockVpnService.isRunning
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(3000)
         }
     }
 

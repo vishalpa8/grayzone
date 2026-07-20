@@ -36,6 +36,7 @@ import com.grayzone.app.MainActivity
 import com.grayzone.app.Prompts
 import com.grayzone.app.formatDuration
 import com.grayzone.app.getAppName
+import com.grayzone.app.getNormalizedRemainingMillis
 import com.grayzone.app.data.StreakManager
 import com.grayzone.app.data.UsageDatabase
 import com.grayzone.app.data.UsageEvent
@@ -212,13 +213,19 @@ class OverlayService : Service() {
                 // Pause session if time remaining
                 val oldActiveUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + oldPackage, 0L)
                 if (now < oldActiveUntil) {
-                    val remaining = oldActiveUntil - now
+                    val remaining = getNormalizedRemainingMillis(oldActiveUntil - now)
                     if (remaining > 0) {
                         prefs.edit()
                             .putLong(PrefsKeys.REMAINING_MILLIS + oldPackage, remaining)
                             .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
                             .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
                             .commit()  // Synchronous for atomicity
+                    } else {
+                        prefs.edit()
+                            .remove(PrefsKeys.REMAINING_MILLIS + oldPackage)
+                            .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
+                            .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
+                            .commit()
                     }
                 }
             }
@@ -280,45 +287,49 @@ class OverlayService : Service() {
                 serviceScope.launch(Dispatchers.Main) { 
                     showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.LOCK, lockedUntil) 
                 }
-            } else if (remainingMillis > 0 && remainingMillis < 24 * 60 * 60 * 1000) {
-                // Resume paused session (with bounds check: 1ms to 24 hours)
-                val newActiveUntil = now + remainingMillis
-                
-                // Sanity check for clock skew
-                if (newActiveUntil > now) {
-                    val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + currentPkg, false)
-                    val lockoutMins = if (hasCustom) {
-                        prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + currentPkg, 60)
-                    } else {
-                        prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-                    }
-                    val newLockedUntil = newActiveUntil + (lockoutMins * 60 * 1000L)
-                    
-                    prefs.edit()
-                        .putLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, newActiveUntil)
-                        .putLong(PrefsKeys.LOCKED_UNTIL + currentPkg, newLockedUntil)
-                        .remove(PrefsKeys.REMAINING_MILLIS + currentPkg)
-                        .commit()  // Synchronous for atomicity
-                    
-                    serviceScope.launch(Dispatchers.Main) { showTint() }
-                    startCountdownNotification(currentPkg, newActiveUntil)
-                    sessionStartTime = now
-                    scheduleLockoutCheck(currentPkg, remainingMillis)
-                } else {
-                    // Clock skew detected, clear stale data
-                    com.grayzone.app.GrayzoneLogger.w(
-                        com.grayzone.app.LogComponent.SESSION,
-                        "Clock skew detected, clearing stale session data"
-                    )
-                    prefs.edit().remove(PrefsKeys.REMAINING_MILLIS + currentPkg).commit()
-                    serviceScope.launch(Dispatchers.Main) { 
-                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L) 
-                    }
-                }
             } else {
-                // Show friction overlay
-                serviceScope.launch(Dispatchers.Main) { 
-                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L) 
+                val normalizedRemainingMillis = getNormalizedRemainingMillis(remainingMillis)
+                if (normalizedRemainingMillis > 0) {
+                    // Resume paused session (with bounds check: 1ms to 24 hours)
+                    val newActiveUntil = now + normalizedRemainingMillis
+
+                    // Sanity check for clock skew
+                    if (newActiveUntil > now) {
+                        val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + currentPkg, false)
+                        val lockoutMins = if (hasCustom) {
+                            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + currentPkg, 60)
+                        } else {
+                            prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+                        }
+                        val newLockedUntil = newActiveUntil + (lockoutMins * 60 * 1000L)
+
+                        prefs.edit()
+                            .putLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, newActiveUntil)
+                            .putLong(PrefsKeys.LOCKED_UNTIL + currentPkg, newLockedUntil)
+                            .remove(PrefsKeys.REMAINING_MILLIS + currentPkg)
+                            .commit()  // Synchronous for atomicity
+
+                        serviceScope.launch(Dispatchers.Main) { showTint() }
+                        startCountdownNotification(currentPkg, newActiveUntil)
+                        sessionStartTime = now
+                        scheduleLockoutCheck(currentPkg, normalizedRemainingMillis)
+                    } else {
+                        // Clock skew detected, clear stale data
+                        com.grayzone.app.GrayzoneLogger.w(
+                            com.grayzone.app.LogComponent.SESSION,
+                            "Clock skew detected, clearing stale session data"
+                        )
+                        prefs.edit().remove(PrefsKeys.REMAINING_MILLIS + currentPkg).commit()
+                        serviceScope.launch(Dispatchers.Main) {
+                            showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
+                        }
+                    }
+                } else {
+                    // Clear stale pause data and show friction overlay
+                    prefs.edit().remove(PrefsKeys.REMAINING_MILLIS + currentPkg).commit()
+                    serviceScope.launch(Dispatchers.Main) {
+                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
+                    }
                 }
             }
         } finally {
@@ -835,6 +846,7 @@ class OverlayService : Service() {
         val lockedUntil = activeUntil + (validLockoutMins * 60 * 1000L)
 
         prefs.edit()
+            .remove(PrefsKeys.REMAINING_MILLIS + packageName)
             .putLong(PrefsKeys.ACTIVE_UNTIL + packageName, activeUntil)
             .putLong(PrefsKeys.LOCKED_UNTIL + packageName, lockedUntil)
             .apply()

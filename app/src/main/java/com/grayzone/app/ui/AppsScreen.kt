@@ -52,10 +52,10 @@ fun AppsScreen() {
         isLoading = false
     }
     
-    // Ticker for live lock detection
+    // Ticker for live lock detection; refresh at a lower cadence to reduce wakeups.
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(2000)
             currentTime = System.currentTimeMillis()
         }
     }
@@ -209,8 +209,9 @@ fun AppsScreen() {
                     val lockedUntil = state.lockedUntil
                     val remaining = state.remainingMillis
                     
+                    val normalizedRemaining = getNormalizedRemainingMillis(remaining)
                     val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
-                    val isActiveOrPaused = currentTime < activeUntil || remaining > 0
+                    val isActiveOrPaused = currentTime < activeUntil || normalizedRemaining > 0
 
                     val statusText = when {
                         isAppLocked -> {
@@ -221,8 +222,8 @@ fun AppsScreen() {
                             val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
                             "⏳ Session Active ($remainingMins m left)"
                         }
-                        remaining > 0 -> {
-                            val remainingMins = (remaining / (60 * 1000)).coerceAtLeast(1)
+                        normalizedRemaining > 0 -> {
+                            val remainingMins = (normalizedRemaining / (60 * 1000)).coerceAtLeast(1)
                             "⏳ Session Paused ($remainingMins m left)"
                         }
                         else -> null
