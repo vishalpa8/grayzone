@@ -112,9 +112,12 @@ class OverlayService : Service() {
     
     // Broadcast receiver for AccessibilityService events (replaces polling)
     private var appChangeReceiver: BroadcastReceiver? = null
+    
+    private val policyEngine = com.grayzone.app.policy.SessionPolicyEngine()
 
     override fun onCreate() {
         super.onCreate()
+        com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(true)
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -190,15 +193,8 @@ class OverlayService : Service() {
 
     private suspend fun processForegroundAppChanged(currentPkg: String) {
         try {
-            // Skip system packages and apps without launcher intent
-            if (currentPkg == packageName || !hasLauncherIntent(currentPkg)) {
-                return
-            }
-
-            // Early exit if same app (before updating state)
-            if (currentPkg == lastForegroundPackage) {
-                return
-            }
+            if (currentPkg == packageName || !hasLauncherIntent(currentPkg)) return
+            if (currentPkg == lastForegroundPackage) return
 
             val oldPackage = lastForegroundPackage
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
@@ -210,141 +206,132 @@ class OverlayService : Service() {
                 mapOf("from" to (oldPackage ?: "null"), "to" to currentPkg)
             )
 
+            // 1. Process Background Event for old package
             if (oldPackage != null) {
-                cancelCountdownNotification()
-
-                if (sessionStartTime > 0) {
-                    logUsageAndCheckBudget(oldPackage, sessionStartTime)
-                    sessionStartTime = 0L
-                }
-
-                // Pause session if time remaining
-                val oldActiveUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + oldPackage, 0L)
-                if (now < oldActiveUntil) {
-                    val remaining = getNormalizedRemainingMillis(oldActiveUntil - now)
-                    if (remaining > 0) {
-                        prefs.edit()
-                            .putLong(PrefsKeys.REMAINING_MILLIS + oldPackage, remaining)
-                            .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
-                            .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
-                            .commit()
-                    } else {
-                        prefs.edit()
-                            .remove(PrefsKeys.REMAINING_MILLIS + oldPackage)
-                            .remove(PrefsKeys.ACTIVE_UNTIL + oldPackage)
-                            .remove(PrefsKeys.LOCKED_UNTIL + oldPackage)
-                            .commit()
-                    }
-                }
+                val oldState = buildSessionState(oldPackage, prefs, now)
+                val bgDuration = if (sessionStartTime > 0) now - sessionStartTime else 0L
+                val bgCommands = policyEngine.evaluate(
+                    com.grayzone.app.policy.AppEvent.AppBackgrounded(oldPackage, bgDuration), 
+                    oldState, 
+                    now, 
+                    getAppName(oldPackage)
+                )
+                bgCommands.forEach { executeCommand(it, prefs) }
+                sessionStartTime = 0L
             }
 
             lastForegroundPackage = currentPkg
-
-            // Check if monitoring is globally disabled
-            if (!prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) {
-                serviceScope.launch(Dispatchers.Main) { dismissTint() }
-                return
+            
+            // 2. Process Foreground Event for new package
+            val newState = buildSessionState(currentPkg, prefs, now)
+            val fgCommands = policyEngine.evaluate(
+                com.grayzone.app.policy.AppEvent.AppForegrounded(currentPkg),
+                newState,
+                now,
+                getAppName(currentPkg)
+            )
+            
+            var didShowWaitScreen = false
+            fgCommands.forEach { cmd ->
+                if (cmd is com.grayzone.app.policy.SessionCommand.ShowWaitScreen) didShowWaitScreen = true
+                executeCommand(cmd, prefs)
             }
-
-            // Check if this app is monitored
-            val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-            if (!monitoredApps.contains(currentPkg)) {
-                serviceScope.launch(Dispatchers.Main) { dismissTint() }
-                return
-            }
-
-            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + currentPkg, 0L)
-            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, 0L)
-            val remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + currentPkg, 0L)
-
-            // 1. Enforce Schedule Lock
-            if (scheduleManager.isCurrentlyScheduled()) {
-                serviceScope.launch(Dispatchers.Main) {
-                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.SCHEDULE_LOCK, 0L)
-                }
-                return
-            }
-
-            // 2. Enforce Daily Budget Lock
-            val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + currentPkg, 0)
-            if (budgetMins > 0) {
-                val dateKey = DateUtils.getCurrentDateKey()
-                val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + currentPkg, "")
-                val usedMs = if (lastReset == dateKey) {
-                    prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + currentPkg, 0L)
-                } else 0L
-
-                if (usedMs >= budgetMins * 60 * 1000L) {
-                    serviceScope.launch(Dispatchers.Main) {
-                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.BUDGET_LOCK, 0L)
-                    }
-                    return
-                }
-            }
-
-            // 3. Handle Timed Sessions
-            if (now < activeUntil) {
-                // Resume active session
-                serviceScope.launch(Dispatchers.Main) { showTint() }
-                startCountdownNotification(currentPkg, activeUntil)
+            
+            // If wait screen wasn't shown (meaning session active or dismissed), we start timing
+            if (!didShowWaitScreen && newState.hasActiveSession(now) && newState.isMonitored) {
                 sessionStartTime = now
-                scheduleLockoutCheck(currentPkg, activeUntil - now)
-            } else if (now < lockedUntil) {
-                // Show lockout screen
-                serviceScope.launch(Dispatchers.Main) {
-                    showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.LOCK, lockedUntil)
-                }
-            } else {
-                val normalizedRemainingMillis = getNormalizedRemainingMillis(remainingMillis)
-                if (normalizedRemainingMillis > 0) {
-                    // Resume paused session (with bounds check: 1ms to 24 hours)
-                    val newActiveUntil = now + normalizedRemainingMillis
-
-                    // Sanity check for clock skew
-                    if (newActiveUntil > now) {
-                        val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + currentPkg, false)
-                        val lockoutMins = if (hasCustom) {
-                            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + currentPkg, 60)
-                        } else {
-                            prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-                        }
-                        val newLockedUntil = newActiveUntil + (lockoutMins * 60 * 1000L)
-
-                        prefs.edit()
-                            .putLong(PrefsKeys.ACTIVE_UNTIL + currentPkg, newActiveUntil)
-                            .putLong(PrefsKeys.LOCKED_UNTIL + currentPkg, newLockedUntil)
-                            .remove(PrefsKeys.REMAINING_MILLIS + currentPkg)
-                            .commit()
-
-                        serviceScope.launch(Dispatchers.Main) { showTint() }
-                        startCountdownNotification(currentPkg, newActiveUntil)
-                        sessionStartTime = now
-                        scheduleLockoutCheck(currentPkg, normalizedRemainingMillis)
-                    } else {
-                        // Clock skew detected, clear stale data
-                        com.grayzone.app.GrayzoneLogger.w(
-                            com.grayzone.app.LogComponent.SESSION,
-                            "Clock skew detected, clearing stale session data"
-                        )
-                        prefs.edit().remove(PrefsKeys.REMAINING_MILLIS + currentPkg).commit()
-                        serviceScope.launch(Dispatchers.Main) {
-                            showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
-                        }
-                    }
-                } else {
-                    // Clear stale pause data and show friction overlay
-                    prefs.edit().remove(PrefsKeys.REMAINING_MILLIS + currentPkg).commit()
-                    serviceScope.launch(Dispatchers.Main) {
-                        showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
-                    }
-                }
             }
+
         } catch (e: Exception) {
-            GrayzoneLogger.e(
-                LogComponent.OVERLAY,
+            com.grayzone.app.GrayzoneLogger.e(
+                com.grayzone.app.LogComponent.OVERLAY,
                 "Failed to process foreground app change",
                 e
             )
+        }
+    }
+    
+    private fun buildSessionState(pkg: String, prefs: android.content.SharedPreferences, now: Long): com.grayzone.app.policy.SessionState {
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        val isMonitored = monitoredApps.contains(pkg)
+        val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
+        val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+        val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+        val remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+        
+        val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
+        val defaultSessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
+        val defaultLockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + pkg, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+
+        // Calculate budget
+        val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+        var budgetRemainingMs = Long.MAX_VALUE
+        if (budgetMins > 0) {
+            val dateKey = DateUtils.getCurrentDateKey()
+            val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
+            val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) else 0L
+            budgetRemainingMs = (budgetMins * 60 * 1000L) - usedMs
+        }
+
+        return com.grayzone.app.policy.SessionState(
+            packageName = pkg,
+            isMonitored = isMonitored,
+            isGrayzoneEnabled = isGrayzoneEnabled,
+            activeUntil = activeUntil,
+            lockedUntil = lockedUntil,
+            budgetRemainingMs = budgetRemainingMs,
+            sessionRemainingMs = remainingMillis,
+            defaultSessionMins = defaultSessionMins,
+            defaultLockoutMins = defaultLockoutMins,
+            isScheduleLocked = scheduleManager.isCurrentlyScheduled()
+        )
+    }
+    
+    private suspend fun executeCommand(cmd: com.grayzone.app.policy.SessionCommand, prefs: android.content.SharedPreferences) {
+        val now = System.currentTimeMillis()
+        when (cmd) {
+            is com.grayzone.app.policy.SessionCommand.DismissOverlay -> {
+                serviceScope.launch(Dispatchers.Main) { dismissTint() }
+            }
+            is com.grayzone.app.policy.SessionCommand.ShowWaitScreen -> {
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(cmd.packageName, cmd.appName, com.grayzone.app.OverlayMode.FRICTION, 0L)
+                }
+            }
+            is com.grayzone.app.policy.SessionCommand.ShowLockoutScreen -> {
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(cmd.packageName, cmd.appName, com.grayzone.app.OverlayMode.LOCK, cmd.lockedUntil)
+                }
+            }
+            is com.grayzone.app.policy.SessionCommand.ShowScheduleLockScreen -> {
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(cmd.packageName, cmd.appName, com.grayzone.app.OverlayMode.SCHEDULE_LOCK, 0L)
+                }
+            }
+            is com.grayzone.app.policy.SessionCommand.RecordUsage -> {
+                logUsageAndCheckBudget(cmd.packageName, now - cmd.durationMs)
+            }
+            is com.grayzone.app.policy.SessionCommand.UpdateState -> {
+                val editor = prefs.edit()
+                cmd.newActiveUntil?.let { editor.putLong(PrefsKeys.ACTIVE_UNTIL + cmd.packageName, it) }
+                cmd.newLockedUntil?.let { editor.putLong(PrefsKeys.LOCKED_UNTIL + cmd.packageName, it) }
+                cmd.newSessionRemainingMs?.let { editor.putLong(PrefsKeys.REMAINING_MILLIS + cmd.packageName, it) }
+                if (cmd.clearActiveSession) {
+                    editor.remove(PrefsKeys.ACTIVE_UNTIL + cmd.packageName)
+                    editor.remove(PrefsKeys.LOCKED_UNTIL + cmd.packageName)
+                }
+                
+                if (cmd.newActiveUntil != null) {
+                    val activeUntil = cmd.newActiveUntil
+                    serviceScope.launch(Dispatchers.Main) { showTint() }
+                    startCountdownNotification(cmd.packageName, activeUntil)
+                    scheduleLockoutCheck(cmd.packageName, activeUntil - now)
+                }
+                editor.commit()
+            }
+            is com.grayzone.app.policy.SessionCommand.CancelCountdownNotification -> {
+                cancelCountdownNotification()
+            }
         }
     }
     /**
@@ -490,6 +477,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(false)
         appChangeReceiver?.let { unregisterReceiver(it) }
         serviceScope.cancel()
         dismissOverlay()

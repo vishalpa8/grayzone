@@ -38,7 +38,8 @@ fun AppDrawerContent(
     onClose: () -> Unit,
     onNavigate: (DrawerDestination) -> Unit = {}
 ) {
-    var vpnRunning by remember { mutableStateOf(AdBlockVpnService.isRunning) }
+    val protectionStatus by com.grayzone.app.data.ProtectionHealthRepository.status.collectAsState()
+    val vpnRunning = protectionStatus.vpnActive
 
     // WiFi connected state
     val context     = LocalContext.current
@@ -50,7 +51,6 @@ fun AppDrawerContent(
 
     LaunchedEffect(Unit) {
         while (true) {
-            vpnRunning  = AdBlockVpnService.isRunning
             wifiEnabled = wifiManager.isWifiEnabled
             kotlinx.coroutines.delay(3000)
         }

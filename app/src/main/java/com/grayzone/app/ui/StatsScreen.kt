@@ -77,18 +77,7 @@ fun StatsScreen() {
                 val total    = dao.getTotalEventCount()
                 
                 val totals = dao.getStartTimeTotals()
-                val peak = if (totals.isEmpty()) {
-                    null
-                } else {
-                    val hourTotals = mutableMapOf<Int, Long>()
-                    val hourCal = Calendar.getInstance()
-                    for (row in totals) {
-                        hourCal.timeInMillis = row.startTime
-                        val hour = hourCal.get(Calendar.HOUR_OF_DAY)
-                        hourTotals[hour] = (hourTotals[hour] ?: 0L) + row.totalMillis
-                    }
-                    hourTotals.maxByOrNull { it.value }?.key
-                }
+                val peak = totals.maxByOrNull { it.totalMillis }?.startTime?.toInt()
 
                 StatsSnapshot(blocked, savedMs, daily, weekly, total, peak)
             }

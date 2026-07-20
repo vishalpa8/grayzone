@@ -38,26 +38,10 @@ object DnsPacketHelper {
 
     fun isDnsQuery(packet: ByteArray, length: Int): Boolean {
         if (length < 28) return false
-
-        val version = (packet[0].toInt() and 0xF0) shr 4
-        if (version == 4) {
-            val protocol = packet[9].toInt() and 0xFF
-            if (protocol != 17) return false
-
-            val ihl = (packet[0].toInt() and 0x0F) * 4
-            if (ihl < 20 || length < ihl + 8) return false
-
-            val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
-            return dstPort == 53
-        } else if (version == 6) {
-            if (length < 48) return false
-            val nextHeader = packet[6].toInt() and 0xFF
-            if (nextHeader != 17) return false
-
-            val dstPort = ((packet[42].toInt() and 0xFF) shl 8) or (packet[43].toInt() and 0xFF)
-            return dstPort == 53
-        }
-        return false
+        val offset = getDnsPayloadOffset(packet, length) ?: return false
+        val udpOffset = offset - 8
+        val dstPort = ((packet[udpOffset + 2].toInt() and 0xFF) shl 8) or (packet[udpOffset + 3].toInt() and 0xFF)
+        return dstPort == 53
     }
 
     fun getDnsPayloadOffset(packet: ByteArray, length: Int): Int? {
@@ -68,7 +52,29 @@ object DnsPacketHelper {
                 val ihl = (packet[0].toInt() and 0x0F) * 4
                 if (ihl < 20 || length < ihl + 8) null else ihl + 8
             }
-            6 -> if (length < 48) null else 48
+            6 -> {
+                if (length < 48) return null
+                var offset = 40
+                var nextHeader = packet[6].toInt() and 0xFF
+                
+                while (offset < length && nextHeader != 17 && nextHeader != 59) {
+                    if (nextHeader == 0 || nextHeader == 43 || nextHeader == 60 || nextHeader == 44 || nextHeader == 51) {
+                        if (offset + 2 > length) return null
+                        val extLen = packet[offset + 1].toInt() and 0xFF
+                        val headerLen = if (nextHeader == 44) 8 else (extLen + 1) * 8
+                        nextHeader = packet[offset].toInt() and 0xFF
+                        offset += headerLen
+                    } else {
+                        return null
+                    }
+                }
+                
+                if (nextHeader == 17) {
+                    if (length < offset + 8) return null
+                    return offset + 8
+                }
+                return null
+            }
             else -> null
         }
     }

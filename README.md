@@ -17,7 +17,7 @@ Grayzone is an open-source Android digital wellbeing application designed to hel
 
 Grayzone leverages Android's Accessibility Services, System Alert Windows, and VpnService to monitor app usage and enforce limits securely and reliably.
 
-- **`AppAccessibilityService`**: Monitors foreground window transitions. Detects when you open or leave a monitored app and enforces session timers and grayscale modes.
+- **`GrayzoneAccessibilityService`**: Monitors foreground window transitions. Detects when you open or leave a monitored app and enforces session timers and grayscale modes.
 - **`OverlayService`**: Uses `WindowManager` with `TYPE_APPLICATION_OVERLAY` to draw the friction wait screen and lockout screens on top of blocked apps.
 - **`AdBlockVpnService` & `GrayzoneBloomFilter`**: A lightweight local VPN that intercepts port 53 UDP traffic. It uses a custom, highly-optimized binary Bloom filter (~2MB RAM) to match domains against nearly 1 million blocklist entries in `O(1)` time with zero disk I/O per query.
 - **`MainActivity`**: A modern Jetpack Compose-based UI for managing your monitored apps and viewing your live dashboard.
@@ -30,6 +30,12 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
   - **Display over other apps**: To draw the lockout and friction overlays.
   - **VPN Service**: To route and filter DNS traffic (requested at runtime).
   - **Write Secure Settings**: To toggle Android's true hardware grayscale daltonizer (`WRITE_SECURE_SETTINGS` granted via ADB).
+
+## Privacy and Persistence
+
+Grayzone keeps usage history, monitored app settings, schedules, custom prompts, and VPN restore intent locally on the device. Android cloud backup and device-transfer extraction are disabled for the app, and backup rules explicitly exclude Grayzone SharedPreferences and the Room usage database.
+
+If the DNS blocker was successfully enabled, Grayzone persists that restore intent so the VPN can be restarted after reboot. Explicitly turning the VPN off clears that intent; ordinary service teardown does not.
 
 ## Setup & Build Instructions
 

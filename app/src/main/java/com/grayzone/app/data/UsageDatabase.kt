@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [UsageEvent::class], version = 2, exportSchema = false)
+@Database(entities = [UsageEvent::class], version = 2, exportSchema = true)
 abstract class UsageDatabase : RoomDatabase() {
 
     abstract fun usageDao(): UsageDao
@@ -21,7 +21,7 @@ abstract class UsageDatabase : RoomDatabase() {
          * 
          * Impact: 50-100x faster queries on large datasets (>10k events).
          */
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Add indexes for common query patterns
                 db.execSQL("CREATE INDEX IF NOT EXISTS idx_date_key ON usage_events(dateKey)")

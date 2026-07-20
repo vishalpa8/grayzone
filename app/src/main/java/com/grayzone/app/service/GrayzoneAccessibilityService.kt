@@ -51,6 +51,7 @@ class GrayzoneAccessibilityService : AccessibilityService() {
         }
         
         serviceInfo = info
+        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(true)
         Log.d(TAG, "Accessibility service connected - monitoring foreground app changes")
     }
 
@@ -83,6 +84,7 @@ class GrayzoneAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
         Log.d(TAG, "Accessibility service destroyed")
     }
 }

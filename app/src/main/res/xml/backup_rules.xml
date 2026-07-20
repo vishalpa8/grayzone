@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="sharedpref" path="GrayzonePrefs.xml" />
+    <exclude domain="sharedpref" path="wifi_screen_prefs.xml" />
+    <exclude domain="database" path="grayzone_usage.db" />
+    <exclude domain="database" path="grayzone_usage.db-shm" />
+    <exclude domain="database" path="grayzone_usage.db-wal" />
+</full-backup-content>

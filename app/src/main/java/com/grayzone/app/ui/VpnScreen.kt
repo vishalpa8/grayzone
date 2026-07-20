@@ -43,23 +43,14 @@ fun VpnScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
     val prefs   = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
-    var vpnRunning by remember { mutableStateOf(AdBlockVpnService.isRunning) }
-
-    // Poll VPN state less frequently to reduce wakeups.
-    LaunchedEffect(Unit) {
-        while (true) {
-            vpnRunning = AdBlockVpnService.isRunning
-            kotlinx.coroutines.delay(3000)
-        }
-    }
+    val protectionStatus by com.grayzone.app.data.ProtectionHealthRepository.status.collectAsState()
+    val vpnRunning = protectionStatus.vpnActive
 
     val vpnPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             startVpnService(context)
-            prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, true).apply()
-            vpnRunning = true
         }
     }
 
@@ -137,13 +128,10 @@ fun VpnScreen(onBack: () -> Unit = {}) {
                                 vpnPermLauncher.launch(permIntent)
                             } else {
                                 startVpnService(context)
-                                prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, true).apply()
-                                vpnRunning = true
                             }
                         } else {
                             stopVpnService(context)
                             prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
-                            vpnRunning = false
                         }
                     },
                     colors = SwitchDefaults.colors(

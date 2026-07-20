@@ -28,6 +28,8 @@ import com.grayzone.app.ui.HomeScreen
 import com.grayzone.app.ui.LimitsScreen
 import com.grayzone.app.ui.StatsScreen
 import com.grayzone.app.ui.WifiScreen
+import com.grayzone.app.ui.OnboardingScreen
+import com.grayzone.app.ui.SettingsScreen
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.launch
 

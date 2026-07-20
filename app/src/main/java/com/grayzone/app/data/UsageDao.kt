@@ -43,16 +43,14 @@ interface UsageDao {
     @Query("SELECT * FROM usage_events WHERE dateKey = :dateKey ORDER BY startTime DESC")
     suspend fun getEventsForDate(dateKey: String): List<UsageEvent>
 
-    /** All events for advanced analytics. */
-    @Query("SELECT * FROM usage_events")
-    suspend fun getAllEvents(): List<UsageEvent>
+
 
     /**
-     * Returns total durationMillis per startTime bucket for peak-hour detection.
-     * We intentionally avoid SQLite strftime/datetime functions — they are not
-     * available on all Android versions inside Room. Kotlin does the hour extraction.
+     * Returns total durationMillis per hour bucket for peak-hour detection.
+     * Uses SQLite's built-in strftime to extract the local hour, 
+     * significantly reducing the data sent across the cursor.
      */
-    @Query("SELECT startTime, SUM(durationMillis) as totalMillis FROM usage_events GROUP BY startTime ORDER BY totalMillis DESC")
+    @Query("SELECT CAST(strftime('%H', startTime / 1000, 'unixepoch', 'localtime') AS INTEGER) as startTime, SUM(durationMillis) as totalMillis FROM usage_events GROUP BY startTime ORDER BY totalMillis DESC")
     suspend fun getStartTimeTotals(): List<StartTimeTotalRow>
 
     /** Total number of events ever recorded — used for empty-state detection. */

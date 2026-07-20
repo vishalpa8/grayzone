@@ -10,15 +10,14 @@ import com.grayzone.app.service.vpn.AdBlockVpnService
 /**
  * Restarts Grayzone's foreground services after the device boots.
  *
- * Without this, both [OverlayService] (which monitors app usage and enforces
- * overlays) and [AdBlockVpnService] (which filters DNS) are dead after every
- * reboot — the user's rules are silently unenforced until they manually open
- * the app again.
+ * If restart fails, the persisted user intent is left unchanged so a later app
+ * launch or recovery path can retry instead of silently forgetting that
+ * protection should be active.
  *
  * Registered for:
- *   android.intent.action.BOOT_COMPLETED       — normal boot
- *   android.intent.action.QUICKBOOT_POWERON    — HTC / OnePlus fast-boot
- *   com.htc.intent.action.QUICKBOOT_POWERON    — HTC variant
+ *   android.intent.action.BOOT_COMPLETED       - normal boot
+ *   android.intent.action.QUICKBOOT_POWERON    - HTC / OnePlus fast-boot
+ *   com.htc.intent.action.QUICKBOOT_POWERON    - HTC variant
  */
 class BootReceiver : BroadcastReceiver() {
 
@@ -26,11 +25,11 @@ class BootReceiver : BroadcastReceiver() {
         val receivedAction = intent.action ?: return
         if (receivedAction !in BOOT_ACTIONS) return
 
-        Log.d(TAG, "Boot detected ($receivedAction) — restarting Grayzone services")
+        Log.d(TAG, "Boot detected ($receivedAction); restarting Grayzone services")
 
         val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
 
-        // Always restart OverlayService — it is the core monitoring service.
+        // Always restart OverlayService; it is the core monitoring service.
         try {
             context.startForegroundService(Intent(context, OverlayService::class.java))
             Log.d(TAG, "OverlayService restart requested")
@@ -38,9 +37,8 @@ class BootReceiver : BroadcastReceiver() {
             Log.e(TAG, "Failed to start OverlayService: ${e.message}")
         }
 
-        // Only restart AdBlockVpnService if the VPN was active when the device shut down.
-        // We infer this from a persisted preference toggled by the UI — avoids requesting
-        // VPN permission unexpectedly on fresh installs that never enabled the VPN.
+        // Only restart AdBlockVpnService if the user previously enabled the VPN.
+        // This flag represents restore intent, so failures below must not clear it.
         if (prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) {
             try {
                 val vpnIntent = Intent(context, AdBlockVpnService::class.java).apply {
@@ -49,7 +47,7 @@ class BootReceiver : BroadcastReceiver() {
                 context.startForegroundService(vpnIntent)
                 Log.d(TAG, "AdBlockVpnService restart requested")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start AdBlockVpnService: ${e.message}")
+                Log.e(TAG, "Failed to start AdBlockVpnService; restore intent preserved: ${e.message}")
             }
         }
     }

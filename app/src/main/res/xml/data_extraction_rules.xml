@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="GrayzonePrefs.xml" />
+        <exclude domain="sharedpref" path="wifi_screen_prefs.xml" />
+        <exclude domain="database" path="grayzone_usage.db" />
+        <exclude domain="database" path="grayzone_usage.db-shm" />
+        <exclude domain="database" path="grayzone_usage.db-wal" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="GrayzonePrefs.xml" />
+        <exclude domain="sharedpref" path="wifi_screen_prefs.xml" />
+        <exclude domain="database" path="grayzone_usage.db" />
+        <exclude domain="database" path="grayzone_usage.db-shm" />
+        <exclude domain="database" path="grayzone_usage.db-wal" />
+    </device-transfer>
+</data-extraction-rules>

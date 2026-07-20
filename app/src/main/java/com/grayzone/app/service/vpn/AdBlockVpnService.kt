@@ -45,9 +45,8 @@ class AdBlockVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var vpnThread: Thread? = null
-    // Shared protected UDP socket to avoid socket churn. Access synchronized on sharedUdpLock.
-    private val sharedUdpLock = Any()
-    private var sharedUdpSocket: DatagramSocket? = null
+    
+    private var resolverPool: DnsResolverPool? = null
     
     // Exception handler for coroutines to prevent silent failures
     private val coroutineExceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
@@ -70,6 +69,12 @@ class AdBlockVpnService : VpnService() {
         super.onCreate()
         BlocklistManager.load(this)
         createNotificationChannel()
+        resolverPool = DnsResolverPool(
+            maxConcurrentSockets = 20,
+            socketTimeoutMs = DNS_TIMEOUT_MS
+        ) { socket ->
+            try { protect(socket) } catch (e: Exception) { /* ignore */ }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -109,6 +114,7 @@ class AdBlockVpnService : VpnService() {
             vpnThread?.start()
 
             startForeground(NOTIF_ID, buildNotification())
+            com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
             Log.d(TAG, "VPN Started")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN", e)
@@ -149,11 +155,9 @@ class AdBlockVpnService : VpnService() {
 
         DnsTrafficBus.clear()
 
-        synchronized(sharedUdpLock) {
-            try {
-                sharedUdpSocket?.close()
-            } catch (e: Exception) { /* ignore */ }
-            sharedUdpSocket = null
+        serviceScope.launch {
+            resolverPool?.shutdown()
+            resolverPool = null
         }
 
         if (clearPersistedFlag) {
@@ -165,6 +169,7 @@ class AdBlockVpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+        com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
     }
 
     private fun restartVpnAfterDelay(delayMs: Long) {
@@ -390,10 +395,16 @@ class AdBlockVpnService : VpnService() {
      * Perform the actual DNS query with server fallback.
      * Returns the DNS response payload, or null on failure.
      */
-    private fun performDnsQuery(packet: ByteArray, length: Int): ByteArray? {
+    private suspend fun performDnsQuery(packet: ByteArray, length: Int): ByteArray? {
+        val dnsOffset = DnsPacketHelper.getDnsPayloadOffset(packet, length) ?: return null
+        val dnsPayloadLength = DnsPacketHelper.getDnsPayloadLength(packet, length) ?: return null
+
+        val pool = resolverPool ?: return null
+        
         for ((index, serverIp) in DNS_SERVERS.withIndex()) {
             val server = InetAddress.getByName(serverIp)
-            val result = trySingleDnsServer(packet, length, server)
+            val result = pool.performQuery(packet, dnsOffset, dnsPayloadLength, server)
+            
             if (result != null) {
                 if (index > 0) {
                     com.grayzone.app.GrayzoneLogger.d(
@@ -416,66 +427,6 @@ class AdBlockVpnService : VpnService() {
     }
 
 
-    /**
-     * Try forwarding a DNS query to a single upstream server.
-     * @return DNS response payload if successful, null otherwise.
-     */
-    private fun trySingleDnsServer(
-        packet: ByteArray,
-        length: Int,
-        server: InetAddress
-    ): ByteArray? {
-        val startTime = System.nanoTime()
-        return try {
-            val dnsOffset = DnsPacketHelper.getDnsPayloadOffset(packet, length) ?: return null
-            val dnsPayloadLength = DnsPacketHelper.getDnsPayloadLength(packet, length) ?: return null
-
-            // Use a shared protected UDP socket to avoid creating/closing sockets frequently.
-            synchronized(sharedUdpLock) {
-                if (sharedUdpSocket == null) {
-                    sharedUdpSocket = DatagramSocket()
-                    try {
-                        protect(sharedUdpSocket)
-                    } catch (_: Exception) {
-                        // protect may fail on older devices; continue without crashing.
-                    }
-                }
-
-                val udpSocket = sharedUdpSocket!!
-                udpSocket.soTimeout = DNS_TIMEOUT_MS
-
-                val outPacket = DatagramPacket(packet, dnsOffset, dnsPayloadLength, server, 53)
-                udpSocket.send(outPacket)
-
-                val respBuf = ByteArray(4096)
-                val respPacket = DatagramPacket(respBuf, respBuf.size)
-                udpSocket.receive(respPacket)
-
-                val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
-                // Log warning if DNS query is slow (>50ms)
-                if (elapsedMs > 50) {
-                    com.grayzone.app.GrayzoneLogger.w(
-                        com.grayzone.app.LogComponent.DNS,
-                        "Slow DNS query: ${elapsedMs}ms via $server"
-                    )
-                } else {
-                    com.grayzone.app.GrayzoneLogger.d(
-                        com.grayzone.app.LogComponent.DNS,
-                        "DNS query latency: ${elapsedMs}ms via $server"
-                    )
-                }
-
-                respBuf.copyOf(respPacket.length)
-            }
-        } catch (e: Exception) {
-            val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
-            com.grayzone.app.GrayzoneLogger.w(
-                com.grayzone.app.LogComponent.DNS,
-                "DNS forward error via $server after ${elapsedMs}ms: ${e.message}"
-            )
-            null
-        }
-    }
     
 
     private fun createNotificationChannel() {
