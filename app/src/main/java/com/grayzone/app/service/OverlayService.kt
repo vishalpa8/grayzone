@@ -922,10 +922,11 @@ class OverlayService : Service() {
     }
 
     private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+        NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
-            .setContentText("Monitoring for distracting apps")
+            .setContentText("Monitoring app usage to help you stay focused.")
             .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))

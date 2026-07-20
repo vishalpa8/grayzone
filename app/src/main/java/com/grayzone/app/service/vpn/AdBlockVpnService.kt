@@ -446,9 +446,10 @@ class AdBlockVpnService : VpnService() {
         val stopPending = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AdBlock VPN is active")
-            .setContentText("Blocking ads & adult content")
+            .setContentTitle("Grayzone Protection Active")
+            .setContentText("DNS monitoring is securing your network.")
             .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(android.graphics.BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .addAction(0, "Stop", stopPending)
