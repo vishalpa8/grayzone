@@ -3,6 +3,8 @@ package com.grayzone.app.service.vpn
 import android.content.Context
 import android.util.Log
 import com.grayzone.app.R
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 object BlocklistManager {
@@ -74,6 +76,7 @@ object BlocklistManager {
     )
 
     private val loadStarted = AtomicBoolean(false)
+    private val normalizedDomainCache = ConcurrentHashMap<String, String?>()
 
     @Volatile var isLoaded = false
         private set
@@ -93,9 +96,47 @@ object BlocklistManager {
         }.start()
     }
 
+    /** Normalize a domain before matching: lowercase, trim whitespace, remove a trailing dot. */
+    fun normalizeDomain(domain: String): String? {
+        try {
+            // Fast path: return cached value when present (including explicit nulls).
+            if (normalizedDomainCache.containsKey(domain)) return normalizedDomainCache[domain]
+
+            val trimmed = domain.trim().lowercase(Locale.US)
+            val withoutTrailingDot = trimmed.removeSuffix(".")
+
+            if (withoutTrailingDot.isEmpty() || withoutTrailingDot.contains(" ")) {
+                normalizedDomainCache[domain] = null
+                return null
+            }
+
+            // IPv4 literal (e.g. 8.8.8.8) or IPv6 (contains ':') → reject
+            val ipv4Regex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+            if (ipv4Regex.matches(withoutTrailingDot) || withoutTrailingDot.contains(':')) {
+                normalizedDomainCache[domain] = null
+                return null
+            }
+
+            // Require at least one dot (skip single-label hosts like "localhost")
+            if (!withoutTrailingDot.contains('.')) {
+                normalizedDomainCache[domain] = null
+                return null
+            }
+
+            normalizedDomainCache[domain] = withoutTrailingDot
+            return withoutTrailingDot
+        } catch (e: Exception) {
+            // Defensive: any unexpected parsing error should not crash the caller.
+            normalizedDomainCache[domain] = null
+            return null
+        }
+    }
+
     /** True if domain is a known DoH/DoT bypass endpoint (always checked). */
-    fun isDoHBypass(domain: String): Boolean =
-        dohBypassDomains.contains(domain.lowercase())
+    fun isDoHBypass(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        return dohBypassDomains.contains(normalized)
+    }
 
     /** True if domain matches the ad/tracking bloom filter. */
     fun isAdBlocked(domain: String): Boolean {
@@ -119,12 +160,12 @@ object BlocklistManager {
      */
     fun isBlocked(domain: String): Boolean {
         if (isDoHBypass(domain)) return true
+        val normalized = normalizeDomain(domain) ?: return false
         if (!isLoaded) return false
-        val lower = domain.lowercase()
         val ad    = adFilter
         val adult = adultFilter
-        return (ad    != null && matchesFilter(lower, ad))    ||
-               (adult != null && matchesFilter(lower, adult))
+        return (ad    != null && matchesFilter(normalized, ad)) ||
+               (adult != null && matchesFilter(normalized, adult))
     }
 
     // ─── private helpers ───────────────────────────────────────────────────
@@ -149,7 +190,7 @@ object BlocklistManager {
      * one dot in the candidate string before querying the filter for a parent.
      */
     private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean {
-        val lower = domain.lowercase()
+        val lower = domain.lowercase(Locale.US)
         // Check the full domain first
         if (filter.mightContain(lower)) return true
         // Walk parent domains, but never query a bare TLD (no dot = 0 labels)
