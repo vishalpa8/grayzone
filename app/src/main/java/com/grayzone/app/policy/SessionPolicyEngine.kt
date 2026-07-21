@@ -39,9 +39,22 @@ class SessionPolicyEngine {
                     return commands
                 }
 
-                // Schedule blocked? Hard lockout.
+                // Schedule blocked? Hard lockout. A scheduled focus window overrides
+                // even an active session, since that's the whole point of the block.
                 if (state.isScheduleLocked) {
                     commands.add(SessionCommand.ShowScheduleLockScreen(state.packageName, appName))
+                    return commands
+                }
+
+                // Active session exists? Let them pass.
+                // IMPORTANT: this must be checked BEFORE the lockout/budget gates.
+                // `lockedUntil` is set to `activeUntil + lockout` when a session starts,
+                // so during an active session `isLockedOut(now)` is always true. If we
+                // checked lockout first, re-foregrounding mid-session would wrongly show
+                // the lockout screen counting down `sessionRemaining + lockout`
+                // (e.g. "1h 3m") even though the session still has time left.
+                if (state.hasActiveSession(now)) {
+                    commands.add(SessionCommand.DismissOverlay)
                     return commands
                 }
 
@@ -56,12 +69,6 @@ class SessionPolicyEngine {
                 // at midnight — so it gets its own screen instead of the lockout screen.
                 if (state.isBudgetExhausted()) {
                     commands.add(SessionCommand.ShowBudgetLockScreen(state.packageName, appName))
-                    return commands
-                }
-
-                // Active session exists? Let them pass.
-                if (state.hasActiveSession(now)) {
-                    commands.add(SessionCommand.DismissOverlay)
                     return commands
                 }
 

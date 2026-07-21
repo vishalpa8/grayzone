@@ -12,6 +12,8 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
+import android.widget.RemoteViews
 import android.util.Log
 import android.util.TypedValue
 import com.grayzone.app.OverlayMode
@@ -27,7 +29,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.RemoteViews
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
@@ -261,7 +262,7 @@ class OverlayService : Service() {
 
             // 1. Process Background Event for old package
             if (oldPackage != null) {
-                val oldState = buildSessionState(oldPackage, prefs, now)
+                val oldState = buildSessionState(oldPackage, prefs)
                 val bgDuration = if (sessionStartTime > 0) now - sessionStartTime else 0L
                 val bgCommands = policyEngine.evaluate(
                     com.grayzone.app.policy.AppEvent.AppBackgrounded(oldPackage, bgDuration), 
@@ -276,7 +277,7 @@ class OverlayService : Service() {
             lastForegroundPackage = currentPkg
             
             // 2. Process Foreground Event for new package
-            val newState = buildSessionState(currentPkg, prefs, now)
+            val newState = buildSessionState(currentPkg, prefs)
             val fgCommands = policyEngine.evaluate(
                 com.grayzone.app.policy.AppEvent.AppForegrounded(currentPkg),
                 newState,
@@ -313,7 +314,7 @@ class OverlayService : Service() {
         }
     }
     
-    private fun buildSessionState(pkg: String, prefs: android.content.SharedPreferences, now: Long): com.grayzone.app.policy.SessionState {
+    private fun buildSessionState(pkg: String, prefs: android.content.SharedPreferences): com.grayzone.app.policy.SessionState {
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
         val isMonitored = monitoredApps.contains(pkg)
         val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
@@ -524,28 +525,28 @@ class OverlayService : Service() {
             return
         }
 
-        val rv = RemoteViews(this.packageName, R.layout.notification_countdown)
-        rv.setTextViewText(R.id.notif_title, appName)
-        rv.setTextViewText(R.id.notif_subtitle, "Session active")
-
-        val base = android.os.SystemClock.elapsedRealtime() + remainingMs
-        rv.setChronometer(R.id.notif_timer, base, null, true)
-        rv.setChronometerCountDown(R.id.notif_timer, true)
+        // Custom body view with a real Chronometer widget pinned to the right.
+        // The framework's header chronometer (setUsesChronometer) is dropped by
+        // some OEM skins (e.g. OriginOS) on the collapsed/lock-screen view, so a
+        // self-rendered Chronometer in a DecoratedCustomView is the reliable way
+        // to keep the count-down visible on the right in every state.
+        val baseElapsed = SystemClock.elapsedRealtime() + remainingMs
+        val body = RemoteViews(applicationContext.packageName, R.layout.notification_countdown).apply {
+            setTextViewText(R.id.notif_title, appName)
+            setChronometerCountDown(R.id.notif_timer, true)
+            setChronometer(R.id.notif_timer, baseElapsed, null, true)
+        }
 
         nm.notify(NOTIF_ID,
             NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                // Small icons must be monochrome alpha masks; the vector asset
-                // guarantees the Grayzone glyph renders instead of a grey square.
+                // Status-bar glyph only; main shade icon is the adaptive launcher icon.
                 .setSmallIcon(R.drawable.ic_notification)
-                // Full-colour launcher logo shown as the large icon so the app is
-                // recognisable in the notification (small icon can't carry colour).
-                .setLargeIcon(appLogoBitmap())
                 .setContentTitle(appName)
                 .setContentText("Session active")
-                .setSubText("Grayzone")
                 .setShowWhen(false)
-                .setCustomContentView(rv)
                 .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setCustomContentView(body)
+                .setCustomBigContentView(body)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -1030,40 +1031,13 @@ class OverlayService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    /**
-     * The colour launcher logo as a bitmap for use as a notification large icon.
-     * Cached because it's read on every notification rebuild. Returns null if the
-     * resource can't be decoded, in which case the notification simply omits it.
-     */
-    private var cachedLogoBitmap: android.graphics.Bitmap? = null
-    private fun appLogoBitmap(): android.graphics.Bitmap? {
-        cachedLogoBitmap?.let { return it }
-        return try {
-            (androidx.core.content.ContextCompat.getDrawable(this, R.mipmap.ic_launcher))
-                ?.let { d ->
-                    val size = resources.getDimensionPixelSize(
-                        android.R.dimen.notification_large_icon_width
-                    ).coerceAtLeast(1)
-                    val bmp = android.graphics.Bitmap.createBitmap(
-                        size, size, android.graphics.Bitmap.Config.ARGB_8888
-                    )
-                    val canvas = android.graphics.Canvas(bmp)
-                    d.setBounds(0, 0, size, size)
-                    d.draw(canvas)
-                    cachedLogoBitmap = bmp
-                    bmp
-                }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
             .setContentText("Monitoring app usage to help you stay focused.")
+            // Status-bar glyph only; the shade's main icon is the adaptive
+            // launcher icon. No large icon, so a single branded icon shows.
             .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(appLogoBitmap())
             .setColor(PURPLE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)

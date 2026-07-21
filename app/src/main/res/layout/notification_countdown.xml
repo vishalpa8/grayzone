@@ -1,59 +1,49 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Body view for the session countdown notification (DecoratedCustomViewStyle).
+     Highlights the monitored app name with a live count-down Chronometer pinned
+     to the right. Uses the Compat notification text appearances so the title/
+     subtitle theme correctly (legible) across OEM skins and light/dark shades. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingStart="12dp"
-    android:paddingEnd="12dp"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:gravity="center_vertical"
         android:orientation="vertical">
 
         <TextView
             android:id="@+id/notif_title"
-            android:layout_width="match_parent"
+            style="@style/TextAppearance.Compat.Notification.Title"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:fontFamily="sans-serif-medium"
             android:maxLines="1"
-            android:text="Instagram"
-            android:textColor="#FFFFFFFF"
-            android:textSize="14sp" />
+            android:ellipsize="end"
+            android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/notif_subtitle"
-            android:layout_width="match_parent"
+            android:id="@+id/notif_sub"
+            style="@style/TextAppearance.Compat.Notification.Line2"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="1dp"
-            android:ellipsize="end"
             android:maxLines="1"
-            android:text="Session active"
-            android:textColor="#FFB8B8C8"
-            android:textSize="12sp" />
+            android:ellipsize="end"
+            android:text="Focus session" />
     </LinearLayout>
 
-    <FrameLayout
-        android:layout_width="76dp"
-        android:layout_height="32dp"
-        android:layout_marginStart="8dp"
-        android:background="@drawable/notification_timer_badge">
-
-        <Chronometer
-            android:id="@+id/notif_timer"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_gravity="center"
-            android:fontFamily="sans-serif-medium"
-            android:gravity="center"
-            android:textColor="#FFFFFFFF"
-            android:textSize="14sp" />
-    </FrameLayout>
-
+    <Chronometer
+        android:id="@+id/notif_timer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:gravity="end"
+        android:textColor="#9B6DFF"
+        android:textSize="24sp"
+        android:textStyle="bold" />
 </LinearLayout>

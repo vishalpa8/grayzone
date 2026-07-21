@@ -517,28 +517,6 @@ class AdBlockVpnService : VpnService() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private var cachedLogoBitmap: android.graphics.Bitmap? = null
-    /** Colour launcher logo as a bitmap for the notification large icon (cached). */
-    private fun appLogoBitmap(): android.graphics.Bitmap? {
-        cachedLogoBitmap?.let { return it }
-        return try {
-            androidx.core.content.ContextCompat.getDrawable(this, R.mipmap.ic_launcher)?.let { d ->
-                val size = resources.getDimensionPixelSize(
-                    android.R.dimen.notification_large_icon_width
-                ).coerceAtLeast(1)
-                val bmp = android.graphics.Bitmap.createBitmap(
-                    size, size, android.graphics.Bitmap.Config.ARGB_8888
-                )
-                d.setBounds(0, 0, size, size)
-                d.draw(android.graphics.Canvas(bmp))
-                cachedLogoBitmap = bmp
-                bmp
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, AdBlockVpnService::class.java).apply { action = ACTION_STOP }
         val stopPending = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
@@ -546,10 +524,10 @@ class AdBlockVpnService : VpnService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone Protection Active")
             .setContentText("DNS monitoring is securing your network.")
-            // Monochrome vector: valid notification alpha mask on all devices.
+            // Status-bar glyph (required, monochrome alpha mask). The main icon
+            // shown in the shade is the app's adaptive launcher icon; no large
+            // icon is set so only that single branded icon appears.
             .setSmallIcon(R.drawable.ic_notification)
-            // Colour launcher logo as the large icon so the app is recognisable.
-            .setLargeIcon(appLogoBitmap())
             .setColor(0xFF7C4DFF.toInt())
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)

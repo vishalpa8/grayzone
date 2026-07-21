@@ -93,11 +93,48 @@ class SessionPolicyEngineTest {
 
     @Test
     fun `when active session exists, dismiss overlay`() {
-        val state = defaultState.copy(activeUntil = now + 1000L) // Active in the future
+        // Realistic state: lockedUntil is set to activeUntil + lockout when the session
+        // starts, so it is always in the future during an active session.
+        val activeUntil = now + 3 * 60 * 1000L
+        val state = defaultState.copy(
+            activeUntil = activeUntil,
+            lockedUntil = activeUntil + defaultState.defaultLockoutMins * 60 * 1000L
+        )
         val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
-        
+
         assertEquals(1, commands.size)
         assertTrue(commands[0] is SessionCommand.DismissOverlay)
+    }
+
+    @Test
+    fun `re-foregrounding mid-session does not lock out (1h3m regression)`() {
+        // 3 minutes left in the session, 60 minute lockout configured.
+        // lockedUntil = activeUntil + lockout is in the future, so isLockedOut() is true,
+        // but the active session must win — otherwise the lockout screen would show
+        // "1h 3m" (3m session + 60m lockout) while time still remains.
+        val activeUntil = now + 3 * 60 * 1000L
+        val state = defaultState.copy(
+            activeUntil = activeUntil,
+            lockedUntil = activeUntil + 60 * 60 * 1000L,
+            budgetRemainingMs = 0L // even an exhausted budget must not interrupt an active session
+        )
+        val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
+
+        assertEquals(1, commands.size)
+        assertTrue(commands[0] is SessionCommand.DismissOverlay)
+    }
+
+    @Test
+    fun `when session ended but still within lockout, show lockout screen`() {
+        // Session already ended (activeUntil in the past), lockout still active.
+        val state = defaultState.copy(
+            activeUntil = now - 1000L,
+            lockedUntil = now + 60 * 60 * 1000L
+        )
+        val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
+
+        assertEquals(1, commands.size)
+        assertTrue(commands[0] is SessionCommand.ShowLockoutScreen)
     }
 
     @Test

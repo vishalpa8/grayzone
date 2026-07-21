@@ -6,8 +6,10 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
@@ -17,15 +19,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.*
+import com.grayzone.app.R
 import com.grayzone.app.ui.theme.*
 
 data class HomeData(
@@ -71,39 +78,72 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
                     .background(
                         Brush.verticalGradient(
-                            listOf(GZPrimary, GZPrimaryContainer, GZBackground)
+                            listOf(Color(0xFF1B1436), Color(0xFF120C24), GZBackground)
                         )
                     )
-                    .padding(start = 24.dp, end = 24.dp, top = 60.dp, bottom = 40.dp)
             ) {
-                Column {
+                // Soft brand glow anchored near the logo for depth on the dark base
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(GZPrimary.copy(alpha = 0.32f), Color.Transparent),
+                                center = Offset(140f, 300f),
+                                radius = 620f
+                            )
+                        )
+                )
+                Column(
+                    modifier = Modifier.padding(
+                        start = 20.dp, end = 12.dp, top = 52.dp, bottom = 26.dp
+                    )
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onOpenDrawer) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(15.dp))
+                                .background(
+                                    Brush.linearGradient(listOf(GZPrimaryLight, GZPrimaryDark))
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(15.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                Icons.Filled.Menu,
-                                contentDescription = "Open menu",
-                                tint = GZTextPrimary,
-                                modifier = Modifier.size(26.dp)
+                                painterResource(R.drawable.ic_launcher_monochrome),
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
                             )
                         }
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "Grayzone",
                                 color = GZTextPrimary,
-                                fontSize = 32.sp,
+                                fontSize = 26.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = (-0.5).sp
                             )
                             Text(
                                 "Friction, not hard blocks.",
                                 color = GZTextSecondary,
-                                fontSize = 14.sp
+                                fontSize = 13.sp
                             )
                         }
                         ActivePill(isActive = isActive)
+                        IconButton(onClick = onOpenDrawer, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                Icons.Filled.Menu,
+                                contentDescription = "Open menu",
+                                tint = GZTextSecondary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }
