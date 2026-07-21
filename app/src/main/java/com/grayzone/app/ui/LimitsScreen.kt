@@ -24,16 +24,15 @@ import androidx.compose.animation.core.animateFloat
 fun LimitsScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
-    var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
+    // Paint instantly from the in-memory cache on re-entry; refresh in background.
+    var installedApps by remember { mutableStateOf(peekCachedApps() ?: emptyList()) }
     var monitoredApps by remember {
         mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
     }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
-        isLoading = false
     }
 
     // Ticker for live lock detection; refresh at a lower cadence to reduce wakeups.

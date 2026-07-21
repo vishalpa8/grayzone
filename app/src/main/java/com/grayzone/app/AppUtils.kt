@@ -31,7 +31,10 @@ private object AppMetadataCache {
             null
         }
     }
-    
+
+    /** Last-loaded list ignoring expiry — for instant UI paint on screen re-entry. */
+    fun peek(): List<AppInfo>? = cachedApps
+
     fun set(apps: List<AppInfo>) {
         cachedApps = apps
         cacheTimestamp = System.currentTimeMillis()
@@ -55,6 +58,13 @@ suspend fun getInstalledAppsCached(context: Context): List<AppInfo> {
         AppMetadataCache.set(it)
     }
 }
+
+/**
+ * Synchronous, non-blocking peek at the last-loaded app list (ignores the
+ * 1-minute expiry). Lets screens paint instantly on re-entry instead of
+ * flashing an empty list / spinner while the async load re-runs.
+ */
+fun peekCachedApps(): List<AppInfo>? = AppMetadataCache.peek()
 
 /**
  * Force refresh of app cache (call when user manually refreshes).

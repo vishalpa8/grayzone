@@ -37,12 +37,15 @@ import com.grayzone.app.ui.theme.*
 fun AppsScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
-    var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
+    // Paint instantly from the in-memory cache on re-entry; spinner only on the
+    // very first cold load. The LaunchedEffect still refreshes in the background.
+    val cachedApps = remember { peekCachedApps() }
+    var installedApps by remember { mutableStateOf(cachedApps ?: emptyList()) }
     var monitoredApps by remember {
         mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
     }
     var searchQuery by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(cachedApps == null) }
     var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var selectedAppForSettings by remember { mutableStateOf<AppInfo?>(null) }

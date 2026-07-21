@@ -38,19 +38,36 @@ private data class StatsSnapshot(
     val peakHour: Int?
 )
 
+/** Retains the last loaded stats across tab switches so re-entry is instant. */
+private object StatsCache {
+    @Volatile var snapshot: StatsSnapshot? = null
+}
+
+private fun formatPeakHour(h: Int): String {
+    val amPm1 = if (h < 12) "AM" else "PM"
+    val h1    = if (h % 12 == 0) 12 else h % 12
+    val next  = (h + 1) % 24
+    val amPm2 = if (next < 12) "AM" else "PM"
+    val h2    = if (next % 12 == 0) 12 else next % 12
+    return "$h1:00 $amPm1 – $h2:00 $amPm2"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    // Seed from the last in-memory snapshot so returning to this tab paints
+    // instantly instead of flashing a full-screen spinner and re-querying.
+    val cached = remember { StatsCache.snapshot }
     var reloadKey by remember { mutableIntStateOf(0) }
-    var isLoading by remember { mutableStateOf(true) }
-    var totalBlocked by remember { mutableIntStateOf(0) }
-    var totalSavedMillis by remember { mutableLongStateOf(0L) }
-    var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(emptyList()) }
-    var weeklyTotals by remember { mutableStateOf<List<DateTotalRow>>(emptyList()) }
-    var mostDistractingTime by remember { mutableStateOf<String?>(null) }
-    var totalEvents by remember { mutableIntStateOf(-1) }  // -1 = not yet loaded
+    var isLoading by remember { mutableStateOf(cached == null) }
+    var totalBlocked by remember { mutableIntStateOf(cached?.blocked ?: 0) }
+    var totalSavedMillis by remember { mutableLongStateOf(cached?.savedMs ?: 0L) }
+    var dailySummary by remember { mutableStateOf<List<com.grayzone.app.data.DailySummaryRow>>(cached?.daily ?: emptyList()) }
+    var weeklyTotals by remember { mutableStateOf<List<DateTotalRow>>(cached?.weekly ?: emptyList()) }
+    var mostDistractingTime by remember { mutableStateOf(cached?.peakHour?.let { formatPeakHour(it) }) }
+    var totalEvents by remember { mutableIntStateOf(cached?.totalEvents ?: -1) }  // -1 = not yet loaded
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(lifecycleOwner) {
@@ -62,7 +79,9 @@ fun StatsScreen() {
     }
 
     LaunchedEffect(reloadKey) {
-        isLoading = true
+        // Only block with a spinner when there's nothing to show yet; otherwise
+        // keep the cached data on screen and refresh it silently.
+        if (StatsCache.snapshot == null) isLoading = true
         errorMsg = null
         try {
             val snap = withContext(Dispatchers.IO) {
@@ -82,19 +101,13 @@ fun StatsScreen() {
                 StatsSnapshot(blocked, savedMs, daily, weekly, total, peak)
             }
             // All state assignments on main thread — no partial-update races
+            StatsCache.snapshot = snap
             totalBlocked        = snap.blocked
             totalSavedMillis    = snap.savedMs
             dailySummary        = snap.daily
             weeklyTotals        = snap.weekly
             totalEvents         = snap.totalEvents
-            mostDistractingTime = snap.peakHour?.let { h ->
-                val amPm1 = if (h < 12) "AM" else "PM"
-                val h1    = if (h % 12 == 0) 12 else h % 12
-                val next  = (h + 1) % 24
-                val amPm2 = if (next < 12) "AM" else "PM"
-                val h2    = if (next % 12 == 0) 12 else next % 12
-                "$h1:00 $amPm1 – $h2:00 $amPm2"
-            }
+            mostDistractingTime = snap.peakHour?.let { formatPeakHour(it) }
         } catch (e: Exception) {
             if (e is kotlin.coroutines.cancellation.CancellationException) throw e
             android.util.Log.e("StatsScreen", "Could not load stats", e)
