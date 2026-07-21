@@ -362,28 +362,21 @@ class AdBlockVpnService : VpnService() {
     ) {
         val normalizedDomain = BlocklistManager.normalizeDomain(domain)
 
-        when {
-            // Firefox DoH canary â€” return NXDOMAIN so Firefox falls back to system DNS
-            domain.equals("use-application-dns.net", ignoreCase = true) -> {
+        when (DnsQueryClassifier.classify(domain)) {
+            // Firefox canary + known DoH/DoT resolvers → NXDOMAIN so apps fall back to DNS-53
+            DnsQueryClassifier.Action.NXDOMAIN_DOH -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
                 writeNxDomain(packet, length, outputStream)
             }
 
-            // Known DoH/DoT resolver â€” return NXDOMAIN so the app can't resolve
-            // the DoH endpoint and is forced to use plain DNS53 (which we intercept)
-            normalizedDomain != null && BlocklistManager.isDoHBypass(normalizedDomain) -> {
-                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
-                writeNxDomain(packet, length, outputStream)
-            }
-
-            // Ad or adult content domain â†’ sinkhole to 0.0.0.0
-            normalizedDomain != null && BlocklistManager.isBlocked(normalizedDomain) -> {
+            // Ad or adult content domain → sinkhole / negative answer
+            DnsQueryClassifier.Action.SINKHOLE_BLOCK -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
                 writeSinkhole(packet, length, outputStream)
             }
 
-            // Allowed â€” forward to real DNS with fallback and deduplication
-            else -> {
+            // Allowed — forward to real DNS with fallback and deduplication
+            DnsQueryClassifier.Action.FORWARD -> {
                 DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED))
                 serviceScope.launch {
                     forwardDnsQueryWithDeduplication(domain, normalizedDomain, packet, length, outputStream)

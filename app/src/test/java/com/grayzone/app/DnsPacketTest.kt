@@ -89,6 +89,72 @@ class DnsPacketTest {
     }
 
     @Test
+    fun `sinkhole response delegates to nxdomain for ipv4`() {
+        val request = ipv4DnsQuery(id = 0xBEEF, qType = 1)
+        val sinkhole = DnsPacketHelper.createSinkholeResponse(request, request.size)
+        val nx = DnsPacketHelper.createNxDomainResponse(request, request.size)
+        assertNotNull(sinkhole)
+        assertNotNull(nx)
+        assertTrue(sinkhole!!.contentEquals(nx!!))
+        assertEquals(0x8183, readShort(sinkhole, 30))
+    }
+
+    @Test
+    fun `too-short packets are rejected by every public entry point`() {
+        val tiny = ByteArray(10)
+        assertFalse(DnsPacketHelper.isDnsQuery(tiny, tiny.size))
+        assertNull(DnsPacketHelper.getDnsPayloadOffset(tiny, tiny.size))
+        assertNull(DnsPacketHelper.getDomainName(tiny, tiny.size))
+        assertNull(DnsPacketHelper.getQuestionKey(tiny, tiny.size, "example.com"))
+    }
+
+    @Test
+    fun `zero question count yields no domain`() {
+        val packet = ipv4DnsQuery(id = 0x1, qType = 1)
+        // QDCOUNT at DNS offset 28+4
+        writeShort(packet, 32, 0)
+        assertNull(DnsPacketHelper.getDomainName(packet, packet.size))
+    }
+
+    @Test
+    fun `label longer than 63 is rejected`() {
+        val dns = ByteArray(12 + 1 + 64 + 1 + 4)
+        writeShort(dns, 0, 0x1111)
+        writeShort(dns, 2, 0x0100)
+        writeShort(dns, 4, 1)
+        dns[12] = 64 // illegal label length
+        val packet = ByteArray(20 + 8 + dns.size)
+        packet[0] = 0x45
+        packet[9] = 17
+        writeShort(packet, 22, 53)
+        dns.copyInto(packet, 28)
+        assertNull(DnsPacketHelper.getDomainName(packet, packet.size))
+    }
+
+    @Test
+    fun `non ip version is rejected`() {
+        val packet = ByteArray(60)
+        packet[0] = 0x50 // version nibble = 5
+        assertNull(DnsPacketHelper.getDnsPayloadOffset(packet, packet.size))
+        assertNull(DnsPacketHelper.getDomainName(packet, packet.size))
+    }
+
+    @Test
+    fun `ipv6 nxdomain swaps addresses ports and sets rcode 3`() {
+        val request = ipv6DnsQuery(id = 0x3333, qType = 1)
+        val response = DnsPacketHelper.createNxDomainResponse(request, request.size)
+        assertNotNull(response)
+        response!!
+        assertEquals(request.size, response.size)
+        assertEquals(53, readShort(response, 40))
+        assertEquals(40000, readShort(response, 42))
+        assertEquals(0x3333, readShort(response, 48))
+        assertEquals(0x8183, readShort(response, 50))
+        assertEquals(0, readShort(response, 54)) // ANCOUNT
+        assertTrue(readShort(response, 46) != 0) // UDP checksum
+    }
+
+    @Test
     fun `ipv6 query and wrapped response use ipv6 DNS payload offset`() {
         val request = ipv6DnsQuery(id = 0x2222, qType = 28)
         val payload = dnsResponsePayload(id = 0xAAAA)

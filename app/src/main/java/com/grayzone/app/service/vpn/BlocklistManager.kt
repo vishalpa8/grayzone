@@ -235,32 +235,9 @@ object BlocklistManager {
      * would otherwise block every domain under that TLD. We require at least
      * one dot in the candidate string before querying the filter for a parent.
      */
-    private fun matchesHighConfidence(domain: String, matchSet: Set<String>): Boolean {
-        // Caller guarantees `domain` is already lowercased via normalizeDomain(), avoid extra allocations.
-        if (matchSet.contains(domain)) return true
+    private fun matchesHighConfidence(domain: String, matchSet: Set<String>): Boolean =
+        DomainZoneMatcher.anyMatch(domain) { matchSet.contains(it) }
 
-        var dotIndex = domain.indexOf('.')
-        while (dotIndex != -1 && dotIndex < domain.length - 1) {
-            val parent = domain.substring(dotIndex + 1)
-            if (parent.contains('.') && matchSet.contains(parent)) return true
-            dotIndex = domain.indexOf('.', dotIndex + 1)
-        }
-        return false
-    }
-
-    private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean {
-        // Caller guarantees `domain` is already lowercased via normalizeDomain(), avoid extra allocations.
-        // Check the full domain first
-        if (filter.mightContain(domain)) return true
-        // Walk parent domains, but never query a bare TLD (no dot = 0 labels)
-        var dotIndex = domain.indexOf('.')
-        while (dotIndex != -1 && dotIndex < domain.length - 1) {
-            val parent = domain.substring(dotIndex + 1)
-            // Only check parents that are real domain names (contain at least one dot),
-            // i.e. skip bare TLDs such as "com", "net", "co" etc.
-            if (parent.contains('.') && filter.mightContain(parent)) return true
-            dotIndex = domain.indexOf('.', dotIndex + 1)
-        }
-        return false
-    }
+    private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean =
+        DomainZoneMatcher.anyMatch(domain) { filter.mightContain(it) }
 }

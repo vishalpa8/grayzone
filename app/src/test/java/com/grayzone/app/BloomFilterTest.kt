@@ -64,6 +64,37 @@ class BloomFilterTest {
         assertTrue(domain.contains('.'))
     }
 
+    @Test
+    fun `mightContain is true only when all hash bits are set`() {
+        val domain = "blocked.example"
+        val bitCount = 2048L
+        val numHashes = 4
+        val bits = ByteArray((bitCount / 8).toInt())
+        setBitsForDomain(bits, bitCount, numHashes, domain)
+
+        val filter = GrayzoneBloomFilter.readFrom(
+            ByteArrayInputStream(bloomBytes(bitCount = bitCount, numHashes = numHashes, bitArray = bits))
+        )
+        assertTrue(filter.mightContain(domain))
+        assertFalse(filter.mightContain("allowed.example"))
+        assertFalse(filter.mightContain(""))
+    }
+
+    @Test
+    fun `loader accepts trailing bytes after a valid filter`() {
+        val valid = bloomBytes(bitCount = 1024, numHashes = 3)
+        val withTrailing = valid + byteArrayOf(0x0A)
+        val filter = GrayzoneBloomFilter.readFrom(ByteArrayInputStream(withTrailing))
+        assertFalse(filter.mightContain("anything.example"))
+    }
+
+    @Test
+    fun `loader rejects bad magic`() {
+        val bytes = bloomBytes()
+        bytes[0] = 0x00
+        assertInvalid(bytes, "bad magic")
+    }
+
     private fun assertInvalid(bytes: ByteArray, expectedMessage: String) {
         try {
             GrayzoneBloomFilter.readFrom(ByteArrayInputStream(bytes))
@@ -77,7 +108,8 @@ class BloomFilterTest {
     private fun bloomBytes(
         version: Int = 1,
         numHashes: Int = 3,
-        bitCount: Long = 1024
+        bitCount: Long = 1024,
+        bitArray: ByteArray? = null
     ): ByteArray {
         val out = ByteArrayOutputStream()
         DataOutputStream(out).use { dos ->
@@ -86,9 +118,29 @@ class BloomFilterTest {
             dos.writeInt(numHashes)
             dos.writeLong(bitCount)
             if (bitCount > 0 && bitCount % 8L == 0L && bitCount <= 32L * 1024L * 1024L * 8L) {
-                dos.write(ByteArray((bitCount / 8L).toInt()))
+                dos.write(bitArray ?: ByteArray((bitCount / 8L).toInt()))
             }
         }
         return out.toByteArray()
     }
+
+    /** Mirror of GrayzoneBloomFilter hashing so tests can plant known members. */
+    private fun setBitsForDomain(bits: ByteArray, bitCount: Long, numHashes: Int, domain: String) {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(domain.toByteArray(Charsets.UTF_8))
+        val h1 = readU32(digest, 0)
+        val h2 = readU32(digest, 4).let { if (it == 0L) 1L else it }
+        for (i in 0 until numHashes) {
+            val bitIndex = (h1 + i.toLong() * h2) % bitCount
+            val byteIdx = (bitIndex / 8).toInt()
+            val bitOff = (bitIndex % 8).toInt()
+            bits[byteIdx] = (bits[byteIdx].toInt() or (1 shl bitOff)).toByte()
+        }
+    }
+
+    private fun readU32(bytes: ByteArray, offset: Int): Long =
+        ((bytes[offset].toLong() and 0xFF) shl 24) or
+            ((bytes[offset + 1].toLong() and 0xFF) shl 16) or
+            ((bytes[offset + 2].toLong() and 0xFF) shl 8) or
+            (bytes[offset + 3].toLong() and 0xFF)
 }

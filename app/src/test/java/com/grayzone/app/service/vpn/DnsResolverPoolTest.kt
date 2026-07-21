@@ -39,4 +39,21 @@ class DnsResolverPoolTest {
         // Ensure we actually created sockets
         assertTrue(socketsCreated.get() > 0)
     }
+
+    @Test
+    fun `shutdown causes subsequent queries to return null without creating sockets`() = runBlocking {
+        val socketsCreated = AtomicInteger(0)
+        val pool = DnsResolverPool(maxConcurrentSockets = 2) {
+            socketsCreated.incrementAndGet()
+        }
+        pool.shutdown()
+
+        val result = pool.performQuery(
+            ByteArray(10), 0, 10,
+            InetAddress.getByName("127.0.0.1"),
+            timeoutMs = 50L
+        )
+        assertEquals(null, result)
+        assertEquals(0, socketsCreated.get())
+    }
 }
