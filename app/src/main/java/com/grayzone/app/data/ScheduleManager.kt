@@ -72,61 +72,7 @@ class ScheduleManager(private val context: Context) {
         val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
         val nowMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
 
-        // Calendar day that was "yesterday" — needed for overnight rule check below.
-        val yesterday = ((dayOfWeek - 2 + 7) % 7) + 1  // keeps result in [1..7]
-
-        return getScheduleRules().any { rule ->
-            if (!rule.enabled) return@any false
-
-            val startMin = rule.startHour * 60 + rule.startMinute
-            val endMin   = rule.endHour   * 60 + rule.endMinute
-
-            if (startMin <= endMin) {
-                // ── Same-day range (e.g. 09:00–17:00) ─────────────────────
-                // Today must be in the rule's day set.
-                dayOfWeek in rule.daysOfWeek && nowMinutes in startMin until endMin
-            } else {
-                // ── Overnight range (e.g. 22:00–06:00) ────────────────────
-                // Two cases:
-                //
-                //   A) nowMinutes >= startMin  →  we are in the FIRST half of the
-                //      overnight window (e.g. 22:30 on Monday). The rule day set
-                //      must contain TODAY.
-                //
-                //   B) nowMinutes < endMin     →  we are in the SECOND half of the
-                //      overnight window (e.g. 02:00 on Tuesday, still inside the
-                //      Mon-night rule). The rule day set must contain YESTERDAY
-                //      (the day the window started).
-                //
-                // Bug before fix: case B used `dayOfWeek in rule.daysOfWeek` which
-                // checked Tuesday — the wrong day — so a Mon–Fri bedtime rule at
-                // 22:00–06:00 would fail to block at 02:00 Tue through Sat morning.
-                //
-                // ── DST (Daylight Saving Time) Transitions ────────────────
-                // Spring forward: Clock jumps ahead (e.g., 02:00→03:00 instantly).
-                //   - For a 22:00–06:00 rule, the 02:00–03:00 hour doesn't exist.
-                //   - The rule continues to work correctly; the 1-hour gap is skipped.
-                //   - No special handling needed—Calendar handles DST automatically.
-                //
-                // Fall back: Clock repeats an hour (e.g., 02:00→01:00).
-                //   - For a 22:00–06:00 rule, the 01:00–02:00 hour occurs twice.
-                //   - The rule blocks during both occurrences (technically correct).
-                //   - Users experience 1 extra hour of blocking (acceptable).
-                //
-                // Edge case: If a rule starts/ends exactly at 02:00 during DST:
-                //   - Spring: Rule skips the transition hour entirely (harmless).
-                //   - Fall: Rule blocks during both occurrences of 02:00.
-                //
-                // Summary: No code changes needed. Android's Calendar API handles
-                // DST transitions correctly for our use case. The minor quirks
-                // (1-hour gap/overlap) are acceptable and self-resolve after DST ends.
-                when {
-                    nowMinutes >= startMin -> dayOfWeek in rule.daysOfWeek
-                    nowMinutes < endMin    -> yesterday in rule.daysOfWeek
-                    else                   -> false
-                }
-            }
-        }
+        return matchesAnyRule(getScheduleRules(), dayOfWeek, nowMinutes)
     }
 
     // ── Quick Focus Mode ──────────────────────────────────────────────────
@@ -195,6 +141,47 @@ class ScheduleManager(private val context: Context) {
 
     companion object {
         const val BREAK_DURATION_MILLIS = 60L * 60 * 1000  // 1 hour
+
+        /**
+         * Pure schedule-match check: does ANY enabled rule block at [dayOfWeek]
+         * (Calendar.SUNDAY..SATURDAY) and [minutesSinceMidnight] (0..1439)?
+         *
+         * Extracted from [isCurrentlyScheduled] so the matching math can be unit
+         * tested deterministically — the caller supplies the wall-clock inputs.
+         *
+         * ── Overnight windows (e.g. 22:00–06:00) ──
+         *   A) minutesSinceMidnight >= startMin  → first half; TODAY must be in the set.
+         *   B) minutesSinceMidnight <  endMin    → second half (after midnight);
+         *      YESTERDAY (the day the window started) must be in the set.
+         *
+         * ── DST ── Android's Calendar handles transitions; the minor 1-hour
+         * gap/overlap is acceptable and self-resolves after DST ends.
+         */
+        fun matchesAnyRule(
+            rules: List<ScheduleRule>,
+            dayOfWeek: Int,
+            minutesSinceMidnight: Int
+        ): Boolean {
+            // Calendar day that was "yesterday" — kept in [1..7].
+            val yesterday = ((dayOfWeek - 2 + 7) % 7) + 1
+            return rules.any { rule ->
+                if (!rule.enabled) return@any false
+
+                val startMin = rule.startHour * 60 + rule.startMinute
+                val endMin   = rule.endHour   * 60 + rule.endMinute
+
+                if (startMin <= endMin) {
+                    // Same-day range (e.g. 09:00–17:00): today must be in the set.
+                    dayOfWeek in rule.daysOfWeek && minutesSinceMidnight in startMin until endMin
+                } else {
+                    when {
+                        minutesSinceMidnight >= startMin -> dayOfWeek in rule.daysOfWeek
+                        minutesSinceMidnight <  endMin   -> yesterday in rule.daysOfWeek
+                        else                             -> false
+                    }
+                }
+            }
+        }
 
         /** Day-of-week constants matching Calendar for UI display. */
         val DAY_NAMES = mapOf(

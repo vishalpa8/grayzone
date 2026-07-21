@@ -105,4 +105,21 @@ object Prompts {
         "Are you running away from something?",
         "Can this wait 10 more minutes?"
     )
+
+    /**
+     * Resolves the pool of reflection prompts the pause screen picks from.
+     *  - [useCustomOnly] = false → defaults + custom prompts.
+     *  - [useCustomOnly] = true  → custom prompts only.
+     *
+     * Falls back to [DEFAULT] whenever the result would otherwise be empty
+     * (e.g. custom-only enabled but no custom prompts saved yet) so the pause
+     * screen is never blank.
+     */
+    fun resolvePool(customPrompts: List<String>, useCustomOnly: Boolean): List<String> {
+        val pool = mutableListOf<String>()
+        if (!useCustomOnly) pool.addAll(DEFAULT)
+        pool.addAll(customPrompts)
+        if (pool.isEmpty()) pool.addAll(DEFAULT)
+        return pool
+    }
 }

@@ -734,18 +734,13 @@ class OverlayService : Service() {
         
         val customPromptsJson = prefs.getString(PrefsKeys.CUSTOM_PROMPTS_JSON, null)
         val useCustomOnly = prefs.getBoolean(PrefsKeys.USE_CUSTOM_PROMPTS_ONLY, false)
-        val promptsList = mutableListOf<String>()
-        if (!useCustomOnly) {
-            promptsList.addAll(Prompts.DEFAULT)
-        }
-        if (customPromptsJson != null) {
+        val customPrompts: List<String> = if (customPromptsJson != null) {
             try {
                 val type = object : TypeToken<List<String>>() {}.type
-                val customList: List<String> = Gson().fromJson(customPromptsJson, type)
-                promptsList.addAll(customList)
-            } catch (e: Exception) {}
-        }
-        if (promptsList.isEmpty()) promptsList.addAll(Prompts.DEFAULT)
+                Gson().fromJson<List<String>>(customPromptsJson, type) ?: emptyList()
+            } catch (e: Exception) { emptyList() }
+        } else emptyList()
+        val promptsList = Prompts.resolvePool(customPrompts, useCustomOnly)
         val prompt = promptsList.random()
 
         val ctx = this
