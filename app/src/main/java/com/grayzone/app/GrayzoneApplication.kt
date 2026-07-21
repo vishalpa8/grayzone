@@ -105,27 +105,12 @@ class GrayzoneApplication : Application() {
      */
     private fun resetRuntimeStateIfNeeded() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-        val lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + "runtime", "") ?: ""
-        val now = System.currentTimeMillis()
-
-        if (!DateUtils.shouldResetDailyRuntimeState(now, lastResetDateKey)) {
-            return
+        if (com.grayzone.app.data.RuntimeSessionReset.resetIfNeeded(prefs)) {
+            GrayzoneLogger.i(
+                LogComponent.BOOT,
+                "Runtime session state reset for a new day; stats preserved"
+            )
         }
-
-        val editor = prefs.edit()
-        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-        monitoredApps.forEach { pkg ->
-            editor.remove(PrefsKeys.ACTIVE_UNTIL + pkg)
-                .remove(PrefsKeys.LOCKED_UNTIL + pkg)
-                .remove(PrefsKeys.REMAINING_MILLIS + pkg)
-        }
-        editor.putString(PrefsKeys.DAILY_RESET_DATE + "runtime", DateUtils.getCurrentDateKey())
-            .apply()
-
-        GrayzoneLogger.i(
-            LogComponent.BOOT,
-            "Runtime session state reset for a new day; stats preserved"
-        )
     }
 
     /**

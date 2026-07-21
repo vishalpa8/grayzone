@@ -17,8 +17,6 @@ import java.io.File
 data class WifiDevice(
     val ip: String,
     val hostname: String,
-    val isBlocked: Boolean = false,
-    val customName: String = "",
     val deviceType: DeviceType = DeviceType.UNKNOWN,
     val isGateway: Boolean = false
 )
@@ -79,8 +77,7 @@ private fun normalizeHostname(hostname: String, ip: String): String {
         .orEmpty()
 }
 
-fun inferDeviceDisplayName(ip: String, hostname: String, customName: String, isGateway: Boolean): String {
-    if (customName.isNotBlank()) return customName
+fun inferDeviceDisplayName(ip: String, hostname: String, isGateway: Boolean): String {
     if (isGateway) return "Router / Gateway"
 
     val normalizedHost = normalizeHostname(hostname, ip)
@@ -107,17 +104,7 @@ class WifiRepository(private val context: Context) {
 
     private val wifiManager: WifiManager =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    private val prefs = context.getSharedPreferences("wifi_screen_prefs", Context.MODE_PRIVATE)
 
-    fun getCustomName(ip: String): String = prefs.getString("name_$ip", "") ?: ""
-    fun saveCustomName(ip: String, name: String) =
-        prefs.edit().putString("name_$ip", name).apply()
-    fun getBlockedIps(): Set<String> = prefs.getStringSet("blocked_ips", emptySet()) ?: emptySet()
-    fun setBlocked(ip: String, blocked: Boolean) {
-        val s = getBlockedIps().toMutableSet()
-        if (blocked) s.add(ip) else s.remove(ip)
-        prefs.edit().putStringSet("blocked_ips", s).apply()
-    }
 
     suspend fun readNetworkInfo(): WifiNetworkInfo = withContext(Dispatchers.IO) {
         val connMgr = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -182,7 +169,6 @@ class WifiRepository(private val context: Context) {
         val subnet = info.subnetPrefix.ifBlank { info.ipAddress.split(".").take(3).joinToString(".") }
         if (subnet.isBlank()) return@withContext emptyList()
 
-        val blocked = getBlockedIps()
         val results = java.util.concurrent.CopyOnWriteArrayList<WifiDevice>()
 
         val arpHosts = try {
@@ -203,8 +189,6 @@ class WifiRepository(private val context: Context) {
                         WifiDevice(
                             ip         = ip,
                             hostname   = hostname,
-                            isBlocked  = blocked.contains(ip),
-                            customName = getCustomName(ip),
                             deviceType = inferDeviceType(ip, hostname, isGateway),
                             isGateway  = isGateway
                         )
@@ -234,8 +218,6 @@ class WifiRepository(private val context: Context) {
                                     WifiDevice(
                                         ip         = ip,
                                         hostname   = hostname,
-                                        isBlocked  = blocked.contains(ip),
-                                        customName = getCustomName(ip),
                                         deviceType = inferDeviceType(ip, hostname, isGateway),
                                         isGateway  = isGateway
                                     )

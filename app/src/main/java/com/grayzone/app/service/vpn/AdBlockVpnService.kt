@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -13,8 +14,6 @@ import com.grayzone.app.MainActivity
 import com.grayzone.app.R
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetAddress
 import kotlinx.coroutines.*
 
@@ -41,6 +40,42 @@ class AdBlockVpnService : VpnService() {
         )
 
         private const val DNS_TIMEOUT_MS = 2000
+
+        /**
+         * Apps excluded from the VPN tunnel by default.
+         *
+         * Payment/banking apps often refuse to work while a VPN is active
+         * (fraud detection), and streaming apps can fail DRM/CDN checks or
+         * break when their telemetry domains resolve to NXDOMAIN. Excluding
+         * them routes their traffic (including DNS) outside the tunnel, so
+         * they behave exactly as if the VPN were off.
+         */
+        private val DEFAULT_BYPASS_APPS = listOf(
+            // Payments / UPI / banking
+            "com.google.android.apps.nbu.paisa.user",  // Google Pay
+            "com.google.android.apps.walletnfcrel",    // Google Wallet
+            "com.phonepe.app",                         // PhonePe
+            "net.one97.paytm",                         // Paytm
+            "in.org.npci.upiapp",                      // BHIM
+            "in.amazon.mShop.android.shopping",        // Amazon (Amazon Pay)
+            "com.mobikwik_new",                        // MobiKwik
+            "com.freecharge.android",                  // Freecharge
+            "com.csam.icici.bank.imobile",             // ICICI iMobile
+            "com.sbi.lotusintouch",                    // SBI YONO Lite
+            "com.sbi.SBIFreedomPlus",                  // SBI YONO
+            "com.snapwork.hdfc",                       // HDFC
+            "com.axis.mobile",                         // Axis Mobile
+            "com.msf.kbank.mobile",                    // Kotak
+            "com.paypal.android.p2pmobile",            // PayPal
+            // Streaming / DRM-heavy
+            "com.netflix.mediaclient",                 // Netflix
+            "in.startv.hotstar",                       // Hotstar (legacy)
+            "com.hotstar.android",                     // Hotstar / JioHotstar
+            "com.amazon.avod.thirdpartyclient",        // Prime Video
+            "com.jio.media.ondemand",                  // JioCinema
+            "com.disney.disneyplus",                   // Disney+
+            "com.sonyliv"                              // SonyLIV
+        )
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -69,12 +104,14 @@ class AdBlockVpnService : VpnService() {
         super.onCreate()
         BlocklistManager.load(this)
         createNotificationChannel()
-        resolverPool = DnsResolverPool(
-            maxConcurrentSockets = 20,
-            socketTimeoutMs = DNS_TIMEOUT_MS
-        ) { socket ->
-            try { protect(socket) } catch (e: Exception) { /* ignore */ }
-        }
+        resolverPool = createResolverPool()
+    }
+
+    private fun createResolverPool() = DnsResolverPool(
+        maxConcurrentSockets = 20,
+        socketTimeoutMs = DNS_TIMEOUT_MS
+    ) { socket ->
+        try { protect(socket) } catch (e: Exception) { /* ignore */ }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,7 +140,18 @@ class AdBlockVpnService : VpnService() {
                 .setSession("Grayzone AdBlock")
                 .setBlocking(true)
 
+            applyAppBypassList(builder)
+
+            // establish() returns null when the app is no longer the prepared VPN
+            // (permission revoked or another VPN took over). Treat it as a failure
+            // instead of silently entering a broken "running without interface" state.
             vpnInterface = builder.establish()
+                ?: throw IllegalStateException("VpnService.Builder.establish() returned null - VPN permission revoked or another VPN is active")
+
+            // The pool is destroyed on shutdown, so recreate it when (re)starting.
+            if (resolverPool == null) {
+                resolverPool = createResolverPool()
+            }
             isRunning = true
 
             // Persist the VPN-active flag so BootReceiver can restart it after reboot.
@@ -138,6 +186,30 @@ class AdBlockVpnService : VpnService() {
         }
     }
 
+    /**
+     * Excludes payment/banking/streaming apps (plus any user-chosen packages)
+     * from the tunnel. addDisallowedApplication throws NameNotFoundException
+     * for apps that aren't installed, so each package is applied individually.
+     */
+    private fun applyAppBypassList(builder: Builder) {
+        val userBypass = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            .getStringSet(com.grayzone.app.PrefsKeys.VPN_BYPASS_APPS, emptySet()) ?: emptySet()
+
+        var applied = 0
+        (DEFAULT_BYPASS_APPS + userBypass).toSet().forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+                applied++
+            } catch (e: PackageManager.NameNotFoundException) {
+                // App not installed on this device; nothing to bypass.
+            }
+        }
+        com.grayzone.app.GrayzoneLogger.i(
+            com.grayzone.app.LogComponent.VPN,
+            "VPN bypass applied to $applied installed payment/streaming apps"
+        )
+    }
+
     private fun stopVpn() {
         shutdownVpn(clearPersistedFlag = true, stopService = true)
         Log.d(TAG, "VPN Stopped")
@@ -155,10 +227,10 @@ class AdBlockVpnService : VpnService() {
 
         DnsTrafficBus.clear()
 
-        serviceScope.launch {
-            resolverPool?.shutdown()
-            resolverPool = null
-        }
+        // Synchronous shutdown: no dependency on serviceScope, which may already
+        // be cancelled when this runs from onDestroy().
+        resolverPool?.shutdown()
+        resolverPool = null
 
         if (clearPersistedFlag) {
             getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
@@ -182,8 +254,12 @@ class AdBlockVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Do NOT clear the persisted VPN_ENABLED flag here: onDestroy also fires
+        // when the OS kills the service, and the flag represents user intent that
+        // BootReceiver / START_STICKY use to restore protection. The flag is only
+        // cleared by an explicit ACTION_STOP (stopVpn).
+        shutdownVpn(clearPersistedFlag = false, stopService = false)
         serviceScope.cancel()
-        stopVpn()
     }
 
     private fun runVpnLoop() {
@@ -441,6 +517,28 @@ class AdBlockVpnService : VpnService() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
+    private var cachedLogoBitmap: android.graphics.Bitmap? = null
+    /** Colour launcher logo as a bitmap for the notification large icon (cached). */
+    private fun appLogoBitmap(): android.graphics.Bitmap? {
+        cachedLogoBitmap?.let { return it }
+        return try {
+            androidx.core.content.ContextCompat.getDrawable(this, R.mipmap.ic_launcher)?.let { d ->
+                val size = resources.getDimensionPixelSize(
+                    android.R.dimen.notification_large_icon_width
+                ).coerceAtLeast(1)
+                val bmp = android.graphics.Bitmap.createBitmap(
+                    size, size, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                d.setBounds(0, 0, size, size)
+                d.draw(android.graphics.Canvas(bmp))
+                cachedLogoBitmap = bmp
+                bmp
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun buildNotification(): Notification {
         val stopIntent = Intent(this, AdBlockVpnService::class.java).apply { action = ACTION_STOP }
         val stopPending = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
@@ -448,7 +546,11 @@ class AdBlockVpnService : VpnService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone Protection Active")
             .setContentText("DNS monitoring is securing your network.")
-            .setSmallIcon(R.drawable.ic_stat_grayzone)
+            // Monochrome vector: valid notification alpha mask on all devices.
+            .setSmallIcon(R.drawable.ic_notification)
+            // Colour launcher logo as the large icon so the app is recognisable.
+            .setLargeIcon(appLogoBitmap())
+            .setColor(0xFF7C4DFF.toInt())
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .addAction(0, "Stop", stopPending)

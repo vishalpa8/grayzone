@@ -43,6 +43,28 @@ class SessionPolicyEngineTest {
     }
 
     @Test
+    fun `when daily break is active, dismiss overlay even when locked out`() {
+        val state = defaultState.copy(
+            isOnBreak = true,
+            lockedUntil = now + 100000L,      // would normally be a hard lockout
+            isScheduleLocked = true,          // would normally be a schedule lock
+            budgetRemainingMs = 0L            // would normally be a budget lock
+        )
+        val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
+
+        assertEquals(1, commands.size)
+        assertTrue(commands[0] is SessionCommand.DismissOverlay)
+    }
+
+    @Test
+    fun `when daily break is active, backgrounding still records usage`() {
+        val state = defaultState.copy(isOnBreak = true, activeUntil = now + 5000L)
+        val commands = engine.evaluate(AppEvent.AppBackgrounded(pkg, 1000L), state, now, appName)
+
+        assertTrue(commands.any { it is SessionCommand.RecordUsage })
+    }
+
+    @Test
     fun `when schedule is locked, show schedule lock screen`() {
         val state = defaultState.copy(isScheduleLocked = true)
         val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
@@ -61,12 +83,12 @@ class SessionPolicyEngineTest {
     }
 
     @Test
-    fun `when budget exhausted, show lockout screen`() {
+    fun `when budget exhausted, show budget lock screen`() {
         val state = defaultState.copy(budgetRemainingMs = 0L)
         val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
         
         assertEquals(1, commands.size)
-        assertTrue(commands[0] is SessionCommand.ShowLockoutScreen)
+        assertTrue(commands[0] is SessionCommand.ShowBudgetLockScreen)
     }
 
     @Test

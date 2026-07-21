@@ -23,6 +23,14 @@ class SessionPolicyEngine {
             return commands
         }
 
+        // 2. Daily break: while active, nothing is locked — no friction screen,
+        // no lockout, no schedule block. Usage is still recorded on backgrounding
+        // so daily budgets stay accurate.
+        if (state.isOnBreak && event is AppEvent.AppForegrounded) {
+            commands.add(SessionCommand.DismissOverlay)
+            return commands
+        }
+
         when (event) {
             is AppEvent.AppForegrounded -> {
                 // Not monitored? Let them pass.
@@ -44,16 +52,10 @@ class SessionPolicyEngine {
                 }
 
                 // Budget completely exhausted? (Daily limit reached)
+                // The budget lock has no meaningful "locked until" timestamp — it resets
+                // at midnight — so it gets its own screen instead of the lockout screen.
                 if (state.isBudgetExhausted()) {
-                    // Set a lockout until tomorrow. We calculate this in the repository,
-                    // but for now, we just enforce the lockout.
-                    // If budget is 0, we treat it as an infinite lockout until budget resets.
-                    // We'll show the regular lockout screen with the next day's reset time,
-                    // but for the engine's purpose, we use a generic "end of day" or just generic lock.
-                    // For now, if lockedOut is false but budget is exhausted, it shouldn't happen.
-                    // The service should have set lockedUntil to tomorrow.
-                    // But if it happens, we just show a lock.
-                    commands.add(SessionCommand.ShowLockoutScreen(state.packageName, appName, state.lockedUntil))
+                    commands.add(SessionCommand.ShowBudgetLockScreen(state.packageName, appName))
                     return commands
                 }
 

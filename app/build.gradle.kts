@@ -89,6 +89,12 @@ dependencies {
     // Gson for JSON serialization
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // Embedded HTTP server for Clipboard Share & File Share
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // QR code generation (offline)
+    implementation("com.google.zxing:core:3.5.2")
+
     // Testing dependencies
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.7.0")

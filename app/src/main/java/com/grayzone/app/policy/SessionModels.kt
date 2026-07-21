@@ -23,7 +23,9 @@ data class SessionState(
     val defaultSessionMins: Int,
     val defaultLockoutMins: Int,
     // Add schedule constraint support if needed (e.g. isScheduleLocked)
-    val isScheduleLocked: Boolean = false
+    val isScheduleLocked: Boolean = false,
+    /** Daily break active: nothing is locked while true. */
+    val isOnBreak: Boolean = false
 ) {
     fun hasActiveSession(now: Long): Boolean = now < activeUntil
     fun isLockedOut(now: Long): Boolean = now < lockedUntil
@@ -46,6 +48,10 @@ sealed class SessionCommand {
         val lockedUntil: Long
     ) : SessionCommand()
     data class ShowScheduleLockScreen(
+        val packageName: String,
+        val appName: String
+    ) : SessionCommand()
+    data class ShowBudgetLockScreen(
         val packageName: String,
         val appName: String
     ) : SessionCommand()

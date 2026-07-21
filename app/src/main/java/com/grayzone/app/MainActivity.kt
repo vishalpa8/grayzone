@@ -27,7 +27,7 @@ import com.grayzone.app.ui.AppsScreen
 import com.grayzone.app.ui.HomeScreen
 import com.grayzone.app.ui.LimitsScreen
 import com.grayzone.app.ui.StatsScreen
-import com.grayzone.app.ui.WifiScreen
+import com.grayzone.app.ui.NetworkToolsScreen
 import com.grayzone.app.ui.OnboardingScreen
 import com.grayzone.app.ui.SettingsScreen
 import com.grayzone.app.ui.theme.*
@@ -114,7 +114,7 @@ fun MainScreen() {
             com.grayzone.app.ui.VpnScreen(onBack = { showVpnScreen = false })
         } else if (showWifiScreen) {
             // Full-screen WiFi view with back navigation
-            WifiScreen(onBack = { showWifiScreen = false })
+            NetworkToolsScreen(onBack = { showWifiScreen = false })
         } else {
             Scaffold(
                 containerColor = GZBackground,

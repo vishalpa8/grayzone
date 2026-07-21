@@ -37,6 +37,14 @@ object PrefsKeys {
     const val FOCUS_MODE_ACTIVE       = "focus_mode_active"
     const val FOCUS_MODE_UNTIL        = "focus_mode_until"
 
+    // ── Daily Break (1 hour/day where nothing is locked) ──────────────────
+    const val BREAK_UNTIL             = "break_until"
+    const val BREAK_USED_DATE         = "break_used_date"   // "yyyy-MM-dd", once per day
+
+    // ── VPN app bypass ─────────────────────────────────────────────────────
+    /** Extra packages the user excluded from the VPN tunnel. */
+    const val VPN_BYPASS_APPS         = "vpn_bypass_apps"
+
     // ── Custom Reflection Prompts ──────────────────────────────────────────
     const val CUSTOM_PROMPTS_JSON     = "custom_prompts_json"
     const val USE_CUSTOM_PROMPTS_ONLY = "use_custom_prompts_only"

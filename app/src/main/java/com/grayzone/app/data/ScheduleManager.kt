@@ -162,7 +162,40 @@ class ScheduleManager(private val context: Context) {
         return (until - System.currentTimeMillis()).coerceAtLeast(0L)
     }
 
+    // ── Daily Break ────────────────────────────────────────────────────────
+    // One hour per day during which nothing is locked: no friction screens,
+    // no lockouts, no schedule blocks. Usable once per calendar day.
+
+    fun isBreakActive(): Boolean =
+        System.currentTimeMillis() < prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L)
+
+    fun getBreakRemainingMillis(): Long =
+        (prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L) - System.currentTimeMillis()).coerceAtLeast(0L)
+
+    /** The break can be started once per calendar day. */
+    fun canStartBreakToday(): Boolean =
+        prefs.getString(PrefsKeys.BREAK_USED_DATE, "") != com.grayzone.app.DateUtils.getCurrentDateKey()
+
+    /**
+     * Starts the daily break. Returns false if it was already used today.
+     * Ending the break early does not restore today's allowance.
+     */
+    fun startDailyBreak(): Boolean {
+        if (!canStartBreakToday()) return false
+        prefs.edit()
+            .putLong(PrefsKeys.BREAK_UNTIL, System.currentTimeMillis() + BREAK_DURATION_MILLIS)
+            .putString(PrefsKeys.BREAK_USED_DATE, com.grayzone.app.DateUtils.getCurrentDateKey())
+            .apply()
+        return true
+    }
+
+    fun stopBreak() {
+        prefs.edit().putLong(PrefsKeys.BREAK_UNTIL, 0L).apply()
+    }
+
     companion object {
+        const val BREAK_DURATION_MILLIS = 60L * 60 * 1000  // 1 hour
+
         /** Day-of-week constants matching Calendar for UI display. */
         val DAY_NAMES = mapOf(
             Calendar.MONDAY to "Mon",

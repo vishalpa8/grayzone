@@ -176,6 +176,10 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
         }
 
         item {
+            DailyBreakCard()
+        }
+
+        item {
             StreakCard()
         }
 

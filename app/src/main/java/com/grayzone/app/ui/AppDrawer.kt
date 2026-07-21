@@ -92,8 +92,8 @@ fun AppDrawerContent(
             icon = { Icon(Icons.Filled.Wifi, contentDescription = null,
                 tint = if (wifiEnabled) GZChartCyan else GZTextTertiary,
                 modifier = Modifier.size(20.dp)) },
-            title = "WiFi Monitor",
-            subtitle = if (wifiEnabled) "Connected — tap to manage" else "WiFi off",
+            title = "Network Tools",
+            subtitle = if (wifiEnabled) "Connected — tap to explore" else "WiFi off",
             subtitleColor = if (wifiEnabled) GZChartCyan else GZTextTertiary,
             onClick = { onNavigate(DrawerDestination.WIFI); onClose() }
         )

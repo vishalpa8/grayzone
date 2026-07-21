@@ -3,8 +3,6 @@ package com.grayzone.app.service.vpn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.DatagramPacket
@@ -23,8 +21,10 @@ class DnsResolverPool(
 ) {
     private val semaphore = Semaphore(maxConcurrentSockets)
     private val idleSockets = mutableListOf<DatagramSocket>()
-    private val mutex = Mutex()
-    private var isShutdown = false
+    // Plain lock (all critical sections are non-suspending) so shutdown()
+    // can be called synchronously from Service.onDestroy().
+    private val lock = Any()
+    @Volatile private var isShutdown = false
 
     /**
      * Acquires a socket from the pool (or creates one), executes the query, 
@@ -41,7 +41,8 @@ class DnsResolverPool(
 
         return semaphore.withPermit {
             val socket = acquireSocket() ?: return@withPermit null
-            
+            var reusable = true
+
             try {
                 // Send and receive the query on the IO dispatcher
                 withContext(Dispatchers.IO) {
@@ -64,19 +65,22 @@ class DnsResolverPool(
                     }
                 }
             } catch (e: Exception) {
+                // The socket may be in an undefined state after an unexpected error;
+                // don't return it to the pool.
+                reusable = false
                 com.grayzone.app.GrayzoneLogger.w(
                     com.grayzone.app.LogComponent.DNS,
                     "DNS query failed: ${e.message}"
                 )
                 null
             } finally {
-                releaseSocket(socket)
+                releaseSocket(socket, reusable)
             }
         }
     }
 
-    private suspend fun acquireSocket(): DatagramSocket? {
-        mutex.withLock {
+    private fun acquireSocket(): DatagramSocket? {
+        synchronized(lock) {
             if (isShutdown) return null
             if (idleSockets.isNotEmpty()) {
                 return idleSockets.removeAt(idleSockets.size - 1)
@@ -98,18 +102,22 @@ class DnsResolverPool(
         }
     }
 
-    private suspend fun releaseSocket(socket: DatagramSocket) {
-        mutex.withLock {
+    private fun releaseSocket(socket: DatagramSocket, reusable: Boolean) {
+        if (!reusable || socket.isClosed) {
+            try { socket.close() } catch (_: Exception) {}
+            return
+        }
+        synchronized(lock) {
             if (isShutdown) {
-                socket.close()
+                try { socket.close() } catch (_: Exception) {}
             } else {
                 idleSockets.add(socket)
             }
         }
     }
 
-    suspend fun shutdown() {
-        mutex.withLock {
+    fun shutdown() {
+        synchronized(lock) {
             isShutdown = true
             idleSockets.forEach { 
                 try { it.close() } catch (e: Exception) {} 

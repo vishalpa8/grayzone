@@ -48,12 +48,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.pm.PackageManager
 import com.grayzone.app.data.ScheduleManager
-import androidx.core.content.ContextCompat
 
 class OverlayService : Service() {
 
@@ -97,11 +97,13 @@ class OverlayService : Service() {
     private val serviceScope = CoroutineScope(
         Dispatchers.IO + SupervisorJob() + coroutineExceptionHandler
     )
-    private val lockoutJobs = java.util.HashMap<String, Job>()
+    // Written from both the transition coroutine (IO) and the main thread.
+    private val lockoutJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
     
-    // Usage stats state
-    private var lastForegroundPackage: String? = null
-    private var sessionStartTime: Long = 0L
+    // Usage stats state — read/written across the transition coroutine (IO),
+    // the main-thread countdown job, and lockout jobs, hence @Volatile.
+    @Volatile private var lastForegroundPackage: String? = null
+    @Volatile private var sessionStartTime: Long = 0L
     private var cachedHomeLauncherPkg: String? = null
     private var homeLauncherCacheTime: Long = 0L
     private lateinit var scheduleManager: ScheduleManager
@@ -157,6 +159,53 @@ class OverlayService : Service() {
             com.grayzone.app.LogComponent.OVERLAY, 
             "OverlayService started - listening for AccessibilityService events"
         )
+
+        scheduleMidnightReset()
+    }
+
+    /**
+     * At midnight everything resets for the new day: active sessions, lockouts
+     * and paused remainders are cleared (budgets reset via their own date keys).
+     * Runs in a loop so the service handles any number of day rollovers.
+     */
+    private fun scheduleMidnightReset() {
+        serviceScope.launch {
+            while (true) {
+                // Small buffer past midnight to avoid firing on the old day.
+                delay(com.grayzone.app.DateUtils.millisUntilMidnight() + 1_000L)
+                performMidnightReset()
+            }
+        }
+    }
+
+    private suspend fun performMidnightReset() {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        if (!com.grayzone.app.data.RuntimeSessionReset.resetIfNeeded(prefs)) return
+
+        GrayzoneLogger.i(LogComponent.OVERLAY, "Midnight reset: session locks cleared for the new day")
+
+        lockoutJobs.values.forEach { it.cancel() }
+        lockoutJobs.clear()
+
+        val currentPkg = lastForegroundPackage
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+
+        withContext(Dispatchers.Main) {
+            // Any session/lock UI from yesterday is now stale.
+            cancelCountdownNotification()
+            dismissTint()
+            dismissOverlay()
+            // If the user is sitting in a monitored app at midnight, re-enter
+            // through the friction wait screen instead of granting silent access
+            // (unless Grayzone is disabled or a break is running).
+            if (currentPkg != null && monitoredApps.contains(currentPkg) &&
+                prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true) &&
+                !scheduleManager.isBreakActive()
+            ) {
+                sessionStartTime = 0L
+                showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
+            }
+        }
     }
 
     /**
@@ -200,6 +249,10 @@ class OverlayService : Service() {
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
 
+            // New-day safety net: cheap date-key comparison on every transition
+            // so stale locks never survive midnight even if the timer job died.
+            com.grayzone.app.data.RuntimeSessionReset.resetIfNeeded(prefs)
+
             com.grayzone.app.GrayzoneLogger.d(
                 com.grayzone.app.LogComponent.OVERLAY,
                 "Foreground app changed",
@@ -232,13 +285,22 @@ class OverlayService : Service() {
             )
             
             var didShowWaitScreen = false
+            // A paused session resumed via UpdateState is also an active session,
+            // even though the pre-command state snapshot says otherwise.
+            var hasActiveSession = newState.hasActiveSession(now)
             fgCommands.forEach { cmd ->
                 if (cmd is com.grayzone.app.policy.SessionCommand.ShowWaitScreen) didShowWaitScreen = true
+                if (cmd is com.grayzone.app.policy.SessionCommand.UpdateState &&
+                    (cmd.newActiveUntil ?: 0L) > now
+                ) {
+                    hasActiveSession = true
+                }
                 executeCommand(cmd, prefs)
             }
             
-            // If wait screen wasn't shown (meaning session active or dismissed), we start timing
-            if (!didShowWaitScreen && newState.hasActiveSession(now) && newState.isMonitored) {
+            // If wait screen wasn't shown (meaning session active or dismissed), we start timing.
+            // During a break, usage is timed too so daily budgets stay accurate.
+            if (!didShowWaitScreen && (hasActiveSession || newState.isOnBreak) && newState.isMonitored) {
                 sessionStartTime = now
             }
 
@@ -257,7 +319,9 @@ class OverlayService : Service() {
         val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
         val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
         val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
-        val remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+        // Normalize so stale or oversized paused values (>24h) are treated as expired,
+        // matching isAnyAppLocked() and the UI screens.
+        val remainingMillis = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
         val defaultSessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
@@ -283,7 +347,8 @@ class OverlayService : Service() {
             sessionRemainingMs = remainingMillis,
             defaultSessionMins = defaultSessionMins,
             defaultLockoutMins = defaultLockoutMins,
-            isScheduleLocked = scheduleManager.isCurrentlyScheduled()
+            isScheduleLocked = scheduleManager.isCurrentlyScheduled(),
+            isOnBreak = scheduleManager.isBreakActive()
         )
     }
     
@@ -308,8 +373,13 @@ class OverlayService : Service() {
                     showOverlay(cmd.packageName, cmd.appName, com.grayzone.app.OverlayMode.SCHEDULE_LOCK, 0L)
                 }
             }
+            is com.grayzone.app.policy.SessionCommand.ShowBudgetLockScreen -> {
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(cmd.packageName, cmd.appName, com.grayzone.app.OverlayMode.BUDGET_LOCK, 0L)
+                }
+            }
             is com.grayzone.app.policy.SessionCommand.RecordUsage -> {
-                logUsageAndCheckBudget(cmd.packageName, now - cmd.durationMs)
+                logUsageAndCheckBudget(cmd.packageName, now - cmd.durationMs, cmd.wasBlocked)
             }
             is com.grayzone.app.policy.SessionCommand.UpdateState -> {
                 val editor = prefs.edit()
@@ -355,7 +425,11 @@ class OverlayService : Service() {
     private fun hasLauncherIntent(pkg: String): Boolean =
         packageManager.getLaunchIntentForPackage(pkg) != null || isHomeLauncher(pkg)
 
-    private suspend fun logUsageAndCheckBudget(pkg: String, startTime: Long) = withContext(Dispatchers.IO) {
+    private suspend fun logUsageAndCheckBudget(
+        pkg: String,
+        startTime: Long,
+        wasBlocked: Boolean = false
+    ) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val durationMs = now - startTime
         if (durationMs <= 0) return@withContext
@@ -373,7 +447,7 @@ class OverlayService : Service() {
                     startTime = startTime,
                     endTime = now,
                     durationMillis = durationMs,
-                    wasBlocked = false,
+                    wasBlocked = wasBlocked,
                     dateKey = dateKey
                 )
             )
@@ -394,7 +468,11 @@ class OverlayService : Service() {
                     .putString(PrefsKeys.DAILY_RESET_DATE + pkg, dateKey)
                     .commit()
 
-                if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg) {
+                // Don't slam the budget lock down mid-break; it will be enforced
+                // by the policy engine on the next foreground once the break ends.
+                if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg &&
+                    !scheduleManager.isBreakActive()
+                ) {
                     withContext(Dispatchers.Main) {
                         showOverlay(pkg, appName, OverlayMode.BUDGET_LOCK, 0L)
                     }
@@ -456,7 +534,12 @@ class OverlayService : Service() {
 
         nm.notify(NOTIF_ID,
             NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_stat_grayzone)
+                // Small icons must be monochrome alpha masks; the vector asset
+                // guarantees the Grayzone glyph renders instead of a grey square.
+                .setSmallIcon(R.drawable.ic_notification)
+                // Full-colour launcher logo shown as the large icon so the app is
+                // recognisable in the notification (small icon can't carry colour).
+                .setLargeIcon(appLogoBitmap())
                 .setContentTitle(appName)
                 .setContentText("Session active")
                 .setSubText("Grayzone")
@@ -466,7 +549,7 @@ class OverlayService : Service() {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setColor(ContextCompat.getColor(this, android.R.color.black))
+                .setColor(PURPLE)
                 .setContentIntent(
                     PendingIntent.getActivity(
                         this, 0,
@@ -803,16 +886,34 @@ class OverlayService : Service() {
                 delay(1000)
                 secondsRemaining--
                 val remaining = secondsRemaining
-                if (remaining <= 0) {
-                    if (!isAnyLock) markAppUnlocked(packageName)
-                    dismissOverlay()
-                } else {
+                if (remaining > 0) {
                     countdownView.text = if (isLocked) formatDuration(remaining) else if (isBudgetLock || isScheduleLock) "â€”" else "$remaining"
                     if (!isAnyLock) {
                         subView.text = "Opening in $remaining secondsâ€¦"
                         progress.progress = remaining
                     }
                 }
+            }
+            // Countdown finished (also reached immediately if it started at 0).
+            // If this job was cancelled while the loop was exiting (e.g. an app
+            // change dismissed the overlay), don't grant a session.
+            if (!isActive) return@launch
+            when {
+                !isAnyLock -> {
+                    markAppUnlocked(packageName)
+                    dismissOverlay()
+                }
+                isLocked -> {
+                    // Lockout expired while the lock screen was showing. Don't grant
+                    // silent, untracked access: fall back to the friction wait screen
+                    // if the user is still in this app.
+                    dismissOverlay()
+                    if (lastForegroundPackage == packageName) {
+                        showOverlay(packageName, appName, OverlayMode.FRICTION, 0L)
+                    }
+                }
+                // BUDGET_LOCK / SCHEDULE_LOCK have no countdown; they stay up
+                // until the user leaves the app.
             }
         }
     }
@@ -929,11 +1030,41 @@ class OverlayService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
+    /**
+     * The colour launcher logo as a bitmap for use as a notification large icon.
+     * Cached because it's read on every notification rebuild. Returns null if the
+     * resource can't be decoded, in which case the notification simply omits it.
+     */
+    private var cachedLogoBitmap: android.graphics.Bitmap? = null
+    private fun appLogoBitmap(): android.graphics.Bitmap? {
+        cachedLogoBitmap?.let { return it }
+        return try {
+            (androidx.core.content.ContextCompat.getDrawable(this, R.mipmap.ic_launcher))
+                ?.let { d ->
+                    val size = resources.getDimensionPixelSize(
+                        android.R.dimen.notification_large_icon_width
+                    ).coerceAtLeast(1)
+                    val bmp = android.graphics.Bitmap.createBitmap(
+                        size, size, android.graphics.Bitmap.Config.ARGB_8888
+                    )
+                    val canvas = android.graphics.Canvas(bmp)
+                    d.setBounds(0, 0, size, size)
+                    d.draw(canvas)
+                    cachedLogoBitmap = bmp
+                    bmp
+                }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
             .setContentTitle("Grayzone is active")
             .setContentText("Monitoring app usage to help you stay focused.")
-            .setSmallIcon(R.drawable.ic_stat_grayzone)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(appLogoBitmap())
+            .setColor(PURPLE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
