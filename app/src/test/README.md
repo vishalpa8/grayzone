@@ -31,6 +31,32 @@ Tests DNS packet parsing and response generation:
 - ✅ IPv6 packet handling
 - ✅ DNS compression handling
 
+### DnsResolverPoolTest.kt
+Tests the bounded, reusable UDP socket pool that serves upstream DNS lookups:
+- ✅ Socket reuse and release back to the pool
+- ✅ Sockets are discarded (not reused) after query errors
+- ✅ Synchronous shutdown closes idle sockets and rejects further use
+
+### SessionPolicyEngineTest.kt
+Tests the pure decision engine that maps app events + state to commands:
+- ✅ Friction, session-active, lockout, and schedule-lock transitions
+- ✅ Budget exhaustion shows the dedicated budget-lock screen
+- ✅ Daily break dismisses overlays even when otherwise locked
+- ✅ Usage is still recorded while on a daily break
+
+### DailyResetLogicTest.kt
+Tests the once-per-calendar-day runtime reset boundary:
+- ✅ Reset fires when the date key changes
+- ✅ No reset within the same day
+- ✅ Midnight rollover handling
+
+### SessionStateLogicTest.kt
+Tests session-state helpers:
+- ✅ Paused-remainder normalization (stale/oversized values treated as expired)
+
+### BlocklistManagerTest.kt / IntegrationTest.kt / CleanupAndLoggingTest.kt
+Cover blocklist loading, end-to-end policy flows, and cleanup/logging behavior.
+
 ## Running Tests
 
 ### Via Android Studio

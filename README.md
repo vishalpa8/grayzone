@@ -9,9 +9,16 @@ Grayzone is an open-source Android digital wellbeing application designed to hel
 - **Strict Lockouts**: When a session expires, you are forcibly locked out of the app. A strict cooldown timer (e.g., 30 minutes) begins, during which the app cannot be accessed.
 - **Friction Overlay**: Deliberately slowing you down by making you wait 8 seconds before you can start a new active session.
 - **Pausable Sessions**: If you close a monitored app before your session expires, the timer pauses. When you return, you bypass the friction screen and instantly resume your remaining time. A full reset is only earned after you drain your time and serve a full lockout.
-- **Built-in DNS Blocker**: Uses a local VPN to intercept and filter DNS requests, blocking ~800k known ad/tracking domains and ~160k adult content domains.
+- **Built-in DNS Blocker**: Uses a local VPN to intercept and filter DNS requests, blocking ~800k known ad/tracking domains and ~160k adult content domains. Payment/banking and DRM-heavy streaming apps are excluded from the tunnel by default (and the exclusion list is user-extendable) so they keep working normally.
 - **Anti-Bypass Protection**: The Settings UI and master monitoring toggle are strictly disabled and locked if any monitored app is currently active, paused, or locked out. Additionally, known DNS-over-HTTPS (DoH) fallback domains are hard-blocked to prevent apps like Chrome from bypassing the DNS filter.
+- **Daily Break**: A single one-hour "break" per calendar day during which nothing is locked — no friction screens, lockouts, or schedule blocks. Usage is still recorded so daily budgets stay accurate, ending the break early does not restore the allowance, and it resets at midnight.
 - **Real-Time Limits Tab**: Keep track of the active session limits, paused times, and lockout timers for all of your monitored apps in one central dashboard.
+- **Network Tools**: A hub of local-network utilities that runs entirely on-device:
+  - **Clipboard Share** & **File Share**: Move text and files between your phone and any device on the same WiFi by scanning a QR code. Both are served by an embedded HTTP server protected by a per-session token embedded in the QR URL, so only a device that scanned the code can read the clipboard or list/download files.
+  - **Speed Test**: Measures gateway ping, internet ping, and download bandwidth.
+  - **Port Scanner**: Scans common ports on any device on the network and offers one-tap open for web ports.
+  - **Wake-on-LAN**: Sends magic packets to wake saved devices by MAC address.
+  - **Device Discovery**: Ping-sweeps the local `/24` subnet to list connected devices and open a router's admin page.
 
 ## Architecture
 
@@ -19,8 +26,10 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
 
 - **`GrayzoneAccessibilityService`**: Monitors foreground window transitions. Detects when you open or leave a monitored app and enforces session timers and grayscale modes.
 - **`OverlayService`**: Uses `WindowManager` with `TYPE_APPLICATION_OVERLAY` to draw the friction wait screen and lockout screens on top of blocked apps.
-- **`AdBlockVpnService` & `GrayzoneBloomFilter`**: A lightweight local VPN that intercepts port 53 UDP traffic. It uses a custom, highly-optimized binary Bloom filter (~2MB RAM) to match domains against nearly 1 million blocklist entries in `O(1)` time with zero disk I/O per query.
-- **`MainActivity`**: A modern Jetpack Compose-based UI for managing your monitored apps and viewing your live dashboard.
+- **`AdBlockVpnService` & `GrayzoneBloomFilter`**: A lightweight local VPN that intercepts port 53 UDP traffic. It uses a custom, highly-optimized binary Bloom filter (~2MB RAM) to match domains against nearly 1 million blocklist entries in `O(1)` time with zero disk I/O per query. DNS lookups are served from a bounded, reusable `DnsResolverPool`, and a default bypass list keeps payment/streaming apps outside the tunnel.
+- **`RuntimeSessionReset`**: Central "new day" reset that clears runtime session state (active sessions, lockouts, paused remainders) once per calendar day while preserving usage stats. It runs on process start (`GrayzoneApplication`) and via a midnight loop plus a per-transition safety net in `OverlayService`, so stale locks never survive midnight.
+- **`LocalShareServer`**: An embedded [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) server powering Clipboard/File Share, gated by a per-session token so only devices that scanned the QR code can reach the data endpoints.
+- **`MainActivity`**: A modern Jetpack Compose-based UI for managing your monitored apps, viewing your live dashboard, and accessing Network Tools.
 
 ## Requirements
 
@@ -30,6 +39,7 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
   - **Display over other apps**: To draw the lockout and friction overlays.
   - **VPN Service**: To route and filter DNS traffic (requested at runtime).
   - **Write Secure Settings**: To toggle Android's true hardware grayscale daltonizer (`WRITE_SECURE_SETTINGS` granted via ADB).
+  - **Location (Fine)**: Required by Android to read the connected WiFi network (SSID) and discover devices in the Network Tools screen. Requested at runtime; no location data is stored or shared.
 
 ## Privacy and Persistence
 
