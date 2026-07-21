@@ -19,10 +19,14 @@ object RuntimeSessionReset {
     /**
      * Performs the reset if the calendar day changed since the last reset.
      * Returns true when a reset was actually performed.
+     *
+     * [now] is injectable so midnight-boundary tests do not depend on wall clock.
      */
-    fun resetIfNeeded(prefs: SharedPreferences): Boolean {
+    fun resetIfNeeded(
+        prefs: SharedPreferences,
+        now: Long = System.currentTimeMillis()
+    ): Boolean {
         val lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, "") ?: ""
-        val now = System.currentTimeMillis()
 
         if (!DateUtils.shouldResetDailyRuntimeState(now, lastResetDateKey)) {
             return false
@@ -35,7 +39,7 @@ object RuntimeSessionReset {
                 .remove(PrefsKeys.LOCKED_UNTIL + pkg)
                 .remove(PrefsKeys.REMAINING_MILLIS + pkg)
         }
-        editor.putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, DateUtils.getCurrentDateKey())
+        editor.putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, DateUtils.formatDateKey(now))
             .apply()
         return true
     }

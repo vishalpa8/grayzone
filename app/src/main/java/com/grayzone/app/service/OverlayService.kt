@@ -325,18 +325,26 @@ class OverlayService : Service() {
         val remainingMillis = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
-        val defaultSessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-        val defaultLockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + pkg, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+        val defaultSessionMins = com.grayzone.app.data.PerAppLimits.sessionMinutes(
+            hasCustom = hasCustom,
+            perApp = prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, 10),
+            global = prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
+        )
+        val defaultLockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(
+            hasCustom = hasCustom,
+            perApp = prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + pkg, 60),
+            global = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+        )
 
         // Calculate budget
         val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
-        var budgetRemainingMs = Long.MAX_VALUE
-        if (budgetMins > 0) {
-            val dateKey = DateUtils.getCurrentDateKey()
-            val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
-            val usedMs = if (lastReset == dateKey) prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) else 0L
-            budgetRemainingMs = (budgetMins * 60 * 1000L) - usedMs
-        }
+        val dateKey = DateUtils.getCurrentDateKey()
+        val budgetRemainingMs = com.grayzone.app.data.DailyBudget.remainingMs(
+            budgetMins = budgetMins,
+            dateKey = dateKey,
+            lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, ""),
+            usedMs = prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L)
+        )
 
         return com.grayzone.app.policy.SessionState(
             packageName = pkg,
@@ -457,12 +465,12 @@ class OverlayService : Service() {
             val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
             if (budgetMins > 0) {
                 val lastReset = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, "")
-
-                val newUsedMs = if (lastReset == dateKey) {
-                    prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L) + durationMs
-                } else {
-                    durationMs
-                }
+                val newUsedMs = com.grayzone.app.data.DailyBudget.accumulateUsedMs(
+                    dateKey = dateKey,
+                    lastResetDateKey = lastReset,
+                    previousUsedMs = prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L),
+                    durationMs = durationMs
+                )
 
                 prefs.edit()
                     .putLong(PrefsKeys.DAILY_USED_MILLIS + pkg, newUsedMs)
@@ -471,8 +479,12 @@ class OverlayService : Service() {
 
                 // Don't slam the budget lock down mid-break; it will be enforced
                 // by the policy engine on the next foreground once the break ends.
-                if (newUsedMs >= budgetMins * 60 * 1000L && currentFgPkg == pkg &&
-                    !scheduleManager.isBreakActive()
+                if (com.grayzone.app.data.DailyBudget.shouldShowBudgetLock(
+                        usedMs = newUsedMs,
+                        budgetMins = budgetMins,
+                        isStillForeground = currentFgPkg == pkg,
+                        isOnBreak = scheduleManager.isBreakActive()
+                    )
                 ) {
                     withContext(Dispatchers.Main) {
                         showOverlay(pkg, appName, OverlayMode.BUDGET_LOCK, 0L)

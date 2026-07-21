@@ -26,6 +26,11 @@ object PortScanner {
         32400 to "Plex", 49152 to "UPnP"
     )
 
+    /** Service label for a well-known port, or "Unknown". */
+    fun serviceNameFor(port: Int): String = commonPorts[port] ?: "Unknown"
+
+    fun commonPortList(): List<Int> = commonPorts.keys.toList()
+
     suspend fun scanPorts(
         ip: String,
         ports: List<Int> = commonPorts.keys.toList(),

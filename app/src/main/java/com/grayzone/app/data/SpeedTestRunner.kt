@@ -15,6 +15,11 @@ data class SpeedTestResult(
 )
 
 object SpeedTestRunner {
+
+    /** Mbps from raw byte count and elapsed milliseconds. Pure for unit tests. */
+    fun downloadMbps(totalBytes: Long, durationMs: Long): Double =
+        if (durationMs > 0) (totalBytes * 8.0) / (durationMs * 1000.0) else 0.0
+
     suspend fun pingHost(host: String): Long = withContext(Dispatchers.IO) {
         try {
             val start = System.nanoTime()
@@ -41,7 +46,7 @@ object SpeedTestRunner {
             }
             val durationNs = System.nanoTime() - start
             val durationMs = durationNs / 1_000_000
-            val speedMbps = if (durationMs > 0) (totalBytes * 8.0) / (durationMs * 1000.0) else 0.0
+            val speedMbps = downloadMbps(totalBytes, durationMs)
             SpeedTestResult(downloadSpeedMbps = speedMbps, downloadedBytes = totalBytes, durationMs = durationMs)
         } catch (_: Exception) {
             SpeedTestResult()

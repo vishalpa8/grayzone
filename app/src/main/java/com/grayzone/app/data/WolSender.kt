@@ -36,19 +36,8 @@ class WolSender(private val context: Context) {
 
     suspend fun sendMagicPacket(macAddress: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val macBytes = macAddress.replace("[:\\-]".toRegex(), "")
-                .chunked(2)
-                .map { it.toInt(16).toByte() }
-                .toByteArray()
-
-            if (macBytes.size != 6) return@withContext false
-
-            // Magic packet: 6 x 0xFF + 16 x MAC address
-            val packet = ByteArray(6 + 16 * 6)
-            for (i in 0..5) packet[i] = 0xFF.toByte()
-            for (i in 0..15) {
-                System.arraycopy(macBytes, 0, packet, 6 + i * 6, 6)
-            }
+            val macBytes = WolPacket.parseMac(macAddress) ?: return@withContext false
+            val packet = WolPacket.buildMagicPacket(macBytes)
 
             val address = InetAddress.getByName("255.255.255.255")
             DatagramSocket().use { socket ->
