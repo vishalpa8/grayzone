@@ -17,6 +17,18 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
 
+# Windows PowerShell 5.1 defaults to TLS 1.0/1.1, which GitHub and several of the
+# source endpoints now reject. Force TLS 1.2 (+ 1.3 when the runtime supports it).
+try {
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
+# Many list hosts (e.g. pgl.yoyo.org) throttle or deny the default PowerShell UA.
+$UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GrayzoneBlocklistTools/1.0"
+
 $AD_BITS    = [long]50331648
 $ADULT_BITS = [long]33554432
 $K          = [int]10
@@ -49,7 +61,7 @@ $DohDomains = @(
     "dns.adguard.com", "dns-family.adguard.com", "dns-unfiltered.adguard.com",
     "dns.nextdns.io", "doh.opendns.com", "doh.familyshield.opendns.com",
     "resolver1.opendns.com", "resolver2.opendns.com", "doh.xfinity.com",
-    "dns.alidns.com", "doh.pub", "1.12.12.12.dns.nextdns.io",
+    "dns.alidns.com", "doh.pub",
     "doh.cleanbrowsing.org", "security-filter-dns.cleanbrowsing.org",
     "family-filter-dns.cleanbrowsing.org", "freedns.controld.com",
     "dns.mullvad.net", "adblock.dns.mullvad.net", "use-application-dns.net"
@@ -141,22 +153,35 @@ public static class BloomBuilder {
 function Get-SourceUrl($Source) { return [string]$Source.Url }
 function Get-SourceMinDomains($Source) { return [int]$Source.MinDomains }
 
-function Invoke-Download([string]$Url, [switch]$Strict) {
-    try {
-        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 120
-        $lines = $response.Content -split "`n"
-        if ($lines.Count -eq 0) { throw "empty response" }
-        return $lines
-    } catch {
-        if ($Strict) { throw "Failed to download $Url`: $($_.Exception.Message)" }
-        Write-Warning "Failed: $Url`n  $_"
-        return @()
+function Invoke-Download([string]$Url, [switch]$Strict, [int]$MaxAttempts = 3) {
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 120 -UserAgent $UserAgent
+            $content = [string]$response.Content
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "empty response body" }
+            return ($content -split "`n")
+        } catch {
+            $lastError = $_
+            if ($attempt -lt $MaxAttempts) {
+                $delay = [int][Math]::Pow(2, $attempt)  # 2s, 4s backoff
+                Write-Warning "Attempt $attempt/$MaxAttempts failed for $Url ($($_.Exception.Message)); retrying in ${delay}s..."
+                Start-Sleep -Seconds $delay
+            }
+        }
     }
+
+    if ($Strict) { throw "Failed to download $Url after $MaxAttempts attempts`: $($lastError.Exception.Message)" }
+    Write-Warning "Failed after $MaxAttempts attempts: $Url`n  $lastError"
+    return @()
 }
 
 function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label, [int]$MinTotalDomains) {
     Write-Host "[$Label] Building filter from $($Sources.Count) sources..." -ForegroundColor Yellow
-    $byteCount = [int](($BitCount + 7) / 8)
+    # Ceiling division. Note: PowerShell "/" is floating point and [int] ROUNDS
+    # (banker's rounding), so the "+7)/8" idiom over-allocates by one byte when
+    # BitCount is already a multiple of 8. Use Math::Ceiling for an exact size.
+    $byteCount = [int][Math]::Ceiling($BitCount / 8.0)
     $bits      = New-Object byte[] $byteCount
     $seen      = New-Object 'System.Collections.Generic.HashSet[string]'
 
@@ -165,18 +190,25 @@ function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label
         $url = Get-SourceUrl $source
         $minDomains = Get-SourceMinDomains $source
         $before = $seen.Count
+        $parsed = 0
         Write-Host "  $name" -ForegroundColor Gray
         foreach ($line in (Invoke-Download $url -Strict)) {
             $d = [BloomBuilder]::ParseDomain($line)
-            if ($d -and $seen.Add($d)) {
-                [BloomBuilder]::AddDomain($bits, $BitCount, $NumHashes, $d)
+            if ($d) {
+                $parsed++
+                if ($seen.Add($d)) {
+                    [BloomBuilder]::AddDomain($bits, $BitCount, $NumHashes, $d)
+                }
             }
         }
         $added = $seen.Count - $before
-        if ($added -lt $minDomains) {
-            throw "[$Label] Source '$name' yielded only $added new domains; expected at least $minDomains. Refusing to write a degraded filter."
+        # Guard on domains PARSED from this source (download-health check), not on
+        # newly-unique domains: small curated lists processed after large ones can
+        # legitimately add ~0 new domains due to heavy overlap, which is not a failure.
+        if ($parsed -lt $minDomains) {
+            throw "[$Label] Source '$name' parsed only $parsed valid domains; expected at least $minDomains. Refusing to write a degraded filter (download may be broken)."
         }
-        Write-Host "  -> $($seen.Count) total unique domains so far (+$added)" -ForegroundColor DarkGray
+        Write-Host "  -> $($seen.Count) total unique so far (source parsed $parsed, +$added new)" -ForegroundColor DarkGray
     }
 
     if ($seen.Count -lt $MinTotalDomains) {
@@ -251,7 +283,7 @@ if ($Probe) {
     foreach ($source in $allSources) {
         $url = Get-SourceUrl $source
         try {
-            $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 -Method Head
+            $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 -Method Head -UserAgent $UserAgent
             Write-Host "  OK   [$($r.StatusCode)] $url" -ForegroundColor Green
         } catch {
             $code = if ($_.Exception.Response) { $_.Exception.Response.StatusCode.value__ } else { "ERR" }

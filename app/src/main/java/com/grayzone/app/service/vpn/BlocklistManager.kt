@@ -10,7 +10,8 @@ object BlocklistManager {
     private const val TAG = "BlocklistManager"
 
     // Bloom filters replace the old 120 MB HashSet<String> approach.
-    // Each filter is ~1.5 MB RAM at 0.1% false-positive rate.
+    // Shipped filters are ~6 MB (ads) and ~4 MB (adult) on disk/RAM, targeting a
+    // ~0.1% false-positive rate. See scripts/blocklist_tools.ps1 for generation.
     private var adFilter:    GrayzoneBloomFilter? = null
     private var adultFilter: GrayzoneBloomFilter? = null
 
@@ -24,14 +25,13 @@ object BlocklistManager {
      * way to block that at the DNS layer — it must be surfaced as a UI warning instead
      * (see HomeScreen). The domains here cover in-app DoH/DoT libraries only.
      *
-     * Last verified: 2026-07-19
+     * Last verified: 2026-07-21
      */
     private val dohBypassDomains: Set<String> = hashSetOf(
         // ── Google ────────────────────────────────────────────────────────
         "dns.google",           // primary canonical name
         "dns.google.com",       // alternate used by some apps
         "8888.google",
-        "8844.google",
         // ── Cloudflare ───────────────────────────────────────────────────
         "cloudflare-dns.com",
         "1dot1dot1dot1.cloudflare-dns.com",
@@ -60,7 +60,6 @@ object BlocklistManager {
         "dns.alidns.com",
         // ── Tencent DNSPod ────────────────────────────────────────────────
         "doh.pub",
-        "1.12.12.12.dns.nextdns.io",  // NextDNS alt
         // ── CleanBrowsing ─────────────────────────────────────────────────
         "doh.cleanbrowsing.org",
         "security-filter-dns.cleanbrowsing.org",
@@ -195,30 +194,6 @@ object BlocklistManager {
     fun isDoHBypass(domain: String): Boolean {
         val normalized = normalizeDomain(domain) ?: return false
         return dohBypassDomains.contains(normalized)
-    }
-
-    fun isHighConfidenceBlock(domain: String): Boolean {
-        val normalized = normalizeDomain(domain) ?: return false
-        return matchesHighConfidence(normalized, highConfidenceAdDomains) ||
-               matchesHighConfidence(normalized, highConfidenceAdultDomains)
-    }
-
-    /** True if domain matches the ad/tracking bloom filter or a high-confidence fallback domain. */
-    fun isAdBlocked(domain: String): Boolean {
-        val normalized = normalizeDomain(domain) ?: return false
-        if (matchesHighConfidence(normalized, highConfidenceAdDomains)) return true
-        if (!isLoaded) return false
-        val filter = adFilter ?: return false
-        return matchesFilter(normalized, filter)
-    }
-
-    /** True if domain matches the adult-content bloom filter or a high-confidence fallback domain. */
-    fun isAdultBlocked(domain: String): Boolean {
-        val normalized = normalizeDomain(domain) ?: return false
-        if (matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
-        if (!isLoaded) return false
-        val filter = adultFilter ?: return false
-        return matchesFilter(normalized, filter)
     }
 
     /**
