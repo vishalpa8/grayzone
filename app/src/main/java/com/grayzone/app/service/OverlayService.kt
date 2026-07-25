@@ -35,7 +35,6 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.grayzone.app.MainActivity
 import com.grayzone.app.Prompts
-import com.grayzone.app.formatDuration
 import com.grayzone.app.getAppName
 import com.grayzone.app.getNormalizedRemainingMillis
 import com.grayzone.app.data.StreakManager
@@ -55,6 +54,10 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.pm.PackageManager
 import com.grayzone.app.data.ScheduleManager
+import com.grayzone.app.service.overlay.CountdownFinishContext
+import com.grayzone.app.service.overlay.OverlayPresentation
+import com.grayzone.app.service.overlay.SecondsInputs
+import com.grayzone.app.service.overlay.SkipContext
 
 class OverlayService : Service() {
 
@@ -66,7 +69,6 @@ class OverlayService : Service() {
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
         private const val DEFAULT_WAIT = 5
-        private const val DEFAULT_LOCKOUT = 60
 
         // Hex color int helpers
         private const val BG          = 0xFF07070F.toInt() // 100% opaque
@@ -730,26 +732,24 @@ class OverlayService : Service() {
         dismissOverlay()
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
 
-        val isLocked = mode == OverlayMode.LOCK
-        val isBudgetLock = mode == OverlayMode.BUDGET_LOCK
-        val isScheduleLock = mode == OverlayMode.SCHEDULE_LOCK
-        val isAnyLock = isLocked || isBudgetLock || isScheduleLock
-        
-        if (isAnyLock) {
+        val presentation = OverlayPresentation.resolve(mode)
+
+        // Lock-type screens (no progress bar) clear any running session countdown notification.
+        if (!presentation.showsProgress) {
             cancelCountdownNotification()
         }
-        
+
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
         val customWait = prefs.getInt(PrefsKeys.PER_APP_WAIT_SECONDS + packageName, DEFAULT_WAIT)
         val globalWait = prefs.getInt(PrefsKeys.WAIT_SECONDS, DEFAULT_WAIT)
 
-        secondsRemaining = if (isLocked) {
-            ((lockedUntil - System.currentTimeMillis()) / 1000).coerceAtLeast(0).toInt()
-        } else if (isBudgetLock || isScheduleLock) {
-            0
-        } else {
-            if (hasCustom) customWait else globalWait
-        }
+        secondsRemaining = presentation.initialSeconds(
+            SecondsInputs(
+                now = System.currentTimeMillis(),
+                lockedUntil = lockedUntil,
+                waitSeconds = if (hasCustom) customWait else globalWait
+            )
+        )
         val totalSeconds = secondsRemaining
         
         val customPromptsJson = prefs.getString(PrefsKeys.CUSTOM_PROMPTS_JSON, null)
@@ -758,7 +758,13 @@ class OverlayService : Service() {
             try {
                 val type = object : TypeToken<List<String>>() {}.type
                 Gson().fromJson<List<String>>(customPromptsJson, type) ?: emptyList()
-            } catch (e: Exception) { emptyList() }
+            } catch (e: Exception) {
+                GrayzoneLogger.w(
+                    LogComponent.OVERLAY,
+                    "Failed to parse custom prompts JSON; falling back to defaults: ${e.message}"
+                )
+                emptyList()
+            }
         } else emptyList()
         val promptsList = Prompts.resolvePool(customPrompts, useCustomOnly)
         val prompt = promptsList.random()
@@ -782,7 +788,7 @@ class OverlayService : Service() {
         }
 
         val titleView = TextView(ctx).apply {
-            text = if (isAnyLock) "Locked." else "Pause."
+            text = presentation.title
             textSize = 34f
             setTextColor(WHITE)
             gravity = Gravity.CENTER
@@ -796,12 +802,7 @@ class OverlayService : Service() {
         }
 
         val promptView = TextView(ctx).apply {
-            text = when {
-                isBudgetLock -> "Daily usage limit reached."
-                isScheduleLock -> "Focus mode / schedule is active."
-                isLocked -> "You have reached your session limit."
-                else -> "\u201C$prompt\u201D"
-            }
+            text = presentation.bodyText(prompt)
             textSize = 17f
             setTextColor(0xFFDDDDEE.toInt())
             gravity = Gravity.CENTER
@@ -810,8 +811,8 @@ class OverlayService : Service() {
         }
 
         val countdownView = TextView(ctx).apply {
-            text = if (isLocked) formatDuration(secondsRemaining) else if (isBudgetLock || isScheduleLock) "â€”" else "$secondsRemaining"
-            textSize = if (isLocked) 42f else 72f
+            text = presentation.countdownText(secondsRemaining)
+            textSize = presentation.countdownTextSizeSp
             setTextColor(PURPLE)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
@@ -825,17 +826,12 @@ class OverlayService : Service() {
         }
         val progressParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(8) }
         
-        if (isAnyLock) {
+        if (!presentation.showsProgress) {
             progress.visibility = View.GONE
         }
 
         val subView = TextView(ctx).apply {
-            text = when {
-                isLocked -> "Remaining lockout time"
-                isBudgetLock -> "Resets tomorrow"
-                isScheduleLock -> "Try again later"
-                else -> "Opening in $secondsRemaining secondsâ€¦"
-            }
+            text = presentation.subText(secondsRemaining)
             textSize = 12f
             setTextColor(GREY)
             gravity = Gravity.CENTER
@@ -843,7 +839,7 @@ class OverlayService : Service() {
         val subParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4); bottomMargin = dp(24) }
 
         val skipBtn = Button(ctx).apply {
-            text = if (isAnyLock) "â† Leave App" else "â† I'll Skip This"
+            text = presentation.skipButtonLabel
             setTextColor(GREY)
             background = makeOutlineDrawable()
             textSize = 14f
@@ -851,10 +847,10 @@ class OverlayService : Service() {
         }
         val skipParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER_HORIZONTAL }
         skipBtn.setOnClickListener {
-            if (mode == OverlayMode.FRICTION) {
-                val waitedMs = (totalSeconds - secondsRemaining).coerceAtLeast(0) * 1000L
-                recordFrictionSkip(packageName, waitedMs)
-            }
+            val waitedMs = (totalSeconds - secondsRemaining).coerceAtLeast(0) * 1000L
+            presentation.onSkip(
+                SkipContext(packageName, waitedMs) { pkg, ms -> recordFrictionSkip(pkg, ms) }
+            )
             dismissOverlay()
             val homeIntent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -903,9 +899,9 @@ class OverlayService : Service() {
                 secondsRemaining--
                 val remaining = secondsRemaining
                 if (remaining > 0) {
-                    countdownView.text = if (isLocked) formatDuration(remaining) else if (isBudgetLock || isScheduleLock) "â€”" else "$remaining"
-                    if (!isAnyLock) {
-                        subView.text = "Opening in $remaining secondsâ€¦"
+                    countdownView.text = presentation.countdownText(remaining)
+                    if (presentation.showsProgress) {
+                        subView.text = presentation.subText(remaining)
                         progress.progress = remaining
                     }
                 }
@@ -914,23 +910,16 @@ class OverlayService : Service() {
             // If this job was cancelled while the loop was exiting (e.g. an app
             // change dismissed the overlay), don't grant a session.
             if (!isActive) return@launch
-            when {
-                !isAnyLock -> {
-                    markAppUnlocked(packageName)
-                    dismissOverlay()
-                }
-                isLocked -> {
-                    // Lockout expired while the lock screen was showing. Don't grant
-                    // silent, untracked access: fall back to the friction wait screen
-                    // if the user is still in this app.
-                    dismissOverlay()
-                    if (lastForegroundPackage == packageName) {
-                        showOverlay(packageName, appName, OverlayMode.FRICTION, 0L)
-                    }
-                }
-                // BUDGET_LOCK / SCHEDULE_LOCK have no countdown; they stay up
-                // until the user leaves the app.
-            }
+            presentation.onCountdownFinished(
+                CountdownFinishContext(
+                    packageName = packageName,
+                    appName = appName,
+                    markAppUnlocked = { markAppUnlocked(packageName) },
+                    dismissOverlay = { dismissOverlay() },
+                    isStillForeground = { lastForegroundPackage == packageName },
+                    showFriction = { showOverlay(packageName, appName, OverlayMode.FRICTION, 0L) }
+                )
+            )
         }
     }
 
