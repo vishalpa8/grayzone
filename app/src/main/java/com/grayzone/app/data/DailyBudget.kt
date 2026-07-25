@@ -39,6 +39,18 @@ object DailyBudget {
         }
     }
 
+    /**
+     * The session length that should actually be granted, never exceeding the
+     * remaining daily budget. For unlimited budgets [budgetRemainingMs] is
+     * [Long.MAX_VALUE], so the full requested [sessionMs] is returned.
+     *
+     * Prevents a fresh full-length session from overshooting a nearly-exhausted
+     * daily budget (e.g. 20-min budget, 10-min sessions: with 3 min left the
+     * grant is clamped to 3 min instead of handing out another 10).
+     */
+    fun grantedSessionMs(sessionMs: Long, budgetRemainingMs: Long): Long =
+        if (budgetRemainingMs <= 0L) sessionMs else minOf(sessionMs, budgetRemainingMs)
+
     /** True when the budget lock overlay should be shown immediately. */
     fun shouldShowBudgetLock(
         usedMs: Long,

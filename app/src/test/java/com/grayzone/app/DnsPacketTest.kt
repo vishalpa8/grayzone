@@ -175,6 +175,56 @@ class DnsPacketTest {
         assertTrue(readShort(wrapped, 46) != 0)
     }
 
+    @Test
+    fun `ipv6 query with a destination-options extension header parses the domain (D9)`() {
+        // Historically getDomainName assumed a fixed 48-byte offset; with an
+        // extension header the DNS payload sits further in. It must now walk the
+        // header chain via getDnsPayloadOffset and still resolve the domain.
+        val request = ipv6DnsQueryWithDestOpt(id = 0x4444, qType = 1)
+
+        assertTrue(DnsPacketHelper.isDnsQuery(request, request.size))
+        // 40 (IPv6) + 8 (dest-opt) + 8 (UDP) = 56.
+        assertEquals(56, DnsPacketHelper.getDnsPayloadOffset(request, request.size))
+        assertEquals("example.com", DnsPacketHelper.getDomainName(request, request.size))
+    }
+
+    @Test
+    fun `getDomainName increments the ipv4 and ipv6 processed counters (D10)`() {
+        // Counters are process-wide singletons, so assert on the delta rather than
+        // absolute values to stay independent of other tests' ordering.
+        val before = DnsPacketHelper.getErrorStats()
+        val v4Packet = ipv4DnsQuery(id = 0x1, qType = 1)
+        DnsPacketHelper.getDomainName(v4Packet, v4Packet.size)
+        val v6Packet = ipv6DnsQuery(id = 0x2, qType = 1)
+        DnsPacketHelper.getDomainName(v6Packet, v6Packet.size)
+        val after = DnsPacketHelper.getErrorStats()
+
+        assertTrue(after.getValue("ipv4_packets_processed") > before.getValue("ipv4_packets_processed"))
+        assertTrue(after.getValue("ipv6_packets_processed") > before.getValue("ipv6_packets_processed"))
+    }
+
+    private fun ipv6DnsQueryWithDestOpt(id: Int, qType: Int): ByteArray {
+        val dns = dnsQueryPayload(id, qType)
+        // 40 IPv6 header + 8 destination-options ext header + 8 UDP + DNS.
+        val packet = ByteArray(40 + 8 + 8 + dns.size)
+        packet[0] = 0x60
+        // IPv6 payload length = ext(8) + udp(8) + dns.
+        writeShort(packet, 4, 8 + 8 + dns.size)
+        packet[6] = 60 // Next Header = Destination Options
+        packet[7] = 64 // Hop limit
+        packet[23] = 1 // src addr marker
+        packet[39] = 2 // dst addr marker
+        // Destination-options ext header at offset 40 (8 bytes total).
+        packet[40] = 17 // Next Header = UDP
+        packet[41] = 0  // Hdr Ext Len = 0 -> (0+1)*8 = 8 bytes
+        // UDP header at offset 48.
+        writeShort(packet, 48, 40000) // src port
+        writeShort(packet, 50, 53)    // dst port
+        writeShort(packet, 52, 8 + dns.size) // udp length
+        dns.copyInto(packet, 56)
+        return packet
+    }
+
     private fun ipv4DnsQuery(id: Int, qType: Int): ByteArray {
         val dns = dnsQueryPayload(id, qType)
         val packet = ByteArray(20 + 8 + dns.size)

@@ -23,36 +23,53 @@ object DateUtils {
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
     }
     
-    // Cache for current date key (valid for 1 minute)
+    // Cache for current date key (valid for up to 1 minute, but never across midnight).
     @Volatile
     private var cachedDateKey: String? = null
-    
+
+    // Absolute wall-clock time at which the cached key becomes invalid.
     @Volatile
-    private var cacheTimestamp = 0L
-    
+    private var cacheExpiry = 0L
+
     private const val CACHE_VALIDITY_MS = 60_000L  // 1 minute
-    
+
     /**
      * Get current date key in "yyyy-MM-dd" format.
-     * Cached for 1 minute to avoid repeated formatting.
-     * 
+     *
+     * Cached for up to 1 minute to avoid repeated formatting, but the cache
+     * expiry is clamped to the next local midnight so an event logged in the
+     * first minute of a new day can never be stamped with the previous day's
+     * key (which would corrupt daily budgets and the runtime reset boundary).
+     *
      * Used for daily budget tracking and usage event logging.
      */
     fun getCurrentDateKey(): String {
         val now = System.currentTimeMillis()
-        
-        // Return cached value if still valid
+
+        // Return cached value if still valid (and not past midnight).
         val cached = cachedDateKey
-        if (cached != null && (now - cacheTimestamp) < CACHE_VALIDITY_MS) {
+        if (cached != null && now < cacheExpiry) {
             return cached
         }
-        
+
         // Format new date key
         val newKey = dateKeyFormatter.get()!!.format(Date(now))
         cachedDateKey = newKey
-        cacheTimestamp = now
-        
+        cacheExpiry = minOf(now + CACHE_VALIDITY_MS, startOfNextDayMillis(now))
+
         return newKey
+    }
+
+    /** Local midnight at the start of the day after [now]. */
+    private fun startOfNextDayMillis(now: Long): Long {
+        val calendar = Calendar.getInstance()
+        calendar.timeInMillis = now
+        calendar.add(Calendar.DAY_OF_YEAR, 1)
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        return calendar.timeInMillis
     }
     
     /**

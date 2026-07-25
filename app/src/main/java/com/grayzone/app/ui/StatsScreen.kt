@@ -96,7 +96,7 @@ fun StatsScreen() {
                 val total    = dao.getTotalEventCount()
                 
                 val totals = dao.getStartTimeTotals()
-                val peak = totals.maxByOrNull { it.totalMillis }?.startTime?.toInt()
+                val peak = totals.maxByOrNull { it.totalMillis }?.hourOfDay?.toInt()
 
                 StatsSnapshot(blocked, savedMs, daily, weekly, total, peak)
             }

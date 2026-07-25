@@ -207,6 +207,14 @@ class OverlayService : Service() {
                 showOverlay(currentPkg, getAppName(currentPkg), OverlayMode.FRICTION, 0L)
             }
         }
+
+        // The day that just ended is now complete, so settle its streak outcome
+        // here rather than waiting for the user to open the Home screen.
+        try {
+            com.grayzone.app.data.StreakEvaluator.run(this)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.OVERLAY, "Midnight streak catch-up failed: ${e.message}")
+        }
     }
 
     /**
@@ -964,7 +972,22 @@ class OverlayService : Service() {
             )
         }
 
-        val activeUntil = now + (validSessionMins * 60 * 1000L)
+        // Clamp the granted session to whatever daily budget remains so a fresh
+        // full-length session can't overshoot a nearly-exhausted budget.
+        val requestedSessionMs = validSessionMins * 60 * 1000L
+        val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + packageName, 0)
+        val budgetRemainingMs = com.grayzone.app.data.DailyBudget.remainingMs(
+            budgetMins = budgetMins,
+            dateKey = DateUtils.getCurrentDateKey(),
+            lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + packageName, ""),
+            usedMs = prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + packageName, 0L)
+        )
+        val grantedSessionMs = com.grayzone.app.data.DailyBudget.grantedSessionMs(
+            sessionMs = requestedSessionMs,
+            budgetRemainingMs = budgetRemainingMs
+        )
+
+        val activeUntil = now + grantedSessionMs
         val lockedUntil = activeUntil + (validLockoutMins * 60 * 1000L)
 
         prefs.edit()
@@ -974,7 +997,7 @@ class OverlayService : Service() {
             .apply()
 
         startCountdownNotification(packageName, activeUntil)
-        scheduleLockoutCheck(packageName, validSessionMins * 60 * 1000L)
+        scheduleLockoutCheck(packageName, grantedSessionMs)
         showTint()
         sessionStartTime = now
     }

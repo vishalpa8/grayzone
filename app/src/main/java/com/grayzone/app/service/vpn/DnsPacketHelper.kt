@@ -114,16 +114,14 @@ object DnsPacketHelper {
         if (length < 28) return null
         try {
             val version = (packet[0].toInt() and 0xF0) shr 4
-            val dnsOffset: Int
-            if (version == 4) {
-                val ihl = (packet[0].toInt() and 0x0F) * 4
-                if (ihl < 20 || length < ihl + 20) return null
-                dnsOffset = ihl + 8
-            } else if (version == 6) {
-                if (length < 60) return null
-                dnsOffset = 48
-            } else {
-                return null
+            // Reuse the shared offset logic so IPv6 extension headers are handled
+            // consistently, instead of assuming a fixed 48-byte DNS offset.
+            val dnsOffset = getDnsPayloadOffset(packet, length) ?: return null
+
+            // Diagnostic counters (surfaced via getErrorStats()).
+            when (version) {
+                4 -> ipv4PacketsProcessed.incrementAndGet()
+                6 -> ipv6PacketsProcessed.incrementAndGet()
             }
 
             if (length < dnsOffset + 12) return null
@@ -299,73 +297,6 @@ object DnsPacketHelper {
             GrayzoneLogger.e(
                 LogComponent.DNS,
                 "Failed to wrap DNS response (IPv4): ${e.message}",
-                e
-            )
-            return null
-        }
-    }
-
-    private fun createSinkholeResponseIPv6(requestPacket: ByteArray, requestLength: Int): ByteArray? {
-        try {
-            val dnsOffset = 48
-            val newTotalLength = requestLength + 16
-            val response = ByteArray(newTotalLength)
-            System.arraycopy(requestPacket, 0, response, 0, requestLength)
-
-            val payloadLength = newTotalLength - 40
-            response[4] = (payloadLength shr 8).toByte()
-            response[5] = (payloadLength and 0xFF).toByte()
-
-            for (i in 0..15) {
-                val tmp = response[8 + i]
-                response[8 + i] = response[24 + i]
-                response[24 + i] = tmp
-            }
-
-            val newUdpLength = payloadLength
-            response[44] = (newUdpLength shr 8).toByte()
-            response[45] = (newUdpLength and 0xFF).toByte()
-
-            val sp1 = response[40]
-            val sp2 = response[41]
-            response[40] = response[42]
-            response[41] = response[43]
-            response[42] = sp1
-            response[43] = sp2
-
-            response[46] = 0
-            response[47] = 0
-
-            response[dnsOffset + 2] = 0x81.toByte()
-            response[dnsOffset + 3] = 0x80.toByte()
-            response[dnsOffset + 6] = 0
-            response[dnsOffset + 7] = 1
-
-            var offset = requestLength
-            response[offset++] = 0xC0.toByte()
-            response[offset++] = 0x0C.toByte()
-            response[offset++] = 0
-            response[offset++] = 1
-            response[offset++] = 0
-            response[offset++] = 1
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 60
-            response[offset++] = 0
-            response[offset++] = 4
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset++] = 0
-            response[offset] = 0
-
-            computeUdpChecksumIPv6(response)
-            return response
-        } catch (e: Exception) {
-            sinkholeCreationErrors.incrementAndGet()
-            GrayzoneLogger.e(
-                LogComponent.DNS,
-                "Failed to create sinkhole response (IPv6): ${e.message}",
                 e
             )
             return null

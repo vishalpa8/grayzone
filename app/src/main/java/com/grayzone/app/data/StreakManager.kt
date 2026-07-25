@@ -57,6 +57,41 @@ class StreakManager(private val context: Context) {
         checkDailyStreakForDate(previousDateKey(dateFormat.format(Date())), stayedUnderBudget)
     }
 
+    /**
+     * Evaluates every not-yet-recorded calendar day up to and including
+     * [yesterdayKey]. This fixes two correctness bugs:
+     *
+     *  1. Missed days: if the app isn't opened for a while, each skipped day is
+     *     still judged, so an over-budget day correctly breaks the streak instead
+     *     of being silently skipped.
+     *  2. Masking: a day's success is judged from [usedMsForDate] (the usage DB,
+     *     the source of truth) rather than a prefs snapshot that the *next* day's
+     *     usage can overwrite.
+     *
+     * [budgetMinsByPkg] maps monitored package -> daily budget minutes (>0 only).
+     * [usedMsForDate] returns pkg -> used-ms for a given dateKey.
+     * Lookback is capped at [maxCatchUpDays] to bound work and match DB retention.
+     */
+    suspend fun evaluatePendingDays(
+        yesterdayKey: String,
+        budgetMinsByPkg: Map<String, Int>,
+        maxCatchUpDays: Int = 90,
+        usedMsForDate: suspend (String) -> Map<String, Long>
+    ) {
+        val dates = pendingDates(
+            prefs.getString(PrefsKeys.STREAK_LAST_DATE, null),
+            yesterdayKey,
+            maxCatchUpDays
+        )
+        for (dateKey in dates) {
+            val used = usedMsForDate(dateKey)
+            val stayedUnder = budgetMinsByPkg.all { (pkg, mins) ->
+                (used[pkg] ?: 0L) < mins * 60_000L
+            }
+            checkDailyStreakForDate(dateKey, stayedUnder)
+        }
+    }
+
     fun checkDailyStreakForDate(completedDateKey: String, stayedUnderBudget: Boolean) {
         val lastDate = prefs.getString(PrefsKeys.STREAK_LAST_DATE, null)
         if (lastDate == completedDateKey) return
@@ -137,6 +172,48 @@ class StreakManager(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Ordered, inclusive list of calendar dates that still need streak
+         * evaluation: the day after [lastRecorded] through [throughDateKey].
+         *
+         *  - [lastRecorded] == null  → only [throughDateKey] (first run).
+         *  - already up to date      → empty list (idempotent).
+         *  - large gaps              → capped to the most recent [maxDays] days.
+         *
+         * Pure and Android-free so the catch-up window is unit-testable.
+         */
+        fun pendingDates(
+            lastRecorded: String?,
+            throughDateKey: String,
+            maxDays: Int = 90
+        ): List<String> {
+            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val through = fmt.parse(throughDateKey) ?: return emptyList()
+
+            val startCal = Calendar.getInstance()
+            if (lastRecorded == null) {
+                startCal.time = through
+            } else {
+                val last = fmt.parse(lastRecorded) ?: return listOf(throughDateKey)
+                startCal.time = last
+                startCal.add(Calendar.DAY_OF_YEAR, 1)
+            }
+
+            if (startCal.time.after(through)) return emptyList()
+
+            // Sliding window: always keep the most recent [maxDays] days ending at
+            // [throughDateKey], even when the gap spans years (no need to iterate
+            // and store every intermediate date).
+            val result = ArrayDeque<String>(maxDays)
+            val cursor = Calendar.getInstance().apply { time = startCal.time }
+            while (!cursor.time.after(through)) {
+                if (result.size == maxDays) result.removeFirst()
+                result.add(fmt.format(cursor.time))
+                cursor.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return result.toList()
+        }
+
         val ALL_ACHIEVEMENTS = listOf(
             Achievement("first_day", "First Day", "Complete your first day under budget", "🌱"),
             Achievement("three_day_streak", "Three-Peat", "3-day streak under budget", "🔥"),

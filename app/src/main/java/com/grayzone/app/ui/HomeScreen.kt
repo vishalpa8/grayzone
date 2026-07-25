@@ -34,6 +34,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.*
 import com.grayzone.app.R
 import com.grayzone.app.ui.theme.*
+import kotlinx.coroutines.launch
 
 data class HomeData(
     val monitoredCount: Int = 0
@@ -48,7 +49,8 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
     var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
-    
+    val streakScope = rememberCoroutineScope()
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -56,12 +58,14 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
                 isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
                 batteryIssue = isBatteryOptimized(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
-                val monitored = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-                val completedDateKey = DateUtils.getYesterdayDateKey()
-                com.grayzone.app.data.StreakManager(context).checkDailyStreakForDate(
-                    completedDateKey,
-                    stayedUnderAllBudgets(prefs, monitored, completedDateKey)
-                )
+
+                // Streak evaluation uses the usage DB as the source of truth and
+                // catches up every missed day. This also runs on process start and
+                // at midnight (see StreakEvaluator callers), so it no longer depends
+                // on Home being opened.
+                streakScope.launch {
+                    com.grayzone.app.data.StreakEvaluator.run(context)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

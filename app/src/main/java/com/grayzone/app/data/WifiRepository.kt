@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.io.File
 
 data class WifiDevice(
@@ -162,6 +164,30 @@ class WifiRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Portable host liveness check. `Runtime.exec("ping")` and `/proc/net/arp`
+     * are unreliable/blocked on modern Android (API 29+), so we try ICMP via
+     * [InetAddress.isReachable] first and fall back to a quick TCP connect on a
+     * couple of common ports for devices that ignore ICMP but expose a service.
+     */
+    private fun isHostReachable(ip: String, timeoutMs: Int): Boolean {
+        return try {
+            val addr = InetAddress.getByName(ip)
+            if (addr.isReachable(timeoutMs)) return true
+            for (port in intArrayOf(80, 443)) {
+                try {
+                    Socket().use {
+                        it.connect(InetSocketAddress(addr, port), timeoutMs)
+                        return true
+                    }
+                } catch (_: Exception) { /* port closed/filtered — try next */ }
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     suspend fun scanDevices(): List<WifiDevice> = withContext(Dispatchers.IO) {
         val info = readNetworkInfo()
         if (!info.isConnected || info.ipAddress == "—") return@withContext emptyList()
@@ -198,16 +224,14 @@ class WifiRepository(private val context: Context) {
             return@withContext results.toList()
         }
 
-        val pingSemaphore = Semaphore(20)
+        val pingSemaphore = Semaphore(40)
         coroutineScope {
             (1..254).map { host ->
                 async {
                     pingSemaphore.withPermit {
                         val ip = "$subnet.$host"
                         try {
-                            val process = Runtime.getRuntime().exec("ping -c 1 -W 1 $ip")
-                            val exitValue = process.waitFor()
-                            if (exitValue == 0) {
+                            if (isHostReachable(ip, 250)) {
                                 val hostname = try {
                                     InetAddress.getByName(ip).canonicalHostName
                                         .takeIf { it != ip } ?: ip

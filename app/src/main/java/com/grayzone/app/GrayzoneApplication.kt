@@ -6,6 +6,12 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.grayzone.app.data.CleanupWorker
+import com.grayzone.app.data.ConfigValidator
+import com.grayzone.app.data.StreakEvaluator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -17,7 +23,11 @@ import java.util.concurrent.TimeUnit
  * - Future: Analytics initialization
  */
 class GrayzoneApplication : Application() {
-    
+
+    // App-scoped background work (DB-backed catch-up); SupervisorJob so one
+    // failure never tears the scope down for later callers.
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         
@@ -28,7 +38,22 @@ class GrayzoneApplication : Application() {
         
         validateConfiguration()
         resetRuntimeStateIfNeeded()
+        catchUpStreaks()
         schedulePeriodicCleanup()
+    }
+
+    /**
+     * Evaluate any missed streak days on process start so streak progress does
+     * not depend on the Home screen being opened. Idempotent per calendar day.
+     */
+    private fun catchUpStreaks() {
+        appScope.launch {
+            try {
+                StreakEvaluator.run(this@GrayzoneApplication)
+            } catch (e: Exception) {
+                GrayzoneLogger.w(LogComponent.BOOT, "Streak catch-up on start failed: ${e.message}")
+            }
+        }
     }
     
     /**
@@ -41,35 +66,29 @@ class GrayzoneApplication : Application() {
         var needsRepair = false
         
         // Validate wait duration (3-30 seconds)
-        val waitSeconds = prefs.getInt(PrefsKeys.WAIT_SECONDS, 5)
-        if (waitSeconds !in 3..30) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "Invalid WAIT_SECONDS=$waitSeconds, resetting to 5"
-            )
-            editor.putInt(PrefsKeys.WAIT_SECONDS, 5)
+        val waitSeconds = prefs.getInt(PrefsKeys.WAIT_SECONDS, ConfigValidator.DEFAULT_WAIT_SECONDS)
+        if (!ConfigValidator.isWaitSecondsValid(waitSeconds)) {
+            val repaired = ConfigValidator.repairWaitSeconds(waitSeconds)
+            GrayzoneLogger.w(LogComponent.BOOT, "Invalid WAIT_SECONDS=$waitSeconds, resetting to $repaired")
+            editor.putInt(PrefsKeys.WAIT_SECONDS, repaired)
             needsRepair = true
         }
         
         // Validate session duration (1-60 minutes)
-        val sessionMinutes = prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-        if (sessionMinutes !in 1..60) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "Invalid SESSION_MINUTES=$sessionMinutes, resetting to 10"
-            )
-            editor.putInt(PrefsKeys.SESSION_MINUTES, 10)
+        val sessionMinutes = prefs.getInt(PrefsKeys.SESSION_MINUTES, ConfigValidator.DEFAULT_SESSION_MINUTES)
+        if (!ConfigValidator.isSessionMinutesValid(sessionMinutes)) {
+            val repaired = ConfigValidator.repairSessionMinutes(sessionMinutes)
+            GrayzoneLogger.w(LogComponent.BOOT, "Invalid SESSION_MINUTES=$sessionMinutes, resetting to $repaired")
+            editor.putInt(PrefsKeys.SESSION_MINUTES, repaired)
             needsRepair = true
         }
         
         // Validate lockout duration (15 minutes - 5 hours)
-        val lockoutMinutes = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-        if (lockoutMinutes !in 15..(5 * 60)) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "Invalid LOCKOUT_MINUTES=$lockoutMinutes, resetting to 60"
-            )
-            editor.putInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+        val lockoutMinutes = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, ConfigValidator.DEFAULT_LOCKOUT_MINUTES)
+        if (!ConfigValidator.isLockoutMinutesValid(lockoutMinutes)) {
+            val repaired = ConfigValidator.repairLockoutMinutes(lockoutMinutes)
+            GrayzoneLogger.w(LogComponent.BOOT, "Invalid LOCKOUT_MINUTES=$lockoutMinutes, resetting to $repaired")
+            editor.putInt(PrefsKeys.LOCKOUT_MINUTES, repaired)
             needsRepair = true
         }
         

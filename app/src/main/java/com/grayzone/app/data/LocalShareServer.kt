@@ -20,15 +20,21 @@ class LocalShareServer(
     // Shared secret required on every /api/ request. It travels in the QR-code
     // URL (?t=...) so only a device that scanned the code can read the clipboard
     // or list/download files; anyone else on the same WiFi is rejected.
-    val token: String = java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+    val token: String = java.util.UUID.randomUUID().toString().replace("-", "").take(24)
 ) : NanoHTTPD(port) {
 
     private val clipboardText = AtomicReference("")
     private val sharedFiles = CopyOnWriteArrayList<SharedFile>()
     private val gson = Gson()
 
-    private fun isAuthorized(session: IHTTPSession): Boolean =
-        session.parameters["t"]?.firstOrNull() == token
+    private fun isAuthorized(session: IHTTPSession): Boolean {
+        val provided = session.parameters["t"]?.firstOrNull() ?: return false
+        // Constant-time comparison to avoid leaking the token via timing.
+        return java.security.MessageDigest.isEqual(
+            provided.toByteArray(Charsets.UTF_8),
+            token.toByteArray(Charsets.UTF_8)
+        )
+    }
 
     fun setClipboardText(text: String) {
         clipboardText.set(text)
@@ -55,6 +61,24 @@ class LocalShareServer(
     }
 
     override fun serve(session: IHTTPSession): Response {
+        val response = routeRequest(session)
+        // Defense-in-depth headers on EVERY response:
+        //  - no-referrer stops the per-session token (?t=...) leaking to any
+        //    external host via the Referer header.
+        //  - CSP locks the page to same-origin and blocks external resource loads.
+        //  - nosniff prevents MIME-type confusion on downloads.
+        response.addHeader("Referrer-Policy", "no-referrer")
+        response.addHeader("X-Content-Type-Options", "nosniff")
+        response.addHeader(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; " +
+                "style-src 'self' 'unsafe-inline'; connect-src 'self'; " +
+                "img-src 'self' data:; base-uri 'none'; form-action 'none'"
+        )
+        return response
+    }
+
+    private fun routeRequest(session: IHTTPSession): Response {
         val uri = session.uri
         val method = session.method
 
@@ -129,7 +153,6 @@ class LocalShareServer(
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Grayzone - Clipboard</title>
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
             <style>
                 :root {
                     --bg: #07070F;
@@ -142,7 +165,7 @@ class LocalShareServer(
                 }
                 * { box-sizing: border-box; margin: 0; padding: 0; }
                 body {
-                    font-family: 'Inter', sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                     background-color: var(--bg);
                     color: var(--text);
                     display: flex;
@@ -265,7 +288,6 @@ class LocalShareServer(
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Grayzone - Files</title>
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
             <style>
                 :root {
                     --bg: #07070F;
@@ -277,7 +299,7 @@ class LocalShareServer(
                 }
                 * { box-sizing: border-box; margin: 0; padding: 0; }
                 body {
-                    font-family: 'Inter', sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                     background-color: var(--bg);
                     color: var(--text);
                     display: flex;
@@ -359,6 +381,17 @@ class LocalShareServer(
                     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
                 }
 
+                // Escape file names before injecting into innerHTML to prevent
+                // stored XSS from a maliciously named shared file.
+                function escapeHtml(s) {
+                    return String(s)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;');
+                }
+
                 const token = new URLSearchParams(window.location.search).get('t') || '';
                 const q = token ? ('?t=' + encodeURIComponent(token)) : '';
 
@@ -375,10 +408,11 @@ class LocalShareServer(
                         
                         let html = '';
                         files.forEach(file => {
+                            const safeName = escapeHtml(file.name);
                             html += `
                                 <div class="file-item">
                                     <div>
-                                        <div class="file-name">${'$'}{file.name}</div>
+                                        <div class="file-name">${'$'}{safeName}</div>
                                         <div class="file-size">${'$'}{formatBytes(file.size)}</div>
                                     </div>
                                     <a href="/api/files/${'$'}{encodeURIComponent(file.name)}${'$'}{q}" class="btn-download" download>Download</a>

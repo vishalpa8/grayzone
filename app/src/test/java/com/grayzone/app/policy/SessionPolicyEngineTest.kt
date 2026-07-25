@@ -172,6 +172,60 @@ class SessionPolicyEngineTest {
     }
 
     @Test
+    fun `schedule lock overrides an active session`() {
+        // A scheduled focus window must beat even a live session — that's the point
+        // of the block. Schedule check runs before the active-session gate.
+        val activeUntil = now + 5 * 60 * 1000L
+        val state = defaultState.copy(
+            isScheduleLocked = true,
+            activeUntil = activeUntil,
+            lockedUntil = activeUntil + 60 * 60 * 1000L
+        )
+        val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, now, appName)
+
+        assertEquals(1, commands.size)
+        assertTrue(commands[0] is SessionCommand.ShowScheduleLockScreen)
+    }
+
+    @Test
+    fun `resuming a paused session after the clock jumps forward grants full remaining`() {
+        // Simulate the wall clock moving far into the future while a paused session
+        // still had 5s remaining. The resume must anchor to the new `now`, not grant
+        // a stale/negative window.
+        val future = now + 30L * 24 * 60 * 60 * 1000L // +30 days
+        val state = defaultState.copy(sessionRemainingMs = 5000L)
+        val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, future, appName)
+
+        assertEquals(2, commands.size)
+        val update = commands[0] as SessionCommand.UpdateState
+        assertEquals(future + 5000L, update.newActiveUntil)
+        assertEquals(future + 5000L + state.defaultLockoutMins * 60 * 1000L, update.newLockedUntil)
+        assertEquals(0L, update.newSessionRemainingMs)
+        assertTrue(commands[1] is SessionCommand.DismissOverlay)
+    }
+
+    @Test
+    fun `backgrounding from the friction wait screen records the session as blocked`() {
+        // No active session (activeUntil = 0) means the user sat on the wait screen
+        // and left, so the recorded usage must be flagged wasBlocked = true.
+        // Use a realistic epoch-scale `now` so `now - duration` stays positive.
+        val realNow = 1_700_000_000_000L
+        val commands = engine.evaluate(AppEvent.AppBackgrounded(pkg, 2000L), defaultState, realNow, appName)
+
+        val record = commands.filterIsInstance<SessionCommand.RecordUsage>().single()
+        assertEquals(2000L, record.durationMs)
+        assertTrue("wait-screen exit must count as blocked", record.wasBlocked)
+    }
+
+    @Test
+    fun `backgrounding monitored app with no active session does not pause`() {
+        val realNow = 1_700_000_000_000L
+        val commands = engine.evaluate(AppEvent.AppBackgrounded(pkg, 2000L), defaultState, realNow, appName)
+        // Only cancel-notification + record-usage; no UpdateState pause command.
+        assertTrue(commands.none { it is SessionCommand.UpdateState })
+    }
+
+    @Test
     fun `when backgrounding monitored app with active session, pause it`() {
         val state = defaultState.copy(activeUntil = now + 5000L)
         val commands = engine.evaluate(AppEvent.AppBackgrounded(pkg, 1000L), state, now, appName)

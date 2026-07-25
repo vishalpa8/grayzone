@@ -86,4 +86,67 @@ class StreakManagerTest {
         prefs.edit().putString(PrefsKeys.ACHIEVEMENTS_JSON, "{bad").apply()
         assertTrue(manager.getAchievements().all { !it.isUnlocked })
     }
+
+    // ── pendingDates catch-up window ────────────────────────────────────────
+
+    @Test
+    fun `pendingDates returns only the through day on first run`() {
+        assertEquals(listOf("2026-07-21"), StreakManager.pendingDates(null, "2026-07-21"))
+    }
+
+    @Test
+    fun `pendingDates fills every missed day inclusively`() {
+        assertEquals(
+            listOf("2026-07-19", "2026-07-20", "2026-07-21"),
+            StreakManager.pendingDates("2026-07-18", "2026-07-21")
+        )
+    }
+
+    @Test
+    fun `pendingDates is empty when already up to date`() {
+        assertTrue(StreakManager.pendingDates("2026-07-21", "2026-07-21").isEmpty())
+        assertTrue(StreakManager.pendingDates("2026-07-22", "2026-07-21").isEmpty())
+    }
+
+    @Test
+    fun `pendingDates caps very large gaps to maxDays`() {
+        val dates = StreakManager.pendingDates("2020-01-01", "2026-07-21", maxDays = 5)
+        assertEquals(5, dates.size)
+        assertEquals("2026-07-21", dates.last())
+    }
+
+    // ── evaluatePendingDays uses usage source of truth + catch-up ───────────
+
+    @Test
+    fun `missed over-budget day breaks the streak on catch-up`() = kotlinx.coroutines.runBlocking {
+        prefs.edit().putString(PrefsKeys.STREAK_LAST_DATE, "2026-07-18").apply()
+        prefs.edit().putInt(PrefsKeys.CURRENT_STREAK, 5).apply()
+
+        val pkg = "com.test.app"
+        val budgets = mapOf(pkg to 30) // 30-minute daily budget
+
+        // 07-19 under budget, 07-20 OVER budget (should reset), 07-21 under budget.
+        manager.evaluatePendingDays("2026-07-21", budgets) { dateKey ->
+            when (dateKey) {
+                "2026-07-20" -> mapOf(pkg to 45 * 60_000L) // over the 30-min budget
+                else -> mapOf(pkg to 5 * 60_000L)          // comfortably under
+            }
+        }
+
+        // 07-20 zeroes the streak, then 07-21 starts a fresh streak of 1.
+        assertEquals(1, manager.getCurrentStreak())
+    }
+
+    @Test
+    fun `evaluatePendingDays is idempotent within the same day`() = kotlinx.coroutines.runBlocking {
+        val pkg = "com.test.app"
+        val budgets = mapOf(pkg to 30)
+        val usage: suspend (String) -> Map<String, Long> = { mapOf(pkg to 5 * 60_000L) }
+
+        manager.evaluatePendingDays("2026-07-21", budgets, usedMsForDate = usage)
+        val afterFirst = manager.getCurrentStreak()
+        manager.evaluatePendingDays("2026-07-21", budgets, usedMsForDate = usage)
+
+        assertEquals(afterFirst, manager.getCurrentStreak())
+    }
 }

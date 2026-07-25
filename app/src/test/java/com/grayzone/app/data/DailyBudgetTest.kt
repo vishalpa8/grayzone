@@ -61,6 +61,34 @@ class DailyBudgetTest {
     }
 
     @Test
+    fun `granted session is clamped to remaining budget`() {
+        val session = 10 * 60 * 1000L
+        // 3 minutes of budget left → grant only 3 minutes, not a full 10.
+        assertEquals(3 * 60 * 1000L, DailyBudget.grantedSessionMs(session, 3 * 60 * 1000L))
+    }
+
+    @Test
+    fun `granted session is full when budget exceeds it`() {
+        val session = 10 * 60 * 1000L
+        assertEquals(session, DailyBudget.grantedSessionMs(session, 30 * 60 * 1000L))
+    }
+
+    @Test
+    fun `granted session is full for unlimited budget`() {
+        val session = 10 * 60 * 1000L
+        assertEquals(session, DailyBudget.grantedSessionMs(session, Long.MAX_VALUE))
+    }
+
+    @Test
+    fun `granted session falls back to full when remaining is non-positive`() {
+        // Should never be reached (engine gates on exhaustion first), but must
+        // not hand out a zero-length session if it is.
+        val session = 10 * 60 * 1000L
+        assertEquals(session, DailyBudget.grantedSessionMs(session, 0L))
+        assertEquals(session, DailyBudget.grantedSessionMs(session, -1L))
+    }
+
+    @Test
     fun `budget lock requires foreground not on break and exhausted`() {
         assertTrue(DailyBudget.shouldShowBudgetLock(30 * 60_000L, 30, true, false))
         assertFalse(DailyBudget.shouldShowBudgetLock(30 * 60_000L, 30, false, false))

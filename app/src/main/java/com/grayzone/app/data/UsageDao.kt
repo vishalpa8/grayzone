@@ -46,11 +46,17 @@ interface UsageDao {
 
 
     /**
-     * Returns total durationMillis per hour bucket for peak-hour detection.
-     * Uses SQLite's built-in strftime to extract the local hour, 
+     * Returns total durationMillis per hour-of-day bucket for peak-hour detection.
+     * Uses SQLite's built-in strftime to extract the local hour,
      * significantly reducing the data sent across the cursor.
+     *
+     * NOTE: the output column is deliberately named `hourOfDay` (not `startTime`).
+     * A `startTime` alias would collide with the real `startTime` column and make
+     * `GROUP BY startTime` ambiguous — SQLite could then group by the raw
+     * millisecond timestamp (one group per event) instead of by hour, silently
+     * breaking peak-hour aggregation.
      */
-    @Query("SELECT CAST(strftime('%H', startTime / 1000, 'unixepoch', 'localtime') AS INTEGER) as startTime, SUM(durationMillis) as totalMillis FROM usage_events GROUP BY startTime ORDER BY totalMillis DESC")
+    @Query("SELECT CAST(strftime('%H', startTime / 1000, 'unixepoch', 'localtime') AS INTEGER) as hourOfDay, SUM(durationMillis) as totalMillis FROM usage_events GROUP BY hourOfDay ORDER BY totalMillis DESC")
     suspend fun getStartTimeTotals(): List<StartTimeTotalRow>
 
     /** Total number of events ever recorded — used for empty-state detection. */
@@ -86,8 +92,8 @@ data class DateTotalRow(
     val totalMillis: Long
 )
 
-/** Row returned by start-time totals query. */
+/** Row returned by the peak-hour totals query. [hourOfDay] is 0-23 local time. */
 data class StartTimeTotalRow(
-    val startTime: Long,
+    val hourOfDay: Long,
     val totalMillis: Long
 )

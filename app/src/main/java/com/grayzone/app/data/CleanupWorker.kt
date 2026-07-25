@@ -24,7 +24,17 @@ class CleanupWorker(
 ) : CoroutineWorker(context, params) {
     
     companion object {
-        private const val RETENTION_DAYS = 90L
+        const val RETENTION_DAYS = 90L
+
+        /**
+         * Pure "yyyy-MM-dd" cutoff key for [retentionDays] before [nowMillis].
+         * Events with a strictly older dateKey are eligible for deletion.
+         * Extracted so the retention boundary can be unit-tested without Android.
+         */
+        fun cutoffDateKey(nowMillis: Long, retentionDays: Long = RETENTION_DAYS): String =
+            SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
+                Date(nowMillis - retentionDays * 24 * 60 * 60 * 1000L)
+            )
     }
     
     override suspend fun doWork(): Result {
@@ -32,9 +42,7 @@ class CleanupWorker(
             val dao = UsageDatabase.getInstance(applicationContext).usageDao()
             
             // Calculate cutoff date (90 days ago)
-            val cutoffDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
-                Date(System.currentTimeMillis() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
-            )
+            val cutoffDate = cutoffDateKey(System.currentTimeMillis())
             
             val deletedCount = dao.deleteEventsOlderThan(cutoffDate)
             val remainingCount = dao.getEventCount()
