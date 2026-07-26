@@ -19,8 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.service.OverlayService
 import com.grayzone.app.ui.AppDrawerContent
 import com.grayzone.app.ui.AppsScreen
@@ -56,12 +59,31 @@ enum class Tab { HOME, APPS, LIMITS, STATS, SETTINGS }
 @Composable
 fun MainAppContent() {
     val context = LocalContext.current
-    var currentScreen by remember {
-        mutableStateOf(
-            if (isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context))
-                Screen.MAIN else Screen.ONBOARDING
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
+
+    // Decide the screen using the prompt-once-per-loss policy so a revoked Accessibility permission
+    // is surfaced at most once per loss instead of trapping the user in a re-prompt loop.
+    fun evaluateScreen(): Screen {
+        val ready = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
+        val decision = AccessibilityPromptPolicy.onObserved(
+            previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false),
+            isEnabled = ready
         )
+        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
+        return if (ready || !decision.shouldPrompt) Screen.MAIN else Screen.ONBOARDING
     }
+
+    var currentScreen by remember { mutableStateOf(evaluateScreen()) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) currentScreen = evaluateScreen()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     when (currentScreen) {
         Screen.ONBOARDING -> OnboardingScreen(onContinue = { currentScreen = Screen.MAIN })
         Screen.MAIN -> MainScreen()

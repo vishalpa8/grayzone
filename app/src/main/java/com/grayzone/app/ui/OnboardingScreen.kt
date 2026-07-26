@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import com.grayzone.app.PrefsKeys
 import com.grayzone.app.isAccessibilityServiceEnabled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,6 +42,12 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 hasUsageAccess = isAccessibilityServiceEnabled(context)
                 hasOverlay = Settings.canDrawOverlays(context)
                 hasBatteryOpt = pm.isIgnoringBatteryOptimizations(context.packageName)
+                if (hasUsageAccess) {
+                    // Permission granted (again): reset prompt-once flag so a future genuine loss
+                    // prompts exactly once more.
+                    context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false).apply()
+                }
                 if (hasUsageAccess && hasOverlay && hasBatteryOpt) onContinue()
             }
         }

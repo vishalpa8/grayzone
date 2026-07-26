@@ -35,47 +35,66 @@ class GrayzoneAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        
-        val info = AccessibilityServiceInfo().apply {
-            // Only listen for window state changes (foreground app switches)
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-            
-            // Generic feedback type (no audio/haptic feedback needed)
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            
-            // Retrieve window info to detect app changes
-            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            
-            // 100ms notification timeout (balance between responsiveness and overhead)
-            notificationTimeout = 100L
+
+        // Guard every step: an uncaught exception here can crash the service, which is one of the
+        // triggers that causes the OS to disable (revoke) an accessibility service.
+        try {
+            val info = AccessibilityServiceInfo().apply {
+                // Only listen for window state changes (foreground app switches)
+                eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+
+                // Generic feedback type (no audio/haptic feedback needed)
+                feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+
+                // 100ms notification timeout (balance between responsiveness and overhead).
+                // Note: we intentionally do NOT request interactive-window retrieval — only the
+                // event's package name is used — keeping the service lightweight.
+                notificationTimeout = 100L
+            }
+
+            serviceInfo = info
+            com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(true)
+            Log.d(TAG, "Accessibility service connected - monitoring foreground app changes")
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.e(
+                com.grayzone.app.LogComponent.ACCESSIBILITY,
+                "onServiceConnected failed",
+                e
+            )
         }
-        
-        serviceInfo = info
-        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(true)
-        Log.d(TAG, "Accessibility service connected - monitoring foreground app changes")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        // Only process window state changes (app switches)
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        
-        val packageName = event.packageName?.toString() ?: return
-        if (packageName.isEmpty()) return
-        
-        // Audit log: what event we're responding to (transparent for user verification)
-        // This shows we only detect app changes, not content or UI interactions
-        com.grayzone.app.GrayzoneLogger.d(
-            com.grayzone.app.LogComponent.ACCESSIBILITY,
-            "App changed",
-            mapOf("package" to packageName)
-        )
-        
-        // Send broadcast to OverlayService
-        // Using explicit package targeting for security (prevents other apps from intercepting)
-        sendBroadcast(Intent(ACTION_APP_CHANGED).apply {
-            putExtra(EXTRA_PACKAGE_NAME, packageName)
-            setPackage(this@GrayzoneAccessibilityService.packageName)
-        })
+        // Guard the whole handler so a malformed event can never crash (and thereby revoke) the
+        // service.
+        try {
+            // Only process window state changes (app switches)
+            if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+
+            val packageName = event.packageName?.toString() ?: return
+            if (packageName.isEmpty()) return
+
+            // Audit log: what event we're responding to (transparent for user verification)
+            // This shows we only detect app changes, not content or UI interactions
+            com.grayzone.app.GrayzoneLogger.d(
+                com.grayzone.app.LogComponent.ACCESSIBILITY,
+                "App changed",
+                mapOf("package" to packageName)
+            )
+
+            // Send broadcast to OverlayService
+            // Using explicit package targeting for security (prevents other apps from intercepting)
+            sendBroadcast(Intent(ACTION_APP_CHANGED).apply {
+                putExtra(EXTRA_PACKAGE_NAME, packageName)
+                setPackage(this@GrayzoneAccessibilityService.packageName)
+            })
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.e(
+                com.grayzone.app.LogComponent.ACCESSIBILITY,
+                "onAccessibilityEvent failed",
+                e
+            )
+        }
     }
 
     override fun onInterrupt() {

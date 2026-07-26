@@ -29,7 +29,9 @@ class BootReceiver : BroadcastReceiver() {
 
         val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
 
-        // Always restart OverlayService; it is the core monitoring service.
+        // Always restart OverlayService; it is the core monitoring service. Its onCreate re-arms the
+        // session-expiry alarms for any in-flight session, so a session that spans the reboot still
+        // stops its countdown at 00:00 and locks at expiry.
         try {
             context.startForegroundService(Intent(context, OverlayService::class.java))
             Log.d(TAG, "OverlayService restart requested")

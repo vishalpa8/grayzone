@@ -67,6 +67,16 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!--
+            SessionExpiryReceiver: fired by AlarmManager at a session's activeUntil so the app locks
+            (and the countdown notification stops at 00:00) reliably across Doze/screen-off/process
+            death. Internal only.
+        -->
+        <receiver
+            android:name=".service.SessionExpiryReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

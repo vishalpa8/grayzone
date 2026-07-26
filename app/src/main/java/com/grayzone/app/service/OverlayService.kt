@@ -68,6 +68,7 @@ class OverlayService : Service() {
         const val ACTION_STOP = "com.grayzone.app.ACTION_STOP_OVERLAY"
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
+        const val ACTION_SESSION_EXPIRED = "com.grayzone.app.ACTION_SESSION_EXPIRED"
         private const val DEFAULT_WAIT = 5
 
         // Hex color int helpers
@@ -100,8 +101,6 @@ class OverlayService : Service() {
     private val serviceScope = CoroutineScope(
         Dispatchers.IO + SupervisorJob() + coroutineExceptionHandler
     )
-    // Written from both the transition coroutine (IO) and the main thread.
-    private val lockoutJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
     
     // Usage stats state — read/written across the transition coroutine (IO),
     // the main-thread countdown job, and lockout jobs, hence @Volatile.
@@ -138,6 +137,16 @@ class OverlayService : Service() {
             now < prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
         }
         GrayscaleManager.reconcileOnStart(this, hasActiveSession)
+
+        // Re-arm session-expiry alarms for any in-flight session so the lock still fires (and the
+        // countdown stops at 00:00) after a process restart or reboot — the old in-memory schedule
+        // was lost on process death.
+        monitoredApps.forEach { pkg ->
+            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+            if (activeUntil > now) {
+                SessionExpiryScheduler.arm(this, pkg, activeUntil)
+            }
+        }
 
         // Register broadcast receiver for AccessibilityService events
         // This replaces battery-intensive UsageStatsManager polling with event-driven detection
@@ -187,11 +196,11 @@ class OverlayService : Service() {
 
         GrayzoneLogger.i(LogComponent.OVERLAY, "Midnight reset: session locks cleared for the new day")
 
-        lockoutJobs.values.forEach { it.cancel() }
-        lockoutJobs.clear()
-
         val currentPkg = lastForegroundPackage
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+
+        // Pending session-expiry alarms from yesterday are now stale.
+        monitoredApps.forEach { SessionExpiryScheduler.cancel(this@OverlayService, it) }
 
         withContext(Dispatchers.Main) {
             // Any session/lock UI from yesterday is now stale.
@@ -408,13 +417,15 @@ class OverlayService : Service() {
                 if (cmd.clearActiveSession) {
                     editor.remove(PrefsKeys.ACTIVE_UNTIL + cmd.packageName)
                     editor.remove(PrefsKeys.LOCKED_UNTIL + cmd.packageName)
+                    // Session paused/cleared — a pending expiry alarm must not fire.
+                    SessionExpiryScheduler.cancel(this@OverlayService, cmd.packageName)
                 }
                 
                 if (cmd.newActiveUntil != null) {
                     val activeUntil = cmd.newActiveUntil
                     serviceScope.launch(Dispatchers.Main) { showTint() }
                     startCountdownNotification(cmd.packageName, activeUntil)
-                    scheduleLockoutCheck(cmd.packageName, activeUntil - now)
+                    SessionExpiryScheduler.arm(this@OverlayService, cmd.packageName, activeUntil)
                 }
                 editor.commit()
             }
@@ -509,16 +520,35 @@ class OverlayService : Service() {
             )
         }
     }
-    private fun scheduleLockoutCheck(packageName: String, delayMs: Long) {
-        lockoutJobs[packageName]?.cancel()
-        lockoutJobs[packageName] = serviceScope.launch {
-            delay(delayMs)
-            val currentPkg = lastForegroundPackage
-            if (currentPkg == packageName) {
-                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-                val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
-                launch(Dispatchers.Main) { showOverlay(packageName, getAppName(packageName), OverlayMode.LOCK, lockedUntil) }
-            }
+    /**
+     * Called when the Doze-safe expiry alarm fires (via [SessionExpiryReceiver]). Clamps the
+     * countdown notification so it never shows a negative value, and shows the lock when the
+     * monitored app is still foreground within its lockout window. Reliable across
+     * screen-off/Doze/process death, unlike the old in-memory coroutine delay.
+     */
+    private fun handleSessionExpired(packageName: String) {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
+        val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
+
+        val outcome = com.grayzone.app.policy.SessionExpiryDecision.decide(
+            now = now,
+            activeUntil = activeUntil,
+            lockedUntil = lockedUntil,
+            isForegroundPackage = lastForegroundPackage == packageName,
+            isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true),
+            isOnBreak = scheduleManager.isBreakActive()
+        )
+
+        when (outcome) {
+            com.grayzone.app.policy.SessionExpiryOutcome.NoOp -> Unit
+            com.grayzone.app.policy.SessionExpiryOutcome.ClampCountdown ->
+                serviceScope.launch(Dispatchers.Main) { cancelCountdownNotification() }
+            com.grayzone.app.policy.SessionExpiryOutcome.ShowLock ->
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay(packageName, getAppName(packageName), OverlayMode.LOCK, lockedUntil)
+                }
         }
     }
 
@@ -533,6 +563,9 @@ class OverlayService : Service() {
             }
         } else if (intent?.action == ACTION_STOP_COUNTDOWN) {
             cancelCountdownNotification()
+        } else if (intent?.action == ACTION_SESSION_EXPIRED) {
+            val pkg = intent.getStringExtra("package_name") ?: ""
+            if (pkg.isNotEmpty()) handleSessionExpired(pkg)
         }
         return START_STICKY
     }
@@ -986,7 +1019,7 @@ class OverlayService : Service() {
             .apply()
 
         startCountdownNotification(packageName, activeUntil)
-        scheduleLockoutCheck(packageName, grantedSessionMs)
+        SessionExpiryScheduler.arm(this, packageName, activeUntil)
         showTint()
         sessionStartTime = now
     }

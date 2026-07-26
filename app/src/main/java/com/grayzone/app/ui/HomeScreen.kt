@@ -192,6 +192,41 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
         }
 
         item {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                if (!isActive) {
+                    val ctx = LocalContext.current
+                    GZCard(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        background = GZAmberContainer,
+                        border = GZAmber.copy(alpha = 0.3f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.Shield, contentDescription = null,
+                                tint = GZAmber, modifier = Modifier.size(22.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Protection Inactive", color = GZAmber,
+                                    fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                Text("Accessibility permission is off. Tap Fix to re-enable it.",
+                                    color = GZTextSecondary, fontSize = 12.sp)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                onClick = {
+                                    ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                },
+                                colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
+                            ) { Text("Fix", fontWeight = FontWeight.Bold) }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
             GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
                 Row(modifier = Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Shield,

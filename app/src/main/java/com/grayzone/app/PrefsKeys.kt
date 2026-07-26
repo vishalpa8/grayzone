@@ -8,6 +8,13 @@ object PrefsKeys {
     const val GRAYZONE_ENABLED   = "grayzone_enabled"
     const val GRAYSCALE_ENABLED  = "grayscale_enabled"
 
+    /**
+     * True once the user has been prompted for the *current* Accessibility-permission loss; reset to
+     * false when the permission is next observed enabled. Enforces prompt-once-per-loss so the app
+     * does not repeatedly nag when the OS revokes the service.
+     */
+    const val ACCESSIBILITY_PROMPTED_FOR_LOSS = "accessibility_prompted_for_loss"
+
     // Timing settings (global defaults)
     const val WAIT_SECONDS       = "wait_seconds"
     const val SESSION_MINUTES    = "session_minutes"
