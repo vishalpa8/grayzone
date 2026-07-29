@@ -3,9 +3,13 @@ package com.grayzone.app.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.vpn.AdBlockVpnService
+import com.grayzone.app.service.vpn.VpnHoldExpiryScheduler
+import com.grayzone.app.service.vpn.VpnHoldLock
+import com.grayzone.app.service.vpn.VpnHoldLockStore
 
 /**
  * Restarts Grayzone's foreground services after the device boots.
@@ -40,14 +44,26 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         // Only restart AdBlockVpnService if the user previously enabled the VPN.
-        // This flag represents restore intent, so failures below must not clear it.
+        // If a 24h hold was tracked but already expired across the reboot, clear intent and skip.
         if (prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) {
+            val holdState = VpnHoldLockStore.read(prefs)
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = SystemClock.elapsedRealtime()
+            if (holdState.isTracked && !VpnHoldLock.isHoldActive(holdState, nowWall, nowElapsed)) {
+                prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
+                VpnHoldLockStore.clear(prefs)
+                Log.d(TAG, "VPN hold expired across reboot — cleared enable flag, not restarting")
+                return
+            }
             try {
                 val vpnIntent = Intent(context, AdBlockVpnService::class.java).apply {
                     action = AdBlockVpnService.ACTION_START
                 }
                 context.startForegroundService(vpnIntent)
                 Log.d(TAG, "AdBlockVpnService restart requested")
+                if (VpnHoldLock.isHoldActive(holdState, nowWall, nowElapsed)) {
+                    VpnHoldExpiryScheduler.rearmFromPrefs(context)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start AdBlockVpnService; restore intent preserved: ${e.message}")
             }

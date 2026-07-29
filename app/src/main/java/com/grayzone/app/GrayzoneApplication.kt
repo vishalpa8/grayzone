@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.grayzone.app.data.CleanupWorker
 import com.grayzone.app.data.ConfigValidator
+import com.grayzone.app.data.DefaultMonitoredApps
 import com.grayzone.app.data.StreakEvaluator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,10 +37,28 @@ class GrayzoneApplication : Application() {
             "Grayzone ${BuildConfig.VERSION_NAME} starting on ${android.os.Build.MODEL}"
         )
         
+        // Keep onCreate light: this process also hosts GrayzoneAccessibilityService. Heavy or
+        // failing work on the main thread can ANR/crash the process, which makes Android disable
+        // the accessibility service.
         validateConfiguration()
         resetRuntimeStateIfNeeded()
+        runDeferredStartupWork()
         catchUpStreaks()
         schedulePeriodicCleanup()
+    }
+
+    /**
+     * PackageManager queries, prefs migration, and one-shot default-app seeding — off the main
+     * thread so accessibility service bind is never blocked.
+     */
+    private fun runDeferredStartupWork() {
+        appScope.launch {
+            try {
+                seedDefaultMonitoredAppsIfNeeded()
+            } catch (e: Exception) {
+                GrayzoneLogger.w(LogComponent.BOOT, "Deferred startup work failed: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -92,12 +111,6 @@ class GrayzoneApplication : Application() {
             needsRepair = true
         }
         
-        // Validate grayscale enabled (boolean)
-        if (!prefs.contains(PrefsKeys.GRAYSCALE_ENABLED)) {
-            editor.putBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)
-            needsRepair = true
-        }
-        
         // Validate monitored apps is a valid set
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, null)
         if (monitoredApps == null) {
@@ -120,6 +133,46 @@ class GrayzoneApplication : Application() {
     }
     
     /**
+     * One-shot: enable Instagram + YouTube for sessions/lockouts when installed.
+     * Runs on [appScope] (IO) — [PackageManager.getPackageInfo] must not block service bind.
+     */
+    private fun seedDefaultMonitoredAppsIfNeeded() {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+        if (prefs.contains(PrefsKeys.DEFAULT_APPS_SEEDED)) return
+
+        val existing = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        val installed = DefaultMonitoredApps.DEFAULT_PACKAGES.filter { pkg ->
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    packageManager.getPackageInfo(
+                        pkg,
+                        android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getPackageInfo(pkg, 0)
+                }
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }.toSet()
+        val seeded = DefaultMonitoredApps.seedIfNeeded(
+            alreadySeeded = false,
+            existing = existing,
+            installedPackages = installed
+        ) ?: return
+        prefs.edit()
+            .putStringSet(PrefsKeys.MONITORED_APPS, seeded)
+            .putBoolean(PrefsKeys.DEFAULT_APPS_SEEDED, true)
+            .apply()
+        GrayzoneLogger.i(
+            LogComponent.BOOT,
+            "Default monitored apps seeded: ${seeded.intersect(DefaultMonitoredApps.DEFAULT_PACKAGES.toSet())}"
+        )
+    }
+
+    /**
      * Clears runtime-only session state once per calendar day while preserving stats.
      */
     private fun resetRuntimeStateIfNeeded() {
@@ -136,19 +189,23 @@ class GrayzoneApplication : Application() {
      * Schedule weekly database cleanup to prevent unbounded growth.
      */
     private fun schedulePeriodicCleanup() {
-        val cleanupRequest = PeriodicWorkRequestBuilder<CleanupWorker>(
-            7, TimeUnit.DAYS  // Run weekly
-        ).build()
-        
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "database_cleanup",
-            ExistingPeriodicWorkPolicy.KEEP,  // Don't restart if already scheduled
-            cleanupRequest
-        )
-        
-        GrayzoneLogger.d(
-            LogComponent.CLEANUP,
-            "Scheduled weekly database cleanup"
-        )
+        try {
+            val cleanupRequest = PeriodicWorkRequestBuilder<CleanupWorker>(
+                7, TimeUnit.DAYS  // Run weekly
+            ).build()
+
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "database_cleanup",
+                ExistingPeriodicWorkPolicy.KEEP,  // Don't restart if already scheduled
+                cleanupRequest
+            )
+
+            GrayzoneLogger.d(
+                LogComponent.CLEANUP,
+                "Scheduled weekly database cleanup"
+            )
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.CLEANUP, "Failed to schedule cleanup: ${e.message}")
+        }
     }
 }

@@ -1,11 +1,10 @@
 # Grayzone
 
-Grayzone is an open-source Android digital wellbeing application designed to help users break endless scrolling habits and reduce doomscrolling. Unlike traditional app blockers that immediately kick you out, Grayzone uses a progressive friction mechanism by combining grayscale visualization, mindful session timers, a strict lockout penalty, and a built-in DNS-level ad/adult content blocker to discourage mindless app usage.
+Grayzone is an open-source Android digital wellbeing application designed to help users break endless scrolling habits and reduce doomscrolling. Unlike traditional app blockers that immediately kick you out, Grayzone uses a progressive friction mechanism by combining mindful session timers, a strict lockout penalty, and a built-in DNS-level ad/adult content blocker to discourage mindless app usage.
 
 ## Features
 
 - **Mindful Active Sessions**: Start a timed session (e.g., 10 minutes) when you open a distracting app. 
-- **True System Grayscale**: Once an active session begins, the entire screen progressively turns black-and-white using Android's hardware Daltonizer to visually break the dopamine feedback loop and reduce the appeal of colorful media feeds.
 - **Strict Lockouts**: When a session expires, you are forcibly locked out of the app. A strict cooldown timer (e.g., 30 minutes) begins, during which the app cannot be accessed.
 - **Friction Overlay**: Deliberately slowing you down by making you wait 8 seconds before you can start a new active session.
 - **Pausable Sessions**: If you close a monitored app before your session expires, the timer pauses. When you return, you bypass the friction screen and instantly resume your remaining time. A full reset is only earned after you drain your time and serve a full lockout.
@@ -14,23 +13,18 @@ Grayzone is an open-source Android digital wellbeing application designed to hel
 - **Anti-Bypass Protection**: The Settings UI and master monitoring toggle are strictly disabled and locked if any monitored app is currently active, paused, or locked out. Additionally, known DNS-over-HTTPS (DoH) fallback domains are hard-blocked to prevent apps like Chrome from bypassing the DNS filter.
 - **Daily Break**: A single one-hour "break" per calendar day during which nothing is locked — no friction screens, lockouts, or schedule blocks. Usage is still recorded so daily budgets stay accurate, ending the break early does not restore the allowance, and it resets at midnight.
 - **Real-Time Limits Tab**: Keep track of the active session limits, paused times, and lockout timers for all of your monitored apps in one central dashboard.
-- **Network Tools**: A hub of local-network utilities that runs entirely on-device:
-  - **Clipboard Share** & **File Share**: Move text and files between your phone and any device on the same WiFi by scanning a QR code. Both are served by an embedded HTTP server protected by a per-session token embedded in the QR URL, so only a device that scanned the code can read the clipboard or list/download files.
-  - **Speed Test**: Measures gateway ping, internet ping, and download bandwidth.
-  - **Port Scanner**: Scans common ports on any device on the network and offers one-tap open for web ports.
-  - **Wake-on-LAN**: Sends magic packets to wake saved devices by MAC address.
-  - **Device Discovery**: Ping-sweeps the local `/24` subnet to list connected devices and open a router's admin page.
+- **AdBlock VPN Tab**: Toggle the local DNS blocker from the main bottom navigation, with live query stats. Once enabled, VPN stays on for 24 hours and then turns off automatically.
 
 ## Architecture
 
 Grayzone leverages Android's Accessibility Services, System Alert Windows, and VpnService to monitor app usage and enforce limits securely and reliably.
 
-- **`GrayzoneAccessibilityService`**: Monitors foreground window transitions. Detects when you open or leave a monitored app and enforces session timers and grayscale modes.
+- **`GrayzoneAccessibilityService`**: Monitors foreground window transitions. Detects when you open or leave a monitored app and enforces session timers.
 - **`OverlayService`**: Uses `WindowManager` with `TYPE_APPLICATION_OVERLAY` to draw the friction wait screen and lockout screens on top of blocked apps. Each overlay mode (friction pause, session lockout, daily-budget lockout, and schedule/focus lockout) is described by a single `OverlayPresentation` strategy in `service/overlay/`, so per-mode title, body, countdown, and completion behavior live in one place and a new screen type is added as a new strategy rather than by editing scattered `when`/`if` branches.
-- **`AdBlockVpnService` & `GrayzoneBloomFilter`**: A lightweight local VPN that intercepts port 53 UDP traffic. It uses a custom, highly-optimized binary Bloom filter (~6 MB ads + ~4 MB adult held in RAM) to match domains against nearly 1 million blocklist entries in `O(1)` time with zero disk I/O per query. DNS lookups are served from a bounded, reusable `DnsResolverPool`, and a default bypass list keeps payment/streaming apps outside the tunnel.
+- **`AdBlockVpnService` & `GrayzoneBloomFilter`**: A lightweight local VPN that intercepts port 53 UDP traffic. It uses a custom, highly-optimized binary Bloom filter (~6 MB ads + ~4 MB adult held in RAM) to match domains against 4.6 million blocklist entries in `O(1)` time with zero disk I/O per query. DNS lookups are served from a bounded, reusable `DnsResolverPool`, and a default bypass list keeps payment/streaming apps outside the tunnel.
+- **`AbusedTldList`**: The ~430 "most abused" top-level domains (`.zip`, `.mov`, `.surf`, …) are matched as an exact set against a hostname's final label rather than being folded into a Bloom filter. A Bloom false positive on a bare TLD would blackhole everything under it, so `DomainZoneMatcher` never queries one; this list is the deliberate, collision-free exception.
 - **`RuntimeSessionReset`**: Central "new day" reset that clears runtime session state (active sessions, lockouts, paused remainders) once per calendar day while preserving usage stats. It runs on process start (`GrayzoneApplication`) and via a midnight loop plus a per-transition safety net in `OverlayService`, so stale locks never survive midnight.
-- **`LocalShareServer`**: An embedded [NanoHTTPD](https://github.com/NanoHttpd/nanohttpd) server powering Clipboard/File Share, gated by a per-session token so only devices that scanned the QR code can reach the data endpoints.
-- **`MainActivity`**: A modern Jetpack Compose-based UI for managing your monitored apps, viewing your live dashboard, and accessing Network Tools.
+- **`MainActivity`**: A modern Jetpack Compose-based UI with bottom tabs for Home, Apps, VPN, Limits, and Settings.
 
 ## Requirements
 
@@ -39,8 +33,6 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
   - **Accessibility Service**: To monitor which apps are currently active on screen.
   - **Display over other apps**: To draw the lockout and friction overlays.
   - **VPN Service**: To route and filter DNS traffic (requested at runtime).
-  - **Write Secure Settings**: To toggle Android's true hardware grayscale daltonizer (`WRITE_SECURE_SETTINGS` granted via ADB).
-  - **Location (Fine)**: Required by Android to read the connected WiFi network (SSID) and discover devices in the Network Tools screen. Requested at runtime; no location data is stored or shared.
 
 ## Privacy and Persistence
 
@@ -56,12 +48,12 @@ If the DNS blocker was successfully enabled, Grayzone persists that restore inte
    cd Grayzone
    ```
 
-2. **Generate the Bloom Filters (Windows):**
-   The blocklists are bundled as compact `.bin` files inside the APK. Before building, you must generate them by running the PowerShell tool:
+2. **Generate the Blocklists (Windows):**
+   The blocklists are bundled inside the APK as compact `.bin` Bloom filters plus `res/raw/abused_tlds.txt`. Before building, you must generate them by running the PowerShell tool:
    ```powershell
    .\scripts\blocklist_tools.ps1
    ```
-   *Note: This downloads from multiple online sources (StevenBlack, Hagezi, AdGuard) and merges them using inline C#.*
+   *Note: This downloads from multiple online sources (StevenBlack, HaGeZi ads/TIF/DynDNS/TLDs/NSFW/gambling, OISD, and others) and merges them using inline C#. The spam-TLD feed is split: multi-label rows join the ads Bloom filter, bare TLDs are written to `abused_tlds.txt` for exact matching.*
 
 3. **Open in Android Studio:**
    - Open Android Studio and select **Open**.

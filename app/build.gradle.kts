@@ -37,6 +37,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+        encoding = "UTF-8"
     }
     kotlinOptions {
         jvmTarget = "1.8"
@@ -58,6 +59,13 @@ android {
     }
 }
 
+// Source files use non-ASCII glyphs (em dashes, arrows, box-drawing dividers) in UI copy and
+// comments. Pin the compiler charset so the platform default (windows-1252 here) can never
+// silently reinterpret them into mojibake.
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.01.00")
     implementation(composeBom)
@@ -73,9 +81,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     
-    // Accompanist
-    implementation("com.google.accompanist:accompanist-permissions:0.34.0")
-
     // Room Database
     val roomVersion = "2.6.1"
     implementation("androidx.room:room-runtime:$roomVersion")
@@ -88,12 +93,6 @@ dependencies {
 
     // Gson for JSON serialization
     implementation("com.google.code.gson:gson:2.10.1")
-
-    // Embedded HTTP server for Clipboard Share & File Share
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // QR code generation (offline)
-    implementation("com.google.zxing:core:3.5.2")
 
     // Testing dependencies
     testImplementation("junit:junit:4.13.2")

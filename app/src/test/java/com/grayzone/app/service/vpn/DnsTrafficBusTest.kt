@@ -6,7 +6,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Bounded in-memory DNS event feed used by the Network Tools UI.
+ * Bounded in-memory DNS event feed used by the VPN screen live traffic UI.
  * Capacity and ordering leaks would either OOM or show stale traffic.
  */
 class DnsTrafficBusTest {

@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.service.vpn
+package com.grayzone.app.service.vpn
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -23,6 +23,10 @@ class AdBlockVpnService : VpnService() {
         const val TAG = "AdBlockVpnService"
         const val ACTION_START = "com.grayzone.app.START_VPN"
         const val ACTION_STOP = "com.grayzone.app.STOP_VPN"
+        /** Alarm-driven stop after the 24h hold expires (always authorized). */
+        const val ACTION_HOLD_EXPIRED = "com.grayzone.app.VPN_HOLD_EXPIRED"
+        /** Rebuild the foreground notification (e.g. after hold state changes). */
+        const val ACTION_REFRESH_NOTIFICATION = "com.grayzone.app.REFRESH_VPN_NOTIFICATION"
         const val NOTIF_ID = 2
         const val CHANNEL_ID = "adblock_vpn_channel"
 
@@ -115,8 +119,46 @@ class AdBlockVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REFRESH_NOTIFICATION) {
+            if (vpnInterface != null || isRunning) {
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.notify(NOTIF_ID, buildNotification())
+            }
+            return START_STICKY
+        }
+
+        if (intent?.action == ACTION_HOLD_EXPIRED) {
+            stopVpnAfterHoldExpired()
+            return START_NOT_STICKY
+        }
+
         if (intent?.action == ACTION_STOP) {
+            val prefs = VpnHoldLockStore.prefs(this)
+            val state = VpnHoldLockStore.read(prefs)
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = android.os.SystemClock.elapsedRealtime()
+            if (!VpnHoldLock.canUserDisable(state, nowWall, nowElapsed)) {
+                com.grayzone.app.GrayzoneLogger.w(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Ignoring ACTION_STOP — VPN hold active for ${VpnHoldLock.formatRemaining(VpnHoldLock.remainingMs(state, nowWall, nowElapsed))}"
+                )
+                if (vpnInterface == null) startVpn()
+                return START_STICKY
+            }
+            // Hold already elapsed (or never tracked): allow manual stop.
             stopVpn()
+            VpnHoldLockStore.clear(prefs)
+            VpnHoldExpiryScheduler.cancel(this)
+            return START_NOT_STICKY
+        }
+
+        // Fresh start or sticky restart: if hold already expired, auto-disable instead of running.
+        val prefs = VpnHoldLockStore.prefs(this)
+        val hold = VpnHoldLockStore.read(prefs)
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        if (hold.isTracked && !VpnHoldLock.isHoldActive(hold, nowWall, nowElapsed)) {
+            stopVpnAfterHoldExpired()
             return START_NOT_STICKY
         }
 
@@ -124,6 +166,16 @@ class AdBlockVpnService : VpnService() {
             startVpn()
         }
         return START_STICKY
+    }
+
+    private fun stopVpnAfterHoldExpired() {
+        stopVpn()
+        VpnHoldLockStore.clear(this)
+        VpnHoldExpiryScheduler.cancel(this)
+        com.grayzone.app.GrayzoneLogger.i(
+            com.grayzone.app.LogComponent.VPN,
+            "VPN stopped after 24h hold expiry"
+        )
     }
 
     private fun startVpn() {
@@ -155,8 +207,11 @@ class AdBlockVpnService : VpnService() {
             isRunning = true
 
             // Persist the VPN-active flag so BootReceiver can restart it after reboot.
-            getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, true).apply()
+            val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, true).apply()
+            // Start (or keep) the 24h hold — reconnects must not reset the timer.
+            VpnHoldLockStore.markEnabledIfAbsent(prefs)
+            VpnHoldExpiryScheduler.rearmFromPrefs(this)
 
             vpnThread = Thread { runVpnLoop() }
             vpnThread?.start()
@@ -233,8 +288,10 @@ class AdBlockVpnService : VpnService() {
         resolverPool = null
 
         if (clearPersistedFlag) {
-            getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+            val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+            VpnHoldLockStore.clear(prefs)
+            VpnHoldExpiryScheduler.cancel(this)
         }
 
         if (stopService) {
@@ -246,6 +303,11 @@ class AdBlockVpnService : VpnService() {
 
     private fun restartVpnAfterDelay(delayMs: Long) {
         serviceScope.launch {
+            val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            val wantsVpn = prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false)
+            if (wantsVpn) {
+                com.grayzone.app.data.ProtectionHealthRepository.markVpnReconnectPending(true)
+            }
             shutdownVpn(clearPersistedFlag = false, stopService = false)
             kotlinx.coroutines.delay(delayMs)
             startVpn()
@@ -257,7 +319,12 @@ class AdBlockVpnService : VpnService() {
         // Do NOT clear the persisted VPN_ENABLED flag here: onDestroy also fires
         // when the OS kills the service, and the flag represents user intent that
         // BootReceiver / START_STICKY use to restore protection. The flag is only
-        // cleared by an explicit ACTION_STOP (stopVpn).
+        // cleared by an explicit ACTION_STOP / hold expiry (stopVpn).
+        val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+        val wantsVpn = prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false)
+        if (wantsVpn) {
+            com.grayzone.app.data.ProtectionHealthRepository.markVpnReconnectPending(true)
+        }
         shutdownVpn(clearPersistedFlag = false, stopService = false)
         serviceScope.cancel()
     }
@@ -349,10 +416,10 @@ class AdBlockVpnService : VpnService() {
 
     /**
      * Route a parsed DNS query domain:
-     *  1. Firefox DoH canary â†’ NXDOMAIN (so Firefox disables DoH and uses system DNS)
-     *  2. Known DoH/DoT bypass endpoint â†’ NXDOMAIN (force apps back to plain DNS53)
-     *  3. Blocked ad/adult domain â†’ sinkhole (0.0.0.0)
-     *  4. Everything else â†’ forward to real DNS with fallback servers
+     *  1. Firefox DoH canary → NXDOMAIN (so Firefox disables DoH and uses system DNS)
+     *  2. Known DoH/DoT bypass endpoint → NXDOMAIN (force apps back to plain DNS53)
+     *  3. Blocked ad/adult domain → sinkhole (0.0.0.0)
+     *  4. Everything else → forward to real DNS with fallback servers
      */
     private fun handleDnsQuery(
         domain: String,
@@ -485,7 +552,7 @@ class AdBlockVpnService : VpnService() {
             }
             com.grayzone.app.GrayzoneLogger.w(
                 com.grayzone.app.LogComponent.DNS,
-                "DNS server $serverIp failed, trying nextâ€¦"
+                "DNS server $serverIp failed, trying next…"
             )
         }
         com.grayzone.app.GrayzoneLogger.e(
@@ -511,20 +578,23 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun buildNotification(): Notification {
-        val stopIntent = Intent(this, AdBlockVpnService::class.java).apply { action = ACTION_STOP }
-        val stopPending = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val hold = VpnHoldLockStore.read(this)
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        val remaining = VpnHoldLock.remainingMs(hold, nowWall, nowElapsed)
+        val holdActive = remaining > 0L
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grayzone Protection Active")
-            .setContentText("DNS monitoring is securing your network.")
-            // Status-bar glyph (required, monochrome alpha mask). The main icon
-            // shown in the shade is the app's adaptive launcher icon; no large
-            // icon is set so only that single branded icon appears.
+            .setContentText(
+                if (holdActive)
+                    "Locked on for ${VpnHoldLock.formatRemaining(remaining)} — then auto-off"
+                else
+                    "DNS monitoring is securing your network."
+            )
             .setSmallIcon(R.drawable.ic_notification)
-            .setColor(0xFF7C4DFF.toInt())
+            .setColor(0xFF0F766E.toInt())
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
-            .addAction(0, "Stop", stopPending)
             .setContentIntent(
                 PendingIntent.getActivity(
                     this, 0,
@@ -532,7 +602,13 @@ class AdBlockVpnService : VpnService() {
                     PendingIntent.FLAG_IMMUTABLE
                 )
             )
-            .build()
+        // Hide Stop while the 24h hold is active — disable only after auto-expiry.
+        if (!holdActive) {
+            val stopIntent = Intent(this, AdBlockVpnService::class.java).apply { action = ACTION_STOP }
+            val stopPending = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE)
+            builder.addAction(0, "Stop", stopPending)
+        }
+        return builder.build()
     }
 }
 

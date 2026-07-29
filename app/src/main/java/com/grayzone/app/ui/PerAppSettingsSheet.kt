@@ -44,7 +44,7 @@ fun PerAppSettingsSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = GZSurfaceElevated,
+        containerColor = GZSurface,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
         Column(

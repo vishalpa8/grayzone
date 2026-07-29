@@ -75,11 +75,11 @@ fun QuickFocusCard() {
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(if (selectedMinutes == mins) GZAccent else GZSurfaceHigh)
+                                    .background(if (selectedMinutes == mins) GZPrimary else GZSurfaceElevated)
                                     .clickable { selectedMinutes = mins }
                                     .padding(horizontal = 10.dp, vertical = 4.dp)
                             ) {
-                                Text("${mins}m", color = if (selectedMinutes == mins) Color(0xFF0D2B24) else GZTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                Text("${mins}m", color = if (selectedMinutes == mins) Color.White else GZTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }

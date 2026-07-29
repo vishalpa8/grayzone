@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <!--
   Status-bar small icon. Android renders small icons as a monochrome alpha
   mask (only the alpha channel is used, tinted white/grey), so this is a

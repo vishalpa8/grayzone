@@ -90,7 +90,6 @@ Cover blocklist loading, end-to-end policy flows, and cleanup/logging behavior.
 Priority areas for additional test coverage:
 
 1. **State Reconciliation**
-   - GrayscaleManager.reconcileOnStart() logic
    - Process death recovery scenarios
 
 2. **Session Management**

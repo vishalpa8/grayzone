@@ -22,7 +22,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -79,27 +78,25 @@ fun AppsScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-        // Header
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(GZPrimary, GZPrimaryContainer, GZBackground)))
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)
+                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
         ) {
             Text("Monitored Apps", color = GZTextPrimary, fontSize = 28.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
             Text(
                 if (monitoredApps.isEmpty()) "Toggle apps to monitor them"
                 else "${monitoredApps.size} app${if (monitoredApps.size != 1) "s" else ""} will trigger friction",
-                color = if (monitoredApps.isEmpty()) GZTextSecondary else GZPrimaryLight,
+                color = GZTextSecondary,
                 fontSize = 14.sp
             )
             Spacer(Modifier.height(16.dp))
             
             // Master Enable/Disable Switch
             GZCard(
-                background = if (grayzoneEnabled) GZPrimary.copy(alpha = 0.1f) else GZSurface,
-                border = if (grayzoneEnabled) GZPrimary.copy(alpha = 0.3f) else GZBorder
+                background = if (grayzoneEnabled) GZPrimaryContainer else GZSurface,
+                border = if (grayzoneEnabled) GZPrimary.copy(alpha = 0.25f) else GZBorder
             ) {
                 Row(
                     modifier = Modifier.padding(18.dp),
@@ -298,36 +295,47 @@ fun PremiumAppListItem(
                 else Modifier
             )
             .background(
-                if (isLocked) GZRed.copy(alpha = 0.06f)
-                else if (isActiveOrPaused) GZGreen.copy(alpha = 0.06f)
-                else if (isMonitored && !isGloballyDisabled) GZPrimaryGlow
-                else Color.Transparent
+                when {
+                    isLocked -> GZRedContainer.copy(alpha = 0.5f)
+                    isActiveOrPaused -> GZGreenContainer.copy(alpha = 0.5f)
+                    isMonitored && !isGloballyDisabled -> GZPrimaryContainer.copy(alpha = 0.35f)
+                    else -> Color.Transparent
+                }
             )
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (app.icon != null) {
             Image(
                 bitmap = app.icon.asImageBitmap(),
                 contentDescription = app.name,
-                modifier = Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)),
+                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)),
                 alpha = rowAlpha
             )
         } else {
-            Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(GZSurfaceElevated))
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(GZSurfaceElevated))
         }
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(app.name, color = GZTextPrimary.copy(alpha = rowAlpha), fontWeight = FontWeight.Medium, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (isLocked) {
-                Text(statusText ?: "🔒 Locked", color = GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            } else if (isActiveOrPaused) {
-                Text(statusText ?: "⏳ Session Active", color = GZGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            } else {
-                Text(app.packageName, color = GZTextTertiary.copy(alpha = rowAlpha), fontSize = 11.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val subtitle = when {
+                isLocked -> statusText ?: "Locked"
+                isActiveOrPaused -> statusText ?: "Session active"
+                else -> app.packageName
             }
+            Text(
+                subtitle,
+                color = when {
+                    isLocked -> GZRed
+                    isActiveOrPaused -> GZGreen
+                    else -> GZTextTertiary.copy(alpha = rowAlpha)
+                },
+                fontSize = 12.sp,
+                fontWeight = if (isLocked || isActiveOrPaused) FontWeight.Medium else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
         if (isMonitored) {
             IconButton(

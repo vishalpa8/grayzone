@@ -9,16 +9,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pins the OverlayMode -> strategy mapping and each strategy's presentation output to the exact
- * values the previous inline `showOverlay` branching produced (byte-for-byte, including the
- * preserved source-encoding artifacts in the arrow / dash / ellipsis glyphs).
+ * Pins the OverlayMode -> strategy mapping and each strategy's presentation output.
+ *
+ * The glyphs are asserted via `\u` escapes so this test fails loudly if the overlay copy ever
+ * regresses back to mojibake, independently of how this test file itself is encoded.
  */
 class OverlayPresentationTest {
 
-    // Exact (mojibake) code points the previous inline literals compiled to.
-    private val arrow = "\u00E2\u2020\u0090"
-    private val dash = "\u00E2\u20AC\u201D"
-    private val ellipsis = "\u00E2\u20AC\u00A6"
+    private val arrow = "\u2190"
+    private val dash = "\u2014"
+    private val ellipsis = "\u2026"
 
     @Test
     fun `resolve maps each mode to its strategy`() {
@@ -29,10 +29,9 @@ class OverlayPresentationTest {
     }
 
     @Test
-    fun `resolve defaults non-overlay modes to friction`() {
-        // Matches the prior else-branch behavior for any non-lock mode.
-        assertSame(FrictionPresentation, OverlayPresentation.resolve(OverlayMode.TINT))
-        assertSame(FrictionPresentation, OverlayPresentation.resolve(OverlayMode.REMOVE_TINT))
+    fun `resolve defaults unknown modes to friction`() {
+        assertSame(FrictionPresentation, OverlayPresentation.resolve(3))
+        assertSame(FrictionPresentation, OverlayPresentation.resolve(4))
         assertSame(FrictionPresentation, OverlayPresentation.resolve(9999))
     }
 

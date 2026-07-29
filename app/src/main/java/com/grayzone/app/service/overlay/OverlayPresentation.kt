@@ -57,8 +57,8 @@ interface OverlayPresentation {
         /**
          * Resolves the strategy for an overlay [mode]. LOCK / BUDGET_LOCK / SCHEDULE_LOCK map to
          * their dedicated screens; every other value (FRICTION, and defensively anything else)
-         * maps to the friction screen, matching the prior `else`-branch behavior. TINT /
-         * REMOVE_TINT are not overlay screens and never reach this path.
+         * maps to the friction screen, matching the prior `else`-branch behavior.
+         * Non-screen modes never reach this path.
          */
         fun resolve(mode: Int): OverlayPresentation = when (mode) {
             OverlayMode.LOCK -> LockPresentation

@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.service
+package com.grayzone.app.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -18,7 +18,6 @@ import android.util.Log
 import android.util.TypedValue
 import com.grayzone.app.OverlayMode
 import com.grayzone.app.PrefsKeys
-import com.grayzone.app.GrayscaleManager
 import com.grayzone.app.GrayzoneLogger
 import com.grayzone.app.LogComponent
 import com.grayzone.app.R
@@ -71,21 +70,33 @@ class OverlayService : Service() {
         const val ACTION_SESSION_EXPIRED = "com.grayzone.app.ACTION_SESSION_EXPIRED"
         private const val DEFAULT_WAIT = 5
 
-        // Hex color int helpers
-        private const val BG          = 0xFF07070F.toInt() // 100% opaque
-        private const val SURFACE     = 0xFF0F0F1C.toInt()
-        private const val PURPLE      = 0xFF7C4DFF.toInt()
-        private const val PURPLE_DIM  = 0xFF1E1040.toInt()
-        private const val WHITE       = 0xFFFFFFFF.toInt()
-        private const val GREY        = 0xFF7878A0.toInt()
-        private const val GREY_DIM    = 0xFF3D3D5C.toInt()
-        private const val RED         = 0xFFFF5252.toInt()
-        private const val BORDER      = 0xFF26263D.toInt()
+        // Light / dark chrome mirrors ui.theme palettes (see isNightMode)
+        private const val BG_LIGHT          = 0xFFF7F6F3.toInt()
+        private const val SURFACE_LIGHT     = 0xFFFFFFFF.toInt()
+        private const val ACCENT_LIGHT      = 0xFF0F766E.toInt()
+        private const val ACCENT_DIM_LIGHT  = 0xFFCCFBF1.toInt()
+        private const val TEXT_LIGHT        = 0xFF1C1917.toInt()
+        private const val GREY_LIGHT        = 0xFF57534E.toInt()
+        private const val GREY_DIM_LIGHT    = 0xFFA8A29E.toInt()
+        private const val RED_LIGHT         = 0xFFDC2626.toInt()
+        private const val BORDER_LIGHT      = 0xFFE2E0DC.toInt()
+
+        private const val BG_DARK           = 0xFF121416.toInt()
+        private const val SURFACE_DARK      = 0xFF1C1F24.toInt()
+        private const val ACCENT_DARK       = 0xFF2DD4BF.toInt()
+        private const val ACCENT_DIM_DARK   = 0xFF134E4A.toInt()
+        private const val TEXT_DARK         = 0xFFF4F4F5.toInt()
+        private const val GREY_DARK         = 0xFFA1A1AA.toInt()
+        private const val GREY_DIM_DARK     = 0xFF71717A.toInt()
+        private const val RED_DARK          = 0xFFF87171.toInt()
+        private const val BORDER_DARK       = 0xFF3A414A.toInt()
+
+        private const val ON_ACCENT_LIGHT   = 0xFFFFFFFF.toInt()
+        private const val ON_ACCENT_DARK    = 0xFF042F2E.toInt()
     }
 
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
-    private var tintView: View? = null
     private var countdownJobUI: Job? = null
     private var secondsRemaining = DEFAULT_WAIT
     
@@ -116,6 +127,10 @@ class OverlayService : Service() {
     
     // Broadcast receiver for AccessibilityService events (replaces polling)
     private var appChangeReceiver: BroadcastReceiver? = null
+
+    // Screen on/off receiver: the session must only accrue time while the app is actually in
+    // use, so a screen-off (device not in use) pauses the countdown just like an app switch.
+    private var screenReceiver: BroadcastReceiver? = null
     
     private val policyEngine = com.grayzone.app.policy.SessionPolicyEngine()
 
@@ -127,16 +142,11 @@ class OverlayService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         scheduleManager = ScheduleManager(this)
 
-        // Sev1 fix: if the process was killed while Daltonizer was on, it stays on
-        // device-wide with no obvious recovery. Reconcile the system setting to reality
-        // before any session logic runs.
+        clearStaleSystemGrayscale()
+
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
         val now = System.currentTimeMillis()
-        val hasActiveSession = monitoredApps.any { pkg ->
-            now < prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
-        }
-        GrayscaleManager.reconcileOnStart(this, hasActiveSession)
 
         // Re-arm session-expiry alarms for any in-flight session so the lock still fires (and the
         // countdown stops at 00:00) after a process restart or reboot — the old in-memory schedule
@@ -148,9 +158,22 @@ class OverlayService : Service() {
             }
         }
 
-        // Register broadcast receiver for AccessibilityService events
-        // This replaces battery-intensive UsageStatsManager polling with event-driven detection
-        appChangeReceiver = object : BroadcastReceiver() {
+        // Register broadcast receivers. Must never throw out of onCreate: OverlayService shares a
+        // process with GrayzoneAccessibilityService, and an uncaught crash here makes Android
+        // disable (revoke) the accessibility service.
+        registerAppChangeReceiver()
+        registerScreenOffReceiver()
+
+        com.grayzone.app.GrayzoneLogger.i(
+            com.grayzone.app.LogComponent.OVERLAY, 
+            "OverlayService started - listening for AccessibilityService events"
+        )
+
+        scheduleMidnightReset()
+    }
+
+    private fun registerAppChangeReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val packageName = intent.getStringExtra(
                     GrayzoneAccessibilityService.EXTRA_PACKAGE_NAME
@@ -158,21 +181,55 @@ class OverlayService : Service() {
                 handleForegroundAppChanged(packageName)
             }
         }
-        
-        val filter = IntentFilter(GrayzoneAccessibilityService.ACTION_APP_CHANGED)
-        androidx.core.content.ContextCompat.registerReceiver(
-            this,
-            appChangeReceiver, 
-            filter, 
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        
-        com.grayzone.app.GrayzoneLogger.i(
-            com.grayzone.app.LogComponent.OVERLAY, 
-            "OverlayService started - listening for AccessibilityService events"
-        )
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(
+                this,
+                receiver,
+                IntentFilter(GrayzoneAccessibilityService.ACTION_APP_CHANGED),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            appChangeReceiver = receiver
+        } catch (e: Exception) {
+            GrayzoneLogger.e(
+                LogComponent.OVERLAY,
+                "Failed to register app-change receiver",
+                e
+            )
+        }
+    }
 
-        scheduleMidnightReset()
+    private fun registerScreenOffReceiver() {
+        // Pause the session when the screen turns off: the app may still be the top activity,
+        // but the user isn't using it, so wall-clock time must not keep draining the session.
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == Intent.ACTION_SCREEN_OFF) handleScreenOff()
+            }
+        }
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(
+                this,
+                receiver,
+                IntentFilter(Intent.ACTION_SCREEN_OFF),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            screenReceiver = receiver
+        } catch (e: Exception) {
+            GrayzoneLogger.e(
+                LogComponent.OVERLAY,
+                "Failed to register SCREEN_OFF receiver",
+                e
+            )
+        }
+    }
+
+    private fun safeUnregister(receiver: BroadcastReceiver?) {
+        if (receiver == null) return
+        try {
+            unregisterReceiver(receiver)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.OVERLAY, "unregisterReceiver failed: ${e.message}")
+        }
     }
 
     /**
@@ -205,7 +262,6 @@ class OverlayService : Service() {
         withContext(Dispatchers.Main) {
             // Any session/lock UI from yesterday is now stale.
             cancelCountdownNotification()
-            dismissTint()
             dismissOverlay()
             // If the user is sitting in a monitored app at midnight, re-enter
             // through the friction wait screen instead of granting silent access
@@ -281,16 +337,7 @@ class OverlayService : Service() {
 
             // 1. Process Background Event for old package
             if (oldPackage != null) {
-                val oldState = buildSessionState(oldPackage, prefs)
-                val bgDuration = if (sessionStartTime > 0) now - sessionStartTime else 0L
-                val bgCommands = policyEngine.evaluate(
-                    com.grayzone.app.policy.AppEvent.AppBackgrounded(oldPackage, bgDuration), 
-                    oldState, 
-                    now, 
-                    getAppName(oldPackage)
-                )
-                bgCommands.forEach { executeCommand(it, prefs) }
-                sessionStartTime = 0L
+                backgroundApp(oldPackage, prefs, now)
             }
 
             lastForegroundPackage = currentPkg
@@ -333,6 +380,53 @@ class OverlayService : Service() {
         }
     }
     
+    /**
+     * Runs the "app left the foreground" policy for [pkg]: records the foreground usage and pauses
+     * the session (saving remaining time, clearing the active/lock deadlines and the expiry alarm)
+     * so the countdown only accrues while the app is genuinely in use. Shared by app-switch
+     * transitions and screen-off events.
+     */
+    private suspend fun backgroundApp(pkg: String, prefs: android.content.SharedPreferences, now: Long) {
+        val oldState = buildSessionState(pkg, prefs)
+        val bgDuration = if (sessionStartTime > 0) now - sessionStartTime else 0L
+        val bgCommands = policyEngine.evaluate(
+            com.grayzone.app.policy.AppEvent.AppBackgrounded(pkg, bgDuration),
+            oldState,
+            now,
+            getAppName(pkg)
+        )
+        bgCommands.forEach { executeCommand(it, prefs) }
+        sessionStartTime = 0L
+    }
+
+    /**
+     * Screen turned off: the device is not in use, so pause the current monitored session exactly
+     * like an app switch. [lastForegroundPackage] is cleared so the app is re-evaluated (and the
+     * session resumed) when it regains focus after the screen comes back on.
+     */
+    private fun handleScreenOff() {
+        val pkg = lastForegroundPackage ?: return
+        serviceScope.launch {
+            try {
+                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val now = System.currentTimeMillis()
+                backgroundApp(pkg, prefs, now)
+                lastForegroundPackage = null
+                com.grayzone.app.GrayzoneLogger.d(
+                    com.grayzone.app.LogComponent.OVERLAY,
+                    "Screen off - paused session",
+                    mapOf("pkg" to pkg)
+                )
+            } catch (e: Exception) {
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.OVERLAY,
+                    "Failed to pause session on screen off",
+                    e
+                )
+            }
+        }
+    }
+
     private fun buildSessionState(pkg: String, prefs: android.content.SharedPreferences): com.grayzone.app.policy.SessionState {
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
         val isMonitored = monitoredApps.contains(pkg)
@@ -384,7 +478,7 @@ class OverlayService : Service() {
         val now = System.currentTimeMillis()
         when (cmd) {
             is com.grayzone.app.policy.SessionCommand.DismissOverlay -> {
-                serviceScope.launch(Dispatchers.Main) { dismissTint() }
+                // Intentional no-op: policy still emits this; leave/lock paths dismiss overlays.
             }
             is com.grayzone.app.policy.SessionCommand.ShowWaitScreen -> {
                 serviceScope.launch(Dispatchers.Main) {
@@ -423,7 +517,6 @@ class OverlayService : Service() {
                 
                 if (cmd.newActiveUntil != null) {
                     val activeUntil = cmd.newActiveUntil
-                    serviceScope.launch(Dispatchers.Main) { showTint() }
                     startCountdownNotification(cmd.packageName, activeUntil)
                     SessionExpiryScheduler.arm(this@OverlayService, cmd.packageName, activeUntil)
                 }
@@ -605,7 +698,7 @@ class OverlayService : Service() {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setColor(PURPLE)
+                .setColor(overlayChrome().accent)
                 .setContentIntent(
                     PendingIntent.getActivity(
                         this, 0,
@@ -625,102 +718,29 @@ class OverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(false)
-        appChangeReceiver?.let { unregisterReceiver(it) }
+        safeUnregister(appChangeReceiver)
+        appChangeReceiver = null
+        safeUnregister(screenReceiver)
+        screenReceiver = null
         serviceScope.cancel()
         dismissOverlay()
-        dismissTint()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // â”€â”€â”€ Overlay UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Overlay UI ──────────────────────────────────────────────────────────
 
-    private var daltonizerActive = false
-
-    private fun showTint() {
-        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean(PrefsKeys.GRAYSCALE_ENABLED, true)) {
-            dismissTint()
-            return
-        }
-
-        dismissOverlayTintFallback()
-
-        // Try true hardware Daltonizer first (requires WRITE_SECURE_SETTINGS via ADB).
-        if (GrayscaleManager.enable(this)) {
-            daltonizerActive = true
-            return
-        }
-
-        // Fallback: draw a full-screen hardware-accelerated View whose Paint uses
-        // the ITU-R BT.601 luminosity ColorMatrix. This actually desaturates every
-        // pixel underneath rather than just washing the screen grey.
-        //
-        // The matrix maps each pixel's (R,G,B) â†’ luminance Y using:
-        //   Y = 0.299R + 0.587G + 0.114B
-        // and outputs (Y,Y,Y,A) â€” visually identical to true monochrome.
-        if (tintView != null) return
-
-        // Check if we still have overlay permission before attempting to add the tint view
-        if (!android.provider.Settings.canDrawOverlays(this)) {
-            GrayzoneLogger.w(
-                LogComponent.OVERLAY,
-                "Cannot show grayscale tint overlay: SYSTEM_ALERT_WINDOW permission revoked"
-            )
-            return
-        }
-
-        val matrix = android.graphics.ColorMatrix().apply { setSaturation(0f) }
-        val paint  = android.graphics.Paint().apply {
-            colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
-        }
-
-        val view = object : View(this) {
-            override fun onDraw(canvas: android.graphics.Canvas) {
-                // Cover the entire canvas with a transparent rect drawn through the
-                // desaturating paint â€” this forces every pixel through the ColorMatrix.
-                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-            }
-        }.apply {
-            setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        }
-
-        val wlp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        )
-        tintView = view
+    /** Best-effort: clear stuck system monochrome from older builds. No-op without grant. */
+    private fun clearStaleSystemGrayscale() {
         try {
-            windowManager?.addView(view, wlp)
-        } catch (e: Exception) {
-            GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to add grayscale tint overlay: ${e.message}")
+            android.provider.Settings.Secure.putString(
+                contentResolver,
+                "accessibility_display_daltonizer_enabled",
+                "0"
+            )
+        } catch (_: SecurityException) {
+            // No grant — nothing to clear.
         }
-    }
-
-    private fun dismissOverlayTintFallback() {
-        tintView?.let {
-            try {
-                windowManager?.removeView(it)
-            } catch (e: Exception) {
-                GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to remove grayscale tint overlay: ${e.message}")
-            }
-        }
-        tintView = null
-    }
-
-    private fun dismissTint() {
-        if (daltonizerActive) {
-            GrayscaleManager.disable(this)
-            daltonizerActive = false
-        }
-        dismissOverlayTintFallback()
     }
 
     @SuppressLint("SetTextI18n")
@@ -803,18 +823,19 @@ class OverlayService : Service() {
         val prompt = promptsList.random()
 
         val ctx = this
-        val root = FrameLayout(ctx).apply { setBackgroundColor(BG) }
+        val chrome = overlayChrome()
+        val root = FrameLayout(ctx).apply { setBackgroundColor(chrome.bg) }
 
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(SURFACE)
+            setBackgroundColor(chrome.surface)
             setPadding(dp(24), dp(32), dp(24), dp(32))
         }
 
         val appNameView = TextView(ctx).apply {
             text = appName.uppercase()
             textSize = 11f
-            setTextColor(GREY_DIM)
+            setTextColor(chrome.greyDim)
             gravity = Gravity.CENTER
             letterSpacing = 0.18f
             typeface = Typeface.DEFAULT
@@ -823,12 +844,12 @@ class OverlayService : Service() {
         val titleView = TextView(ctx).apply {
             text = presentation.title
             textSize = 34f
-            setTextColor(WHITE)
+            setTextColor(chrome.text)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
         }
 
-        val divider = View(ctx).apply { setBackgroundColor(BORDER) }
+        val divider = View(ctx).apply { setBackgroundColor(chrome.border) }
         val divParams = LinearLayout.LayoutParams(dp(48), dp(1)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = dp(16); bottomMargin = dp(16)
@@ -837,7 +858,7 @@ class OverlayService : Service() {
         val promptView = TextView(ctx).apply {
             text = presentation.bodyText(prompt)
             textSize = 17f
-            setTextColor(0xFFDDDDEE.toInt())
+            setTextColor(chrome.grey)
             gravity = Gravity.CENTER
             setLineSpacing(dp(4).toFloat(), 1f)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
@@ -846,7 +867,7 @@ class OverlayService : Service() {
         val countdownView = TextView(ctx).apply {
             text = presentation.countdownText(secondsRemaining)
             textSize = presentation.countdownTextSizeSp
-            setTextColor(PURPLE)
+            setTextColor(chrome.accent)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
         }
@@ -854,8 +875,8 @@ class OverlayService : Service() {
         val progress = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = totalSeconds
             this.progress = totalSeconds
-            progressTintList = android.content.res.ColorStateList.valueOf(PURPLE)
-            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(BORDER)
+            progressTintList = android.content.res.ColorStateList.valueOf(chrome.accent)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(chrome.border)
         }
         val progressParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(8) }
         
@@ -866,14 +887,14 @@ class OverlayService : Service() {
         val subView = TextView(ctx).apply {
             text = presentation.subText(secondsRemaining)
             textSize = 12f
-            setTextColor(GREY)
+            setTextColor(chrome.grey)
             gravity = Gravity.CENTER
         }
         val subParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4); bottomMargin = dp(24) }
 
         val skipBtn = Button(ctx).apply {
             text = presentation.skipButtonLabel
-            setTextColor(GREY)
+            setTextColor(chrome.grey)
             background = makeOutlineDrawable()
             textSize = 14f
             setPadding(dp(20), dp(12), dp(20), dp(12))
@@ -1020,7 +1041,6 @@ class OverlayService : Service() {
 
         startCountdownNotification(packageName, activeUntil)
         SessionExpiryScheduler.arm(this, packageName, activeUntil)
-        showTint()
         sessionStartTime = now
     }
 
@@ -1059,19 +1079,47 @@ class OverlayService : Service() {
     private fun dp(value: Int): Int = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
     private fun wrapCentered() = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
 
+    private data class OverlayChrome(
+        val bg: Int,
+        val surface: Int,
+        val accent: Int,
+        val accentDim: Int,
+        val text: Int,
+        val grey: Int,
+        val greyDim: Int,
+        val red: Int,
+        val border: Int,
+        val onAccent: Int,
+    )
+
+    private fun overlayChrome(): OverlayChrome {
+        val dark = com.grayzone.app.ui.theme.isNightMode(this)
+        return if (dark) OverlayChrome(
+            bg = BG_DARK, surface = SURFACE_DARK, accent = ACCENT_DARK, accentDim = ACCENT_DIM_DARK,
+            text = TEXT_DARK, grey = GREY_DARK, greyDim = GREY_DIM_DARK, red = RED_DARK,
+            border = BORDER_DARK, onAccent = ON_ACCENT_DARK
+        ) else OverlayChrome(
+            bg = BG_LIGHT, surface = SURFACE_LIGHT, accent = ACCENT_LIGHT, accentDim = ACCENT_DIM_LIGHT,
+            text = TEXT_LIGHT, grey = GREY_LIGHT, greyDim = GREY_DIM_LIGHT, red = RED_LIGHT,
+            border = BORDER_LIGHT, onAccent = ON_ACCENT_LIGHT
+        )
+    }
+
     private fun makeCardBackground(): android.graphics.drawable.GradientDrawable {
+        val c = overlayChrome()
         return android.graphics.drawable.GradientDrawable().apply {
-            setColor(SURFACE)
+            setColor(c.surface)
             cornerRadius = dp(20).toFloat()
-            setStroke(dp(1), BORDER)
+            setStroke(dp(1), c.border)
         }
     }
 
     private fun makeOutlineDrawable(): android.graphics.drawable.GradientDrawable {
+        val c = overlayChrome()
         return android.graphics.drawable.GradientDrawable().apply {
             setColor(android.graphics.Color.TRANSPARENT)
             cornerRadius = dp(10).toFloat()
-            setStroke(dp(1), GREY_DIM)
+            setStroke(dp(1), c.greyDim)
         }
     }
 
@@ -1090,7 +1138,7 @@ class OverlayService : Service() {
             // Status-bar glyph only; the shade's main icon is the adaptive
             // launcher icon. No large icon, so a single branded icon shows.
             .setSmallIcon(R.drawable.ic_notification)
-            .setColor(PURPLE)
+            .setColor(overlayChrome().accent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))

@@ -118,7 +118,7 @@ fun DailyBreakCard() {
                             remainingMillis = scheduleManager.getBreakRemainingMillis()
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZGreen, contentColor = Color(0xFF0D2B24)),
+                    colors = ButtonDefaults.buttonColors(containerColor = GZGreen, contentColor = Color.White),
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                 ) {

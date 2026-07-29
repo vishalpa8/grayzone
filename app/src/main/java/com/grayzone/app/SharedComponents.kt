@@ -26,17 +26,33 @@ import com.grayzone.app.ui.theme.*
 
 @Composable
 fun ActivePill(isActive: Boolean) {
-    Row(modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(if (isActive) GZGreenContainer else GZRedContainer).padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(if (isActive) GZGreen else GZRed))
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isActive) GZGreenContainer else GZRedContainer)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(if (isActive) GZGreen else GZRed)
+        )
         Spacer(Modifier.width(6.dp))
-        Text(if (isActive) "Active" else "Inactive", color = if (isActive) GZGreen else GZRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(
+            if (isActive) "Active" else "Inactive",
+            color = if (isActive) GZGreen else GZRed,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
 @Composable
 fun GZCard(
-    modifier: Modifier = Modifier, 
-    background: Color = GZSurface, 
+    modifier: Modifier = Modifier,
+    background: Color = GZSurface,
     border: Color = GZBorder,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit
@@ -44,22 +60,35 @@ fun GZCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(background)
-            .border(1.dp, border, RoundedCornerShape(24.dp))
+            .border(1.dp, border, RoundedCornerShape(16.dp))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) { content() }
 }
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier = modifier, color = GZTextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+    Text(
+        text,
+        modifier = modifier,
+        color = GZTextTertiary,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.sp
+    )
 }
 
 @Composable
 fun HowItWorksStep(number: String, text: String, color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(color.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
             Text(number, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.width(12.dp))
@@ -71,35 +100,69 @@ fun HowItWorksStep(number: String, text: String, color: Color) {
 fun GZLoadingSpinner(modifier: Modifier = Modifier, size: Dp = 40.dp, color: Color = GZPrimary) {
     val infiniteTransition = rememberInfiniteTransition(label = "spinner")
     val angle by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(animation = tween(1000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "angle"
     )
     Canvas(modifier = modifier.size(size)) {
         val strokeWidth = 4.dp.toPx()
-        drawArc(color = color.copy(alpha = 0.2f), startAngle = 0f, sweepAngle = 360f, useCenter = false, style = Stroke(width = strokeWidth))
-        drawArc(color = color, startAngle = angle, sweepAngle = 90f, useCenter = false, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+        drawArc(
+            color = color.copy(alpha = 0.2f),
+            startAngle = 0f,
+            sweepAngle = 360f,
+            useCenter = false,
+            style = Stroke(width = strokeWidth)
+        )
+        drawArc(
+            color = color,
+            startAngle = angle,
+            sweepAngle = 90f,
+            useCenter = false,
+            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+        )
     }
 }
 
-
 fun shareApk(context: Context) {
     try {
-        val app = context.applicationInfo
-        val filePath = app.sourceDir
-        val file = java.io.File(filePath)
+        val source = java.io.File(context.applicationInfo.sourceDir)
+        if (!source.exists() || !source.canRead()) {
+            android.widget.Toast.makeText(
+                context,
+                "Could not find app package to share",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        // FileProvider cannot expose /data/app base.apk directly — copy into cache path
+        // declared in res/xml/file_paths.xml (cache-path shared/).
+        val shareDir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
+        val outFile = java.io.File(shareDir, "Grayzone.apk")
+        source.inputStream().use { input ->
+            outFile.outputStream().use { output -> input.copyTo(output) }
+        }
         val uri = androidx.core.content.FileProvider.getUriForFile(
             context,
             "${context.packageName}.provider",
-            file
+            outFile
         )
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/vnd.android.package-archive"
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = android.content.ClipData.newUri(context.contentResolver, "Grayzone", uri)
         }
         context.startActivity(Intent.createChooser(intent, "Share Grayzone"))
     } catch (e: Exception) {
         android.util.Log.e("ShareApk", "Could not share APK", e)
+        android.widget.Toast.makeText(
+            context,
+            "Share failed: ${e.message ?: "unknown error"}",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
     }
 }

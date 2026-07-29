@@ -9,6 +9,9 @@ package com.grayzone.app.service.vpn
  * domain under that TLD.
  *
  * Example: "sub.bad-ads.com" → checks "sub.bad-ads.com", then "bad-ads.com" (not "com").
+ *
+ * Deliberate TLD blocks (".zip", ".mov", …) are handled separately by [AbusedTldList],
+ * which is an exact set and therefore cannot produce a false positive.
  */
 object DomainZoneMatcher {
     fun anyMatch(domain: String, predicate: (String) -> Boolean): Boolean {

@@ -19,7 +19,6 @@ enum class LogComponent {
     DATABASE,
     SCHEDULE,
     SESSION,
-    GRAYSCALE,
     BOOT,
     ACCESSIBILITY,
     CLEANUP

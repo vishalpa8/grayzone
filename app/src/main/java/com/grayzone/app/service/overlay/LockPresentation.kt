@@ -5,8 +5,7 @@ import com.grayzone.app.formatDuration
 /** Hard-lock screen shown when a session has expired (lockout countdown). */
 object LockPresentation : OverlayPresentation {
     override val title = "Locked."
-    // Arrow reproduces the exact (mojibake) bytes the previous inline code compiled to.
-    override val skipButtonLabel = "\u00E2\u2020\u0090 Leave App"
+    override val skipButtonLabel = "← Leave App"
     override val showsProgress = false
     override val countdownTextSizeSp = 42f
 

@@ -12,8 +12,6 @@ class OverlayModeTest {
         val modes = listOf(
             OverlayMode.FRICTION,
             OverlayMode.LOCK,
-            OverlayMode.TINT,
-            OverlayMode.REMOVE_TINT,
             OverlayMode.BUDGET_LOCK,
             OverlayMode.SCHEDULE_LOCK
         )

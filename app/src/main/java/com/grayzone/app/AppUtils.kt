@@ -106,11 +106,34 @@ fun drawableToBitmap(drawable: Drawable, maxSize: Int = APP_ICON_SIZE_PX): Bitma
 }
 
 fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    val enabledServices = android.provider.Settings.Secure.getString(
-        context.contentResolver,
-        android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-    return enabledServices.contains(context.packageName + "/" + com.grayzone.app.service.GrayzoneAccessibilityService::class.java.name)
+    return try {
+        val enabledServices = android.provider.Settings.Secure.getString(
+            context.contentResolver,
+            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        )
+        AccessibilityServiceIds.isServiceEnabled(
+            enabledServicesSetting = enabledServices,
+            packageName = context.packageName,
+            serviceClassName = com.grayzone.app.service.GrayzoneAccessibilityService::class.java.name
+        )
+    } catch (e: Exception) {
+        GrayzoneLogger.w(
+            LogComponent.ACCESSIBILITY,
+            "Failed to read accessibility enabled state: ${e.message}"
+        )
+        false
+    }
+}
+
+/** Settings page that grants [requirement], so a "fix this" affordance never lands on the wrong screen. */
+fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent = when (requirement) {
+    SetupRequirement.ACCESSIBILITY ->
+        Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+    SetupRequirement.OVERLAY ->
+        Intent(
+            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}")
+        )
 }
 
 fun isBatteryOptimized(context: Context): Boolean =

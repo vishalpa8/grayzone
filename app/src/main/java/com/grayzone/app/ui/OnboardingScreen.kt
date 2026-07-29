@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import com.grayzone.app.PrefsKeys
+import com.grayzone.app.SetupRequirements
 import com.grayzone.app.isAccessibilityServiceEnabled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,7 +50,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                     context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
                         .edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false).apply()
                 }
-                if (hasUsageAccess && hasOverlay && hasBatteryOpt) onContinue()
+                if (hasUsageAccess && hasOverlay) onContinue()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -66,7 +68,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (hasUsageAccess) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .background(if (hasUsageAccess) GZGreenContainer else GZSurface)
                 .border(
                     1.dp, 
                     if (hasUsageAccess) GZGreen else GZBorder, 
@@ -101,7 +103,10 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 Button(
                     onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = GZPrimary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Grant Accessibility")
                 }
@@ -115,7 +120,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (hasOverlay) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .background(if (hasOverlay) GZGreenContainer else GZSurface)
                 .border(
                     1.dp,
                     if (hasOverlay) GZGreen else GZBorder,
@@ -150,7 +155,10 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 Button(
                     onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = GZPrimary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Grant Overlay Permission")
                 }
@@ -164,7 +172,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (hasBatteryOpt) GZGreen.copy(alpha = 0.1f) else GZSurface)
+                .background(if (hasBatteryOpt) GZGreenContainer else GZSurface)
                 .border(
                     1.dp,
                     if (hasBatteryOpt) GZGreen else GZBorder,
@@ -204,22 +212,38 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                         context.startActivity(intent)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = GZPrimary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Text("Exclude from Battery Opt")
                 }
             }
         }
         
-        if (hasUsageAccess && hasOverlay && hasBatteryOpt) {
+        // Battery exemption is recommended, not required — gating "Continue" on it would trap
+        // users who decline it, so only the two functional permissions block entry.
+        if (hasUsageAccess && hasOverlay) {
             Spacer(Modifier.height(32.dp))
             Button(
                 onClick = onContinue, 
                 modifier = Modifier.fillMaxWidth().height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GZPrimaryLight)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = GZPrimary,
+                    contentColor = Color.White
+                )
             ) {
                 Text("Continue to App", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
+        } else {
+            Spacer(Modifier.height(24.dp))
+            Text(
+                "Still needed: " + SetupRequirements.missing(hasUsageAccess, hasOverlay)
+                    .joinToString(", ") { SetupRequirements.label(it) },
+                color = GZTextSecondary,
+                fontSize = 13.sp
+            )
         }
     }
 }

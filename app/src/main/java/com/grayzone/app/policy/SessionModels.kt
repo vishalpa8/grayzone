@@ -36,6 +36,7 @@ data class SessionState(
  * Represents an action that the service must execute based on the engine's decision.
  */
 sealed class SessionCommand {
+    /** Policy signal that overlays should be clear; OverlayService treats as intentional no-op. */
     object DismissOverlay : SessionCommand()
     data class ShowWaitScreen(
         val packageName: String, 

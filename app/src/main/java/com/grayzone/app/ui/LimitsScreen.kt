@@ -11,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,26 +48,28 @@ fun LimitsScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-        // Header
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(GZPrimary, GZPrimaryContainer, GZBackground)))
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)
+                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
         ) {
             Text("Limits Dashboard", color = GZTextPrimary, fontSize = 28.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
             Text(
                 if (monitoredList.isEmpty()) "No apps are being monitored."
                 else "Active limits and timers for your monitored apps.",
-                color = if (monitoredList.isEmpty()) GZTextSecondary else GZPrimaryLight,
+                color = GZTextSecondary,
                 fontSize = 14.sp
             )
         }
 
         if (monitoredList.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("You are not monitoring any apps.", color = GZTextTertiary, fontSize = 16.sp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("No monitored apps", color = GZTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Enable apps on the Apps tab to see limits here.", color = GZTextTertiary, fontSize = 14.sp)
+                }
             }
         } else {
             val lockStateMap = remember(monitoredApps, currentTime) {
@@ -130,11 +131,11 @@ fun LimitsScreen() {
                                 // Session Pill
                                 Row(
                                     modifier = Modifier
-                                        .background(GZPrimary.copy(alpha = 0.15f), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                        .background(GZPrimaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZPrimaryLight, modifier = Modifier.size(14.dp))
+                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZPrimary, modifier = Modifier.size(14.dp))
                                     Spacer(Modifier.width(6.dp))
                                     Text("Session: ${sessionMins}m", color = GZTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                 }
@@ -144,7 +145,7 @@ fun LimitsScreen() {
                                 // Lockout Pill
                                 Row(
                                     modifier = Modifier
-                                        .background(GZRed.copy(alpha = 0.15f), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                        .background(GZRedContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {

@@ -6,7 +6,8 @@ object PrefsKeys {
 
     // Feature flags
     const val GRAYZONE_ENABLED   = "grayzone_enabled"
-    const val GRAYSCALE_ENABLED  = "grayscale_enabled"
+    /** Appearance: [com.grayzone.app.ui.theme.ThemeMode] — system | light | dark. */
+    const val THEME_MODE         = "theme_mode"
 
     /**
      * True once the user has been prompted for the *current* Accessibility-permission loss; reset to
@@ -14,6 +15,13 @@ object PrefsKeys {
      * does not repeatedly nag when the OS revokes the service.
      */
     const val ACCESSIBILITY_PROMPTED_FOR_LOSS = "accessibility_prompted_for_loss"
+
+    /**
+     * True once first-run setup has been left behind. While false, onboarding stays on screen until
+     * every required permission is granted, so a partially granted setup cannot drop the user into a
+     * main UI that silently does nothing.
+     */
+    const val ONBOARDING_COMPLETED = "onboarding_completed"
 
     // Timing settings (global defaults)
     const val WAIT_SECONDS       = "wait_seconds"
@@ -27,6 +35,8 @@ object PrefsKeys {
 
     // App list
     const val MONITORED_APPS     = "monitored_apps"
+    /** True after one-shot Instagram/YouTube default seed has run (even if none were installed). */
+    const val DEFAULT_APPS_SEEDED = "default_apps_seeded"
 
     // ── Per-App Custom Limits (append packageName) ─────────────────────────
     const val PER_APP_WAIT_SECONDS    = "per_app_wait_"
@@ -67,14 +77,16 @@ object PrefsKeys {
     // ── VPN ────────────────────────────────────────────────────────────────
     /** True when the user has started AdBlockVpnService and not explicitly stopped it. */
     const val VPN_ENABLED             = "vpn_enabled"
+    /** Wall-clock epoch when the current VPN hold started (0 = none). */
+    const val VPN_HOLD_STARTED_WALL   = "vpn_hold_started_wall"
+    /** elapsedRealtime when the current VPN hold started (0 = none). */
+    const val VPN_HOLD_STARTED_ELAPSED = "vpn_hold_started_elapsed"
 }
 
 /** Overlay display modes sent via broadcast intent extra "overlay_mode". */
 object OverlayMode {
     const val FRICTION     = 1  // Friction/pause screen before session starts
     const val LOCK         = 2  // Hard-lock screen (session expired)
-    const val TINT         = 3  // Grayscale tint only (active session)
-    const val REMOVE_TINT  = 4  // Remove tint (leaving monitored app)
     const val BUDGET_LOCK  = 5  // Daily budget exhausted lock
     const val SCHEDULE_LOCK = 6 // Schedule-based lock
 }

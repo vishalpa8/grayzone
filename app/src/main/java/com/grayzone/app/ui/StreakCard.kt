@@ -2,7 +2,6 @@ package com.grayzone.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
@@ -80,12 +79,12 @@ fun StreakCard() {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(GZAmber.copy(alpha = 0.15f))
+                                .background(GZAchievementBg)
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Text(
                                 achievement.title,
-                                color = GZAmber,
+                                color = GZStreakGold,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )

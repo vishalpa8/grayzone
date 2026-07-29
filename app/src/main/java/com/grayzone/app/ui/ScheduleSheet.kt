@@ -70,7 +70,7 @@ fun ScheduleSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = GZSurfaceElevated,
+        containerColor = GZSurface,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
         Column(
@@ -92,7 +92,7 @@ fun ScheduleSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(GZPrimary.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                    .background(GZPrimaryContainer, RoundedCornerShape(12.dp))
                     .padding(16.dp)
             ) {
                 Column {

@@ -1,0 +1,20 @@
+root = true
+
+# UI copy and comment dividers rely on non-ASCII glyphs (em dashes, arrows, box-drawing).
+# Pinning the charset keeps editors from re-saving these files as windows-1252 and
+# reintroducing mojibake.
+[*]
+charset = utf-8
+end_of_line = crlf
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+
+[*.xml]
+indent_style = space
+indent_size = 4
+
+[*.{properties,pro}]
+indent_style = space
+indent_size = 4

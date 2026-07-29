@@ -5,6 +5,7 @@
 .jdk21/
 .DS_Store
 build/
+out/
 /captures
 .externalNativeBuild
 .cxx
@@ -40,3 +41,10 @@ google-services.json
 # Log Files
 *.log
 crash.log
+
+# Env / secrets
+.env
+.env.*
+Thumbs.db
+*.tmp
+*.swp

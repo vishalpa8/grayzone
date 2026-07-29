@@ -11,14 +11,8 @@
 
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" xmlns:tools="http://schemas.android.com/tools" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- WiFi Screen permissions -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".GrayzoneApplication"
@@ -74,6 +68,15 @@
         -->
         <receiver
             android:name=".service.SessionExpiryReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!--
+            VpnHoldExpiryReceiver: fired by AlarmManager when the 24h VPN hold ends so the
+            AdBlock VPN auto-disables across Doze/process death. Internal only.
+        -->
+        <receiver
+            android:name=".service.vpn.VpnHoldExpiryReceiver"
             android:enabled="true"
             android:exported="false" />
 

@@ -15,6 +15,10 @@ object BlocklistManager {
     private var adFilter:    GrayzoneBloomFilter? = null
     private var adultFilter: GrayzoneBloomFilter? = null
 
+    // Bare TLD blocks (".zip", ".mov", ".surf", ...) cannot go into a Bloom filter —
+    // see AbusedTldList — so they are kept as an exact-match set alongside it.
+    private var abusedTlds: AbusedTldList = AbusedTldList.EMPTY
+
     /**
      * Hardcoded set of known DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT)
      * resolver endpoints. Blocking these forces apps like Chrome / Samsung Browser
@@ -142,10 +146,12 @@ object BlocklistManager {
             try {
                 adFilter    = loadFilter(context, R.raw.adblock_bloom, "ads")
                 adultFilter = loadFilter(context, R.raw.adult_bloom,   "adult")
+                abusedTlds  = loadAbusedTlds(context)
                 isLoaded = true
             } catch (e: Exception) {
                 adFilter = null
                 adultFilter = null
+                abusedTlds = AbusedTldList.EMPTY
                 isLoaded = false
                 loadStarted.set(false)
                 Log.e(TAG, "Error loading bloom filters", e)
@@ -208,6 +214,8 @@ object BlocklistManager {
         if (matchesHighConfidence(normalized, highConfidenceAdDomains) ||
             matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
         if (!isLoaded) return false
+        // Cheaper than ten SHA-256 probes, so it runs ahead of the Bloom filters.
+        if (abusedTlds.blocks(normalized)) return true
         val ad    = adFilter
         val adult = adultFilter
         return (ad    != null && matchesFilter(normalized, ad)) ||
@@ -222,6 +230,14 @@ object BlocklistManager {
         }
         Log.d(TAG, "Loaded $label bloom filter")
         return filter
+    }
+
+    private fun loadAbusedTlds(context: Context): AbusedTldList {
+        val list = context.resources.openRawResource(R.raw.abused_tlds).use { stream ->
+            AbusedTldList.readFrom(stream)
+        }
+        Log.d(TAG, "Loaded ${list.size} abused TLDs")
+        return list
     }
 
     /**

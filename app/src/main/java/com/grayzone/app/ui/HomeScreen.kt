@@ -6,23 +6,17 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -41,11 +35,12 @@ data class HomeData(
 )
 
 @Composable
-fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
+fun HomeScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var isActive by remember { mutableStateOf(isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)) }
+    var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
@@ -54,15 +49,10 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                // BUG 7 FIX: Re-read usage access status dynamically in case it was disabled in settings
-                isActive = isAccessibilityServiceEnabled(context) && Settings.canDrawOverlays(context)
+                accessibilityOn = isAccessibilityServiceEnabled(context)
+                overlayOn = Settings.canDrawOverlays(context)
                 batteryIssue = isBatteryOptimized(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
-
-                // Streak evaluation uses the usage DB as the source of truth and
-                // catches up every missed day. This also runs on process start and
-                // at midnight (see StreakEvaluator callers), so it no longer depends
-                // on Home being opened.
                 streakScope.launch {
                     com.grayzone.app.data.StreakEvaluator.run(context)
                 }
@@ -73,207 +63,154 @@ fun HomeScreen(onOpenDrawer: () -> Unit = {}) {
     }
 
     val data = HomeData(monitoredCount = monitoredCount)
+    val missingSetup = SetupRequirements.missing(accessibilityOn, overlayOn)
+    val needsSetup = missingSetup.isNotEmpty()
+    val isActive = !needsSetup
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().background(GZBackground),
-        contentPadding = PaddingValues(bottom = 16.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GZBackground),
+        contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         item {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color(0xFF1B1436), Color(0xFF120C24), GZBackground)
-                        )
-                    )
+                    .padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 8.dp)
             ) {
-                // Soft brand glow anchored near the logo for depth on the dark base
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(GZPrimary.copy(alpha = 0.32f), Color.Transparent),
-                                center = Offset(140f, 300f),
-                                radius = 620f
-                            )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(GZPrimaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_launcher_monochrome),
+                            contentDescription = null,
+                            tint = GZPrimary,
+                            modifier = Modifier.size(26.dp)
                         )
-                )
-                Column(
-                    modifier = Modifier.padding(
-                        start = 20.dp, end = 12.dp, top = 52.dp, bottom = 26.dp
-                    )
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(
-                                    Brush.linearGradient(listOf(GZPrimaryLight, GZPrimaryDark))
-                                )
-                                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(15.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                painterResource(R.drawable.ic_launcher_monochrome),
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Grayzone",
-                                color = GZTextPrimary,
-                                fontSize = 26.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = (-0.5).sp
-                            )
-                            Text(
-                                "Friction, not hard blocks.",
-                                color = GZTextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-                        ActivePill(isActive = isActive)
-                        IconButton(onClick = onOpenDrawer, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                Icons.Filled.Menu,
-                                contentDescription = "Open menu",
-                                tint = GZTextSecondary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
                     }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Grayzone",
+                            color = GZTextPrimary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.3).sp
+                        )
+                        Text(
+                            "Friction, not hard blocks.",
+                            color = GZTextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                    ActivePill(isActive = isActive)
                 }
             }
         }
 
+        // Primary status affordance — dominates when setup is incomplete
         item {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                if (batteryIssue) {
-                    val ctx = LocalContext.current
-                    GZCard(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                        background = GZAmberContainer,
-                        border = GZAmber.copy(alpha = 0.3f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Filled.BatteryAlert, contentDescription = null,
-                                tint = GZAmber, modifier = Modifier.size(22.dp))
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Battery Optimization On", color = GZAmber,
-                                    fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text("Grayzone may stop working in background.",
-                                    color = GZTextSecondary, fontSize = 12.sp)
-                            }
-                            Spacer(Modifier.width(8.dp))
+            val statusBg = when {
+                needsSetup -> GZAmberContainer
+                batteryIssue -> GZAmberContainer
+                else -> GZGreenContainer
+            }
+            val statusBorder = when {
+                needsSetup || batteryIssue -> GZAmber.copy(alpha = 0.35f)
+                else -> GZGreen.copy(alpha = 0.25f)
+            }
+            val statusTint = when {
+                needsSetup || batteryIssue -> GZAmber
+                else -> GZGreen
+            }
+            val headline = when {
+                needsSetup -> SetupRequirements.headline(missingSetup)
+                batteryIssue -> "Battery may interrupt protection"
+                else -> "Protection ready"
+            }
+            val body = when {
+                needsSetup -> SetupRequirements.body(missingSetup)
+                batteryIssue -> "Battery optimization can stop Grayzone in the background."
+                else -> "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored"
+            }
+
+            GZCard(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                background = statusBg,
+                border = statusBorder
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (batteryIssue && !needsSetup) Icons.Filled.BatteryAlert else Icons.Filled.Shield,
+                            contentDescription = null,
+                            tint = statusTint,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                headline,
+                                color = GZTextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(body, color = GZTextSecondary, fontSize = 13.sp)
+                        }
+                        if (!needsSetup && batteryIssue) {
                             TextButton(
                                 onClick = {
                                     @SuppressLint("BatteryLife")
-                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                            Uri.parse("package:${ctx.packageName}"))
-                                    ctx.startActivity(intent)
+                                    val intent = Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    context.startActivity(intent)
                                 },
                                 colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
                             ) { Text("Fix", fontWeight = FontWeight.Bold) }
                         }
                     }
-                }
-            }
-        }
 
-        item {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                if (!isActive) {
-                    val ctx = LocalContext.current
-                    GZCard(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                        background = GZAmberContainer,
-                        border = GZAmber.copy(alpha = 0.3f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    // One button per missing permission so it is always clear which is
+                    // still pending and which settings page each one opens.
+                    missingSetup.forEach { requirement ->
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { context.startActivity(settingsIntentFor(context, requirement)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = GZPrimary,
+                                contentColor = androidx.compose.ui.graphics.Color.White
+                            )
                         ) {
-                            Icon(Icons.Filled.Shield, contentDescription = null,
-                                tint = GZAmber, modifier = Modifier.size(22.dp))
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Protection Inactive", color = GZAmber,
-                                    fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text("Accessibility permission is off. Tap Fix to re-enable it.",
-                                    color = GZTextSecondary, fontSize = 12.sp)
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            TextButton(
-                                onClick = {
-                                    ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                },
-                                colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
-                            ) { Text("Fix", fontWeight = FontWeight.Bold) }
+                            Text("Turn on ${SetupRequirements.label(requirement)}", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
         }
 
-        item {
-            GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
-                Row(modifier = Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Shield,
-                        contentDescription = null,
-                        tint = if (isActive) GZGreen else GZTextTertiary,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (isActive) "Protection Active" else "Protection Inactive",
-                            color = if (isActive) GZTextPrimary else GZTextSecondary,
-                            fontWeight = FontWeight.SemiBold, fontSize = 15.sp
-                        )
-                        Text(
-                            "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} being monitored",
-                            color = GZTextSecondary, fontSize = 12.sp
-                        )
-                    }
-                }
-            }
-        }
+        item { QuickFocusCard() }
+        item { DailyBreakCard() }
+        item { StreakCard() }
 
         item {
-            QuickFocusCard()
-        }
-
-        item {
-            DailyBreakCard()
-        }
-
-        item {
-            StreakCard()
-        }
-
-        item {
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
                 SectionLabel("HOW IT WORKS")
-                Spacer(Modifier.height(10.dp))
-                GZCard {
-                    Column(modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        HowItWorksStep("1", "Open a monitored app", GZPrimary)
-                        HowItWorksStep("2", "Grayzone overlays a 8-second pause screen", GZPrimaryLight)
-                        HowItWorksStep("3", "A reflection question prompts mindfulness", GZAccent)
-                        HowItWorksStep("4", "Wait the timer or skip — your choice", GZGreen)
-                    }
+                Spacer(modifier = Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HowItWorksStep("1", "Open a monitored app", GZPrimary)
+                    HowItWorksStep("2", "Grayzone overlays a pause screen", GZPrimaryLight)
+                    HowItWorksStep("3", "A reflection question prompts mindfulness", GZAccent)
+                    HowItWorksStep("4", "Wait the timer or skip — your choice", GZGreen)
                 }
             }
         }
