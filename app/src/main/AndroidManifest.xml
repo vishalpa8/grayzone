@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Package visibility (Android 11+): we only ever enumerate launchable apps (the app list the
+        user picks limits from) and resolve labels/icons for those same apps. That is fully covered by
+        this scoped <queries> declaration, so we deliberately do NOT request QUERY_ALL_PACKAGES — that
+        permission reads like spyware to Play Protect / on-device scanners and is a Play-policy blocker.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <!-- Permissions requested for Grayzone overlay and services -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" xmlns:tools="http://schemas.android.com/tools" tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

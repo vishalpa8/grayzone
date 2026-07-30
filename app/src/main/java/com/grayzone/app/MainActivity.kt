@@ -118,7 +118,7 @@ private fun requestAllFilesAccessOnce(context: Context) {
  * enable flag; otherwise resume the VPN so the app picks up exactly where the user left off. Runs
  * from the foreground (MainScreen), where starting a foreground service is permitted.
  */
-private fun reconcileVpnState(context: Context) {
+private fun reconcileVpnState(context: Context, onConsentNeeded: (Intent) -> Unit) {
     val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
     if (!prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) return
 
@@ -135,16 +135,39 @@ private fun reconcileVpnState(context: Context) {
     }
 
     if (!ProtectionHealthRepository.status.value.vpnActive) {
-        try {
-            context.startForegroundService(
-                Intent(context, AdBlockVpnService::class.java).apply {
-                    action = AdBlockVpnService.ACTION_START
-                }
-            )
+        // The restored intent says "VPN on" with an active hold, but the tunnel isn't running.
+        val consentIntent = android.net.VpnService.prepare(context)
+        if (consentIntent != null) {
+            // An uninstall/reinstall (or clear-data on some devices) revoked VPN consent, and Android
+            // forbids an app from silently starting a VPN. Rather than give up and force the user to
+            // hunt for the toggle, surface the one-tap consent dialog automatically. On approval the
+            // tunnel resumes with the SAME restored 24h hold (see the launcher in MainScreen) — so
+            // reinstalling can't be used to escape the hold. Keep the hold alarm armed regardless so
+            // the countdown stays honest even if the dialog is dismissed.
             VpnHoldExpiryScheduler.rearmFromPrefs(context)
-        } catch (_: Exception) {
-            // Best-effort; if VPN consent was revoked on clear-data the user re-enables manually.
+            onConsentNeeded(consentIntent)
+            return
         }
+        // Consent still present → resume silently, no user interaction needed.
+        startRestoredVpn(context)
+    }
+}
+
+/**
+ * Starts the AdBlock VPN after its consent is (re)granted. The 24h hold timestamps are already in
+ * prefs from the restore, and [AdBlockVpnService] preserves an in-flight hold via markEnabledIfAbsent,
+ * so the resumed tunnel picks up exactly where it left off instead of starting a fresh 24h.
+ */
+private fun startRestoredVpn(context: Context) {
+    try {
+        context.startForegroundService(
+            Intent(context, AdBlockVpnService::class.java).apply {
+                action = AdBlockVpnService.ACTION_START
+            }
+        )
+        VpnHoldExpiryScheduler.rearmFromPrefs(context)
+    } catch (_: Exception) {
+        // Best-effort; the user can still enable the VPN manually from the VPN screen.
     }
 }
 
@@ -211,6 +234,16 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    // Re-grants VPN consent after a reinstall/clear-data wiped it. On approval we resume the tunnel
+    // with the restored 24h hold; nothing to do on denial (the honest countdown keeps showing off).
+    val vpnConsentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            startRestoredVpn(context)
+        }
+    }
+
     LaunchedEffect(Unit) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (androidx.core.content.ContextCompat.checkSelfPermission(
@@ -222,7 +255,13 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
         }
         requestAllFilesAccessOnce(context)
         context.startForegroundService(Intent(context, OverlayService::class.java))
-        reconcileVpnState(context)
+        reconcileVpnState(context) { consentIntent ->
+            try {
+                vpnConsentLauncher.launch(consentIntent)
+            } catch (_: Exception) {
+                // No VPN consent activity available; the user can enable the VPN manually.
+            }
+        }
     }
 
     Scaffold(

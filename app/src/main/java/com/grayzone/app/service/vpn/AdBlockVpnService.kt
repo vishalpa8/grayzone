@@ -181,6 +181,12 @@ class AdBlockVpnService : VpnService() {
     private fun startVpn() {
         if (isRunning) return
 
+        // Satisfy the foreground-service contract up front. This service is launched via
+        // startForegroundService(), which requires startForeground() to be called within ~5s or the
+        // system kills the process. establish() below can fail (VPN consent revoked on reinstall, or
+        // another VPN active) and throw before we'd otherwise post the notification, so post it first.
+        startForeground(NOTIF_ID, buildNotification())
+
         try {
             val builder = Builder()
                 .addAddress("10.0.0.2", 32)
@@ -216,7 +222,6 @@ class AdBlockVpnService : VpnService() {
             vpnThread = Thread { runVpnLoop() }
             vpnThread?.start()
 
-            startForeground(NOTIF_ID, buildNotification())
             com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
             Log.d(TAG, "VPN Started")
         } catch (e: Exception) {
@@ -236,7 +241,11 @@ class AdBlockVpnService : VpnService() {
                 "VPN startup failed, possibly due to another active VPN or permission denial",
                 e
             )
-            
+
+            // We already entered the foreground above; tear it down cleanly so the process is never
+            // killed for "started foreground service but stopped without a matching state".
+            com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }

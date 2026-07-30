@@ -55,6 +55,13 @@ class BootReceiver : BroadcastReceiver() {
                 Log.d(TAG, "VPN hold expired across reboot — cleared enable flag, not restarting")
                 return
             }
+            // VpnService.prepare() returns non-null when consent is missing (e.g. after a reinstall).
+            // Starting the tunnel then would fail inside establish(); skip and let the next app launch
+            // resume it once consent is present, rather than churning a failing foreground service.
+            if (android.net.VpnService.prepare(context) != null) {
+                Log.d(TAG, "VPN consent missing at boot — skipping restart, intent preserved")
+                return
+            }
             try {
                 val vpnIntent = Intent(context, AdBlockVpnService::class.java).apply {
                     action = AdBlockVpnService.ACTION_START
