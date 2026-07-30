@@ -432,19 +432,19 @@ class AdBlockVpnService : VpnService() {
         when (DnsQueryClassifier.classify(domain)) {
             // Firefox canary + known DoH/DoT resolvers → NXDOMAIN so apps fall back to DNS-53
             DnsQueryClassifier.Action.NXDOMAIN_DOH -> {
-                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
+                DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH)
                 writeNxDomain(packet, length, outputStream)
             }
 
             // Ad or adult content domain → sinkhole / negative answer
             DnsQueryClassifier.Action.SINKHOLE_BLOCK -> {
-                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
+                DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD)
                 writeSinkhole(packet, length, outputStream)
             }
 
             // Allowed — forward to real DNS with fallback and deduplication
             DnsQueryClassifier.Action.FORWARD -> {
-                DnsTrafficBus.emit(DnsTrafficBus.DnsEvent(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED))
+                DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED)
                 serviceScope.launch {
                     forwardDnsQueryWithDeduplication(domain, normalizedDomain, packet, length, outputStream)
                 }

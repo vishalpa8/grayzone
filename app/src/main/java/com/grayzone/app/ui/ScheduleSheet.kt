@@ -18,10 +18,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.data.ScheduleRule
 import com.grayzone.app.ui.theme.*
-import kotlinx.coroutines.delay
 import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,16 +39,14 @@ fun ScheduleSheet(
     
     var showAddRuleDialog by remember { mutableStateOf(false) }
     
-    LaunchedEffect(isFocusMode) {
-        if (isFocusMode) {
-            while (true) {
-                focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
-                if (focusRemainingMillis <= 0) {
-                    isFocusMode = false
-                    break
-                }
-                delay(2000)
-            }
+    // Countdown only ticks while focus mode is active AND the sheet is visible.
+    ResumedInterval(enabled = isFocusMode, intervalMs = 2000L) {
+        focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+        if (focusRemainingMillis <= 0) {
+            isFocusMode = false
+            false
+        } else {
+            true
         }
     }
     

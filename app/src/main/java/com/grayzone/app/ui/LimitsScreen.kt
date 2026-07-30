@@ -28,19 +28,12 @@ fun LimitsScreen() {
     var monitoredApps by remember {
         mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
     }
-    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
-
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
     }
 
-    // Ticker for live lock detection; refresh at a lower cadence to reduce wakeups.
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(2000)
-            currentTime = System.currentTimeMillis()
-        }
-    }
+    // Ticker for live lock detection; only fires while the screen is visible.
+    val currentTime by rememberResumedTicker(2000L)
 
     val monitoredList = remember(installedApps, monitoredApps) {
         installedApps.filter { monitoredApps.contains(it.packageName) }
@@ -82,6 +75,19 @@ fun LimitsScreen() {
                 }
             }
 
+            // Single shared pulse animation drives every row's status badge, instead of
+            // creating one infinite animation per list item.
+            val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "limitsPulse")
+            val pulseAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.4f,
+                targetValue = 1f,
+                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                    animation = androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                ),
+                label = "limitsPulseAlpha"
+            )
+
             LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                 items(monitoredList, key = { it.packageName }) { app ->
                     val state = lockStateMap[app.packageName] ?: AppLockState(0L, 0L, 0L)
@@ -97,16 +103,6 @@ fun LimitsScreen() {
                     val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + app.packageName, false)
                     val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
                     val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + app.packageName, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-
-                    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
-                    val pulseAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1f,
-                        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                            animation = androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing),
-                            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                        )
-                    )
 
                     GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {

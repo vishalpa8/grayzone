@@ -16,9 +16,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.GZCard
+import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.ui.theme.*
-import kotlinx.coroutines.delay
 
 /**
  * One-hour daily break: while active, nothing is locked — no friction screens,
@@ -33,17 +33,15 @@ fun DailyBreakCard() {
     var canStartToday by remember { mutableStateOf(scheduleManager.canStartBreakToday()) }
     var remainingMillis by remember { mutableStateOf(scheduleManager.getBreakRemainingMillis()) }
 
-    LaunchedEffect(isBreakActive) {
-        if (isBreakActive) {
-            while (true) {
-                remainingMillis = scheduleManager.getBreakRemainingMillis()
-                if (remainingMillis <= 0) {
-                    isBreakActive = false
-                    canStartToday = scheduleManager.canStartBreakToday()
-                    break
-                }
-                delay(2000)
-            }
+    // Countdown only ticks while the break is active AND the screen is visible.
+    ResumedInterval(enabled = isBreakActive, intervalMs = 2000L) {
+        remainingMillis = scheduleManager.getBreakRemainingMillis()
+        if (remainingMillis <= 0) {
+            isBreakActive = false
+            canStartToday = scheduleManager.canStartBreakToday()
+            false
+        } else {
+            true
         }
     }
 

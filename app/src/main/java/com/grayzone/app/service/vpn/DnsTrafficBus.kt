@@ -19,11 +19,15 @@ object DnsTrafficBus {
 
     const val MAX_EVENTS = 50
 
+    // Monotonic id used as a Compose list key. A plain counter avoids allocating a
+    // UUID string for every single DNS query during heavy browsing.
+    private val idCounter = java.util.concurrent.atomic.AtomicLong(0L)
+
     data class DnsEvent(
         val domain: String,
         val status: Status,
         val timestampMs: Long = System.currentTimeMillis(),
-        val id: String = java.util.UUID.randomUUID().toString()
+        val id: String = idCounter.incrementAndGet().toString()
     ) {
         enum class Status { ALLOWED, BLOCKED_AD, BLOCKED_DOH }
     }
@@ -48,6 +52,15 @@ object DnsTrafficBus {
             }
         }
         _events.value = next
+    }
+
+    /**
+     * Convenience overload for the DNS loop. Behaves exactly like [emit] with a
+     * pre-built event, so the feed keeps accumulating recent history for the stats
+     * chips and live list even while the VPN screen is closed.
+     */
+    fun emit(domain: String, status: DnsEvent.Status) {
+        emit(DnsEvent(domain, status))
     }
 
     /** Clear the feed (e.g. when VPN stops). */

@@ -46,21 +46,15 @@ fun AppsScreen() {
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(cachedApps == null) }
     var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) }
-    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var selectedAppForSettings by remember { mutableStateOf<AppInfo?>(null) }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
         isLoading = false
     }
-    
-    // Ticker for live lock detection; refresh at a lower cadence to reduce wakeups.
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(2000)
-            currentTime = System.currentTimeMillis()
-        }
-    }
+
+    // Ticker for live lock detection; only fires while the screen is visible.
+    val currentTime by rememberResumedTicker(2000L)
 
     // Check if ANY app is currently locked, active, or paused
     val anyAppLockedOrActive = remember(monitoredApps, currentTime) {

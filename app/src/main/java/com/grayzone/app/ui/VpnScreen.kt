@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.grayzone.app.service.vpn.AdBlockVpnService
 import com.grayzone.app.service.vpn.DnsTrafficBus
@@ -68,12 +69,16 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(1_000)
-            currentTime = System.currentTimeMillis()
-            currentElapsed = SystemClock.elapsedRealtime()
-            holdState = VpnHoldLockStore.read(holdPrefs)
+    // Tick once per second only while this screen is visible; when the app is
+    // backgrounded the countdown refresh suspends instead of waking the CPU.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                currentTime = System.currentTimeMillis()
+                currentElapsed = SystemClock.elapsedRealtime()
+                holdState = VpnHoldLockStore.read(holdPrefs)
+                kotlinx.coroutines.delay(1_000)
+            }
         }
     }
 

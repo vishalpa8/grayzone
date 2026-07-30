@@ -25,6 +25,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.GZCard
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.isAnyAppLocked
+import com.grayzone.app.rememberResumedTicker
 import com.grayzone.app.shareApk
 import com.grayzone.app.ui.theme.*
 
@@ -56,13 +57,7 @@ fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(2000)
-            currentTime = System.currentTimeMillis()
-        }
-    }
+    val currentTime by rememberResumedTicker(2000L)
     val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
         isAnyAppLocked(prefs, monitoredApps, currentTime)
     }

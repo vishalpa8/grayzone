@@ -17,9 +17,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.GZCard
+import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.ui.theme.*
-import kotlinx.coroutines.delay
 
 @Composable
 fun QuickFocusCard() {
@@ -29,16 +29,14 @@ fun QuickFocusCard() {
     var isFocusMode by remember { mutableStateOf(scheduleManager.isFocusModeActive()) }
     var focusRemainingMillis by remember { mutableStateOf(scheduleManager.getFocusModeRemainingMillis()) }
     
-    LaunchedEffect(isFocusMode) {
-        if (isFocusMode) {
-            while (true) {
-                focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
-                if (focusRemainingMillis <= 0) {
-                    isFocusMode = false
-                    break
-                }
-                delay(2000)
-            }
+    // Countdown only ticks while focus mode is active AND the screen is visible.
+    ResumedInterval(enabled = isFocusMode, intervalMs = 2000L) {
+        focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+        if (focusRemainingMillis <= 0) {
+            isFocusMode = false
+            false
+        } else {
+            true
         }
     }
 
