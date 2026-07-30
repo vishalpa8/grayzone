@@ -23,6 +23,9 @@ object PrefsKeys {
      */
     const val ONBOARDING_COMPLETED = "onboarding_completed"
 
+    /** True once we've sent the user to the All-files-access screen for the hidden state backup. */
+    const val ALL_FILES_PROMPTED = "all_files_prompted"
+
     // Timing settings (global defaults)
     const val WAIT_SECONDS       = "wait_seconds"
     const val SESSION_MINUTES    = "session_minutes"

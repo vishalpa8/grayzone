@@ -196,7 +196,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                     )
                     Text(
                         when {
-                            holdActive ->
+                            vpnRunning && holdActive ->
                                 "Stays on for ${VpnHoldLock.formatRemaining(holdRemaining)}, then turns off automatically."
                             vpnRunning ->
                                 "Blocks ~800k ad/tracker and ~160k adult domains via local VPN DNS filter."

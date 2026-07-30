@@ -21,7 +21,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.grayzone.app.data.ProtectionHealthRepository
+import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.service.OverlayService
+import com.grayzone.app.service.vpn.AdBlockVpnService
+import com.grayzone.app.service.vpn.VpnHoldExpiryScheduler
+import com.grayzone.app.service.vpn.VpnHoldLock
+import com.grayzone.app.service.vpn.VpnHoldLockStore
 import com.grayzone.app.ui.AppsScreen
 import com.grayzone.app.ui.HomeScreen
 import com.grayzone.app.ui.LimitsScreen
@@ -33,6 +39,19 @@ import com.grayzone.app.ui.theme.*
 // ─── Activity ──────────────────────────────────────────────────────────────
 
 class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        // Covers devices that revoke all-files access on clear-data: the onCreate restore in
+        // GrayzoneApplication couldn't read the hidden backup without the permission, but once the
+        // user returns from granting it, restore what was wiped. Runs before super so the UI's
+        // ON_RESUME screen re-evaluation sees the restored prefs. Cheap no-op once state is present.
+        if (StateBackupManager.hasAllFilesAccess(this)) {
+            StateBackupManager.restoreIfWiped(this)
+        } else {
+            requestAllFilesAccessOnce(this)
+        }
+        super.onResume()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -56,6 +75,75 @@ class MainActivity : ComponentActivity() {
                     MainAppContent(onThemeModeChanged = { themeMode = it })
                 }
             }
+        }
+    }
+}
+
+/**
+ * Sends the user, once, to the system "All files access" screen so the anti-tamper state backup can
+ * live in a hidden folder that survives a data/cache wipe. If declined, the backup silently falls
+ * back to a visible location, so this is best-effort and never blocks the app.
+ */
+private fun requestAllFilesAccessOnce(context: Context) {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+    if (android.os.Environment.isExternalStorageManager()) return
+    val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+    if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
+    prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
+    try {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: Exception) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            // No settings activity available; fallback storage will be used.
+        }
+    }
+}
+
+/**
+ * Reconciles the AdBlock VPN with its persisted intent after the app (re)starts — notably after a
+ * backup restore, which brings back [PrefsKeys.VPN_ENABLED] and the 24h hold timestamps but does not
+ * restart the service, leaving the UI showing a hold countdown while the VPN is actually off.
+ *
+ * Mirrors [com.grayzone.app.service.BootReceiver]: if the hold already elapsed, drop the stale
+ * enable flag; otherwise resume the VPN so the app picks up exactly where the user left off. Runs
+ * from the foreground (MainScreen), where starting a foreground service is permitted.
+ */
+private fun reconcileVpnState(context: Context) {
+    val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+    if (!prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) return
+
+    val hold = VpnHoldLockStore.read(prefs)
+    val nowWall = System.currentTimeMillis()
+    val nowElapsed = android.os.SystemClock.elapsedRealtime()
+
+    if (hold.isTracked && !VpnHoldLock.isHoldActive(hold, nowWall, nowElapsed)) {
+        // Hold finished while the app was gone (e.g. restored from an older backup): clear intent so
+        // no phantom "stays on" countdown is shown and the toggle is usable again.
+        prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
+        VpnHoldLockStore.clear(prefs)
+        return
+    }
+
+    if (!ProtectionHealthRepository.status.value.vpnActive) {
+        try {
+            context.startForegroundService(
+                Intent(context, AdBlockVpnService::class.java).apply {
+                    action = AdBlockVpnService.ACTION_START
+                }
+            )
+            VpnHoldExpiryScheduler.rearmFromPrefs(context)
+        } catch (_: Exception) {
+            // Best-effort; if VPN consent was revoked on clear-data the user re-enables manually.
         }
     }
 }
@@ -132,7 +220,9 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        requestAllFilesAccessOnce(context)
         context.startForegroundService(Intent(context, OverlayService::class.java))
+        reconcileVpnState(context)
     }
 
     Scaffold(

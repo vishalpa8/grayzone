@@ -1,19 +1,25 @@
 package com.grayzone.app
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
+import android.os.Bundle
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.grayzone.app.data.CleanupWorker
 import com.grayzone.app.data.ConfigValidator
 import com.grayzone.app.data.DefaultMonitoredApps
+import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.data.StreakEvaluator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Application class for global initialization.
@@ -29,6 +35,17 @@ class GrayzoneApplication : Application() {
     // failure never tears the scope down for later callers.
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // Held so SharedPreferences (which keeps only a weak reference to change listeners) does not
+    // let the auto-backup listener be garbage-collected.
+    private var backupListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    // Set (cheaply) whenever a preference changes; the actual encrypt+write happens later, only when
+    // dirty, on backgrounding or the coarse flush loop. Decouples write frequency from edit frequency.
+    private val backupDirty = AtomicBoolean(false)
+
+    // Number of started Activities; when it returns to 0 the app has gone to the background.
+    private var startedActivityCount = 0
+
     override fun onCreate() {
         super.onCreate()
         
@@ -36,7 +53,12 @@ class GrayzoneApplication : Application() {
             LogComponent.BOOT,
             "Grayzone ${BuildConfig.VERSION_NAME} starting on ${android.os.Build.MODEL}"
         )
-        
+
+        // MUST run first: if the user cleared data/cache to escape their locks, pull the state back
+        // from the external backup BEFORE anything else reads preferences (config validation below,
+        // services, and the UI). Synchronous by design and kept small so it never ANRs onCreate.
+        StateBackupManager.restoreIfWiped(this)
+
         // Keep onCreate light: this process also hosts GrayzoneAccessibilityService. Heavy or
         // failing work on the main thread can ANR/crash the process, which makes Android disable
         // the accessibility service.
@@ -45,6 +67,72 @@ class GrayzoneApplication : Application() {
         runDeferredStartupWork()
         catchUpStreaks()
         schedulePeriodicCleanup()
+        registerStateBackup()
+    }
+
+    /**
+     * Keeps the external anti-tamper backup fresh while being kind to the battery.
+     *
+     * Rather than re-encrypting and writing on every preference edit (bursty during heavy
+     * app-switching), a change only flips a cheap in-memory [backupDirty] flag. The snapshot is
+     * actually written:
+     *  - once at startup, but only if no backup file exists yet (avoids re-writing on every restart);
+     *  - the moment the app goes to the background — which is exactly when the user could reach
+     *    Settings to clear data, so the backup is guaranteed fresh at the critical instant; and
+     *  - on a coarse [StateBackupManager.FLUSH_INTERVAL_MS] loop, and only when dirty, to capture
+     *    changes the accessibility service makes while no UI is visible (e.g. a lock applied while the
+     *    user is in another app).
+     *
+     * Net effect: at most one small (~1 KB) write per foreground session or per flush interval,
+     * versus potentially dozens per minute before — with fresher data at the one moment that matters.
+     */
+    private fun registerStateBackup() {
+        // One-time baseline so a wipe is recoverable even before the first backgrounding/flush.
+        appScope.launch {
+            if (!StateBackupManager.backupExists(this@GrayzoneApplication)) {
+                StateBackupManager.writeBackup(this@GrayzoneApplication)
+            }
+        }
+
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            backupDirty.set(true) // no I/O here; the flush points below do the actual write
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        backupListener = listener
+
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivityCount++
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivityCount--
+                if (startedActivityCount <= 0) flushBackupIfDirty() // app went to the background
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
+
+        // Coarse safety net for changes made while no Activity is visible. delay() adds no wakelock
+        // and is suspended during Doze, so an idle app costs nothing here.
+        appScope.launch {
+            while (true) {
+                delay(StateBackupManager.FLUSH_INTERVAL_MS)
+                flushBackupIfDirty()
+            }
+        }
+    }
+
+    /** Writes the backup only if something changed since the last write, then clears the flag. */
+    private fun flushBackupIfDirty() {
+        if (backupDirty.compareAndSet(true, false)) {
+            appScope.launch { StateBackupManager.writeBackup(this@GrayzoneApplication) }
+        }
     }
 
     /**
