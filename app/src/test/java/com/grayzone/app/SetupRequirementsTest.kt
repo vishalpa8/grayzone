@@ -1,6 +1,8 @@
 package com.grayzone.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,5 +45,68 @@ class SetupRequirementsTest {
 
         assertEquals("", SetupRequirements.body(missing))
         assertEquals("", SetupRequirements.actionLabel(missing))
+    }
+
+    @Test
+    fun `notifications off is reported as a missing requirement`() {
+        val missing = SetupRequirements.missing(
+            accessibilityEnabled = true,
+            overlayEnabled = true,
+            notificationsEnabled = false,
+        )
+
+        assertEquals(listOf(SetupRequirement.NOTIFICATIONS), missing)
+        assertEquals("Notifications are off", SetupRequirements.headline(missing))
+    }
+
+    @Test
+    fun `degrading permissions are reported without claiming protection ready`() {
+        val missing = SetupRequirements.missing(
+            accessibilityEnabled = true,
+            overlayEnabled = true,
+            notificationsEnabled = false,
+            allFilesGranted = false,
+            batteryExempt = true,
+        )
+
+        assertEquals(
+            listOf(SetupRequirement.NOTIFICATIONS, SetupRequirement.ALL_FILES),
+            missing
+        )
+        assertNotEquals("Protection ready", SetupRequirements.headline(missing))
+        assertEquals("Recommended setup incomplete", SetupRequirements.headline(missing))
+    }
+
+    @Test
+    fun `battery and all-files follow core permissions in ordering`() {
+        val missing = SetupRequirements.missing(
+            accessibilityEnabled = false,
+            overlayEnabled = true,
+            notificationsEnabled = true,
+            allFilesGranted = false,
+            batteryExempt = false,
+        )
+
+        assertEquals(
+            listOf(
+                SetupRequirement.ACCESSIBILITY,
+                SetupRequirement.ALL_FILES,
+                SetupRequirement.BATTERY,
+            ),
+            missing
+        )
+    }
+
+    @Test
+    fun `restricted settings hint only for accessibility on API 33+`() {
+        assertTrue(
+            SetupRequirements.needsRestrictedSettingsHint(33, SetupRequirement.ACCESSIBILITY)
+        )
+        assertFalse(
+            SetupRequirements.needsRestrictedSettingsHint(32, SetupRequirement.ACCESSIBILITY)
+        )
+        assertFalse(
+            SetupRequirements.needsRestrictedSettingsHint(34, SetupRequirement.OVERLAY)
+        )
     }
 }

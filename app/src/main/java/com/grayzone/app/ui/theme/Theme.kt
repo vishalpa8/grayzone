@@ -11,12 +11,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.grayzone.app.PrefsKeys
 
-fun resolveDarkTheme(context: Context, themeMode: String, systemDark: Boolean): Boolean =
+fun resolveDarkTheme(themeMode: String, systemDark: Boolean): Boolean =
     when (themeMode) {
         ThemeMode.LIGHT -> false
         ThemeMode.DARK -> true
@@ -29,7 +28,7 @@ fun isNightMode(context: Context): Boolean {
     val systemDark =
         (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
-    return resolveDarkTheme(context, mode, systemDark)
+    return resolveDarkTheme(mode, systemDark)
 }
 
 @Composable
@@ -38,7 +37,7 @@ fun GrayzoneTheme(
     content: @Composable () -> Unit
 ) {
     val systemDark = isSystemInDarkTheme()
-    val darkTheme = resolveDarkTheme(LocalContext.current, themeMode, systemDark)
+    val darkTheme = resolveDarkTheme(themeMode, systemDark)
     val palette = if (darkTheme) DarkGzPalette else LightGzPalette
     SideEffect {
         GzThemeState.palette = palette

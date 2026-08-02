@@ -104,12 +104,12 @@ class DnsResolverPool(
 
     private fun releaseSocket(socket: DatagramSocket, reusable: Boolean) {
         if (!reusable || socket.isClosed) {
-            try { socket.close() } catch (_: Exception) {}
+            closeQuietly(socket, "release non-reusable")
             return
         }
         synchronized(lock) {
             if (isShutdown) {
-                try { socket.close() } catch (_: Exception) {}
+                closeQuietly(socket, "release after shutdown")
             } else {
                 idleSockets.add(socket)
             }
@@ -119,10 +119,20 @@ class DnsResolverPool(
     fun shutdown() {
         synchronized(lock) {
             isShutdown = true
-            idleSockets.forEach { 
-                try { it.close() } catch (e: Exception) {} 
-            }
+            idleSockets.forEach { closeQuietly(it, "pool shutdown") }
             idleSockets.clear()
+        }
+    }
+
+    /** F-031: never swallow close failures without a log. */
+    private fun closeQuietly(socket: DatagramSocket, reason: String) {
+        try {
+            socket.close()
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.w(
+                com.grayzone.app.LogComponent.DNS,
+                "socket.close failed ($reason): ${e.message}"
+            )
         }
     }
 }

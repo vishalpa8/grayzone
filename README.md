@@ -28,6 +28,7 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
 
 ## Requirements
 
+- **JDK 21** (Gradle 8.6 does not support JDK 22+; if your default `java` is newer, pass `-Dorg.gradle.java.home` pointing at a JDK 21 install — see `INSTALL.md`)
 - Android 10 (API Level 29) or higher
 - Permissions Required:
   - **Accessibility Service**: To monitor which apps are currently active on screen.
@@ -62,9 +63,13 @@ If the DNS blocker was successfully enabled, Grayzone persists that restore inte
 
 4. **Build and Run:**
    - Connect your Android device via USB or start an emulator.
-   - Click the **Run** button (green play icon) in Android Studio, or use Gradle:
+   - Click the **Run** button (green play icon) in Android Studio, or use Gradle (JDK 21):
    ```bash
    ./gradlew installDebug
+   ```
+   If the build fails with a bare version token like `25.0.4`, your shell is using a JDK newer than 21. Point Gradle at JDK 21 explicitly:
+   ```bash
+   ./gradlew installDebug "-Dorg.gradle.java.home=C:\Program Files\jdk-21.0.11"
    ```
 
 5. **Permissions Configuration on Device:**

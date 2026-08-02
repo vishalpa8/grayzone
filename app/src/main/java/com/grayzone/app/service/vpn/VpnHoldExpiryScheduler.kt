@@ -38,11 +38,20 @@ object VpnHoldExpiryScheduler {
             if (canExact) {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
             } else {
+                // F-035: inexact path — Doze may defer automatic VPN disable.
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
+                GrayzoneLogger.w(
+                    LogComponent.VPN,
+                    "Exact alarms unavailable; VPN hold expiry may be delayed under Doze"
+                )
             }
         } catch (e: SecurityException) {
             try {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
+                GrayzoneLogger.w(
+                    LogComponent.VPN,
+                    "Exact alarms unavailable; VPN hold expiry may be delayed under Doze"
+                )
             } catch (e2: Exception) {
                 GrayzoneLogger.e(LogComponent.VPN, "Failed to arm VPN hold expiry alarm", e2)
             }

@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
@@ -33,6 +35,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.grayzone.app.GrayzoneLogger
+import com.grayzone.app.LogComponent
 import com.grayzone.app.service.vpn.AdBlockVpnService
 import com.grayzone.app.service.vpn.DnsTrafficBus
 import com.grayzone.app.service.vpn.DnsTrafficBus.DnsEvent.Status
@@ -95,11 +99,22 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
 
     fun beginEnableVpn() {
         statusMessage = null
-        val permIntent = VpnService.prepare(context)
-        if (permIntent != null) {
-            vpnPermLauncher.launch(permIntent)
-        } else {
-            startVpnService(context)
+        try {
+            val permIntent = VpnService.prepare(context)
+            if (permIntent != null) {
+                vpnPermLauncher.launch(permIntent)
+            } else {
+                startVpnService(context)
+            }
+        } catch (e: Exception) {
+            // F-211: OEM / work-profile builds may lack the VPN consent activity.
+            GrayzoneLogger.w(LogComponent.VPN, "VPN enable failed: ${e.message}", e)
+            statusMessage = "Couldn't open VPN settings"
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't open VPN settings",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -117,8 +132,14 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         statusMessage = null
     }
 
+    // F-161: scrollable chrome above a feed with min height so large fonts cannot collapse the list.
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -372,8 +393,16 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                     fontSize = 13.sp
                 )
             }
-        } else {
-            LiveTrafficFeed(modifier = Modifier.padding(horizontal = 20.dp).weight(1f))
+        }
+        } // end scrollable chrome
+
+        if (vpnRunning) {
+            LiveTrafficFeed(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp)
+                    .weight(1f)
+                    .heightIn(min = 120.dp)
+            )
         }
 
         Spacer(Modifier.height(16.dp))
@@ -413,10 +442,10 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
 private fun LiveTrafficFeed(modifier: Modifier = Modifier) {
     val events   by DnsTrafficBus.events.collectAsState()
     val listState = rememberLazyListState()
-    val scope     = rememberCoroutineScope()
 
-    LaunchedEffect(events.size) {
-        if (events.isNotEmpty()) scope.launch { listState.animateScrollToItem(0) }
+    // F-158: key on newest event id so same-size updates still scroll to top.
+    LaunchedEffect(events.firstOrNull()?.id) {
+        if (events.isNotEmpty()) listState.animateScrollToItem(0)
     }
 
     Box(
@@ -452,16 +481,19 @@ private fun VpnTrafficRow(event: DnsTrafficBus.DnsEvent) {
         Status.ALLOWED     -> GZAccent
         Status.BLOCKED_AD  -> GZRed
         Status.BLOCKED_DOH -> GZAmber
+        Status.FAILED      -> GZTextTertiary
     }
     val textColor = when (event.status) {
         Status.ALLOWED     -> GZTextSecondary
         Status.BLOCKED_AD  -> GZRed.copy(alpha = 0.9f)
         Status.BLOCKED_DOH -> GZAmber.copy(alpha = 0.9f)
+        Status.FAILED      -> GZTextTertiary
     }
     val badge = when (event.status) {
         Status.ALLOWED     -> null
         Status.BLOCKED_AD  -> "AD"
         Status.BLOCKED_DOH -> "DOH"
+        Status.FAILED      -> "FAIL"
     }
     val time = remember(event.timestampMs) {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(event.timestampMs))
@@ -524,21 +556,47 @@ private fun StatChip(label: String, value: String, color: Color, modifier: Modif
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 private fun startVpnService(context: Context) {
-    context.startForegroundService(
-        Intent(context, AdBlockVpnService::class.java).apply { action = AdBlockVpnService.ACTION_START }
-    )
+    try {
+        context.startForegroundService(
+            Intent(context, AdBlockVpnService::class.java).apply {
+                action = AdBlockVpnService.ACTION_START
+            }
+        )
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.VPN, "startVpnService failed: ${e.message}", e)
+        android.widget.Toast.makeText(
+            context,
+            "Couldn't start VPN",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }
 }
 
 private fun stopVpnService(context: Context) {
-    context.startService(
-        Intent(context, AdBlockVpnService::class.java).apply { action = AdBlockVpnService.ACTION_STOP }
-    )
+    try {
+        context.startService(
+            Intent(context, AdBlockVpnService::class.java).apply {
+                action = AdBlockVpnService.ACTION_STOP
+            }
+        )
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.VPN, "stopVpnService failed: ${e.message}", e)
+        android.widget.Toast.makeText(
+            context,
+            "Couldn't stop VPN",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }
 }
 
 fun refreshVpnNotification(context: Context) {
-    context.startService(
-        Intent(context, AdBlockVpnService::class.java).apply {
-            action = AdBlockVpnService.ACTION_REFRESH_NOTIFICATION
-        }
-    )
+    try {
+        context.startService(
+            Intent(context, AdBlockVpnService::class.java).apply {
+                action = AdBlockVpnService.ACTION_REFRESH_NOTIFICATION
+            }
+        )
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.VPN, "refreshVpnNotification failed: ${e.message}", e)
+    }
 }

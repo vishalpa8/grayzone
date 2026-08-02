@@ -1,9 +1,7 @@
 package com.grayzone.app.ui
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -25,8 +23,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grayzone.app.*
 import com.grayzone.app.R
+import com.grayzone.app.data.ProtectionHealthRepository
+import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -41,7 +42,9 @@ fun HomeScreen() {
 
     var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var batteryIssue by remember { mutableStateOf(isBatteryOptimized(context)) }
+    var notificationsOn by remember { mutableStateOf(areAppNotificationsEnabled(context)) }
+    var allFilesOn by remember { mutableStateOf(StateBackupManager.hasAllFilesAccess(context)) }
+    var batteryExempt by remember { mutableStateOf(!isBatteryOptimized(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
     val streakScope = rememberCoroutineScope()
@@ -51,10 +54,19 @@ fun HomeScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityOn = isAccessibilityServiceEnabled(context)
                 overlayOn = Settings.canDrawOverlays(context)
-                batteryIssue = isBatteryOptimized(context)
+                notificationsOn = areAppNotificationsEnabled(context)
+                allFilesOn = StateBackupManager.hasAllFilesAccess(context)
+                batteryExempt = !isBatteryOptimized(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
                 streakScope.launch {
-                    com.grayzone.app.data.StreakEvaluator.run(context)
+                    try {
+                        com.grayzone.app.data.StreakEvaluator.run(context)
+                    } catch (e: Exception) {
+                        com.grayzone.app.GrayzoneLogger.w(
+                            com.grayzone.app.LogComponent.DATABASE,
+                            "Streak evaluation from Home failed: ${e.message}"
+                        )
+                    }
                 }
             }
         }
@@ -63,9 +75,20 @@ fun HomeScreen() {
     }
 
     val data = HomeData(monitoredCount = monitoredCount)
-    val missingSetup = SetupRequirements.missing(accessibilityOn, overlayOn)
+    val missingSetup = SetupRequirements.missing(
+        accessibilityEnabled = accessibilityOn,
+        overlayEnabled = overlayOn,
+        notificationsEnabled = notificationsOn,
+        allFilesGranted = allFilesOn,
+        batteryExempt = batteryExempt,
+    )
     val needsSetup = missingSetup.isNotEmpty()
-    val isActive = !needsSetup
+    val onlyBatteryMissing = missingSetup == listOf(SetupRequirement.BATTERY)
+    // F-155: permissions alone are not "active" — OverlayService must also be running.
+    val health by ProtectionHealthRepository.status.collectAsStateWithLifecycle()
+    val coreReady = accessibilityOn && overlayOn
+    // F-087: battery exemption is part of "active" — do not show green while optimized.
+    val isActive = coreReady && batteryExempt && health.overlayActive && health.accessibilityActive
 
     LazyColumn(
         modifier = Modifier
@@ -94,7 +117,7 @@ fun HomeScreen() {
                             modifier = Modifier.size(26.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             "Grayzone",
@@ -118,26 +141,25 @@ fun HomeScreen() {
         item {
             val statusBg = when {
                 needsSetup -> GZAmberContainer
-                batteryIssue -> GZAmberContainer
                 else -> GZGreenContainer
             }
             val statusBorder = when {
-                needsSetup || batteryIssue -> GZAmber.copy(alpha = 0.35f)
+                needsSetup -> GZAmber.copy(alpha = 0.35f)
                 else -> GZGreen.copy(alpha = 0.25f)
             }
             val statusTint = when {
-                needsSetup || batteryIssue -> GZAmber
+                needsSetup -> GZAmber
                 else -> GZGreen
             }
-            val headline = when {
-                needsSetup -> SetupRequirements.headline(missingSetup)
-                batteryIssue -> "Battery may interrupt protection"
-                else -> "Protection ready"
+            val headline = if (needsSetup) {
+                SetupRequirements.headline(missingSetup)
+            } else {
+                "Protection ready"
             }
-            val body = when {
-                needsSetup -> SetupRequirements.body(missingSetup)
-                batteryIssue -> "Battery optimization can stop Grayzone in the background."
-                else -> "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored"
+            val body = if (needsSetup) {
+                SetupRequirements.body(missingSetup)
+            } else {
+                "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored"
             }
 
             GZCard(
@@ -148,12 +170,12 @@ fun HomeScreen() {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            if (batteryIssue && !needsSetup) Icons.Filled.BatteryAlert else Icons.Filled.Shield,
+                            if (onlyBatteryMissing) Icons.Filled.BatteryAlert else Icons.Filled.Shield,
                             contentDescription = null,
                             tint = statusTint,
                             modifier = Modifier.size(28.dp)
                         )
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 headline,
@@ -161,37 +183,65 @@ fun HomeScreen() {
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 16.sp
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(Modifier.height(2.dp))
                             Text(body, color = GZTextSecondary, fontSize = 13.sp)
-                        }
-                        if (!needsSetup && batteryIssue) {
-                            TextButton(
-                                onClick = {
-                                    @SuppressLint("BatteryLife")
-                                    val intent = Intent(
-                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        Uri.parse("package:${context.packageName}")
-                                    )
-                                    context.startActivity(intent)
-                                },
-                                colors = ButtonDefaults.textButtonColors(contentColor = GZAmber)
-                            ) { Text("Fix", fontWeight = FontWeight.Bold) }
                         }
                     }
 
                     // One button per missing permission so it is always clear which is
                     // still pending and which settings page each one opens.
                     missingSetup.forEach { requirement ->
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(Modifier.height(10.dp))
                         Button(
-                            onClick = { context.startActivity(settingsIntentFor(context, requirement)) },
+                            onClick = {
+                                startActivitySafely(
+                                    context,
+                                    settingsIntentFor(context, requirement),
+                                    "settingsIntentFor(${requirement.name})"
+                                )
+                                // F-061: OEM autostart screens are separate from the generic opt-out.
+                                if (requirement == SetupRequirement.BATTERY &&
+                                    OemBatteryHelper.needsOemOptimization()
+                                ) {
+                                    OemBatteryHelper.openBatterySettings(context)
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = GZPrimary,
                                 contentColor = androidx.compose.ui.graphics.Color.White
                             )
                         ) {
-                            Text("Turn on ${SetupRequirements.label(requirement)}", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                SetupRequirements.actionLabel(listOf(requirement)),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        // F-092: sideloaded installs on Android 13+ may need Allow restricted settings.
+                        if (SetupRequirements.needsRestrictedSettingsHint(
+                                Build.VERSION.SDK_INT,
+                                requirement
+                            )
+                        ) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "On Android 13+, apps installed from a file must first allow " +
+                                    "restricted settings: ⋮ → Allow restricted settings.",
+                                color = GZTextSecondary,
+                                fontSize = 12.sp
+                            )
+                            TextButton(
+                                onClick = {
+                                    startActivitySafely(
+                                        context,
+                                        appInfoSettingsIntent(context),
+                                        "appInfoSettings"
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Open app info")
+                            }
                         }
                     }
                 }
@@ -205,7 +255,7 @@ fun HomeScreen() {
         item {
             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
                 SectionLabel("HOW IT WORKS")
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(Modifier.height(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     HowItWorksStep("1", "Open a monitored app", GZPrimary)
                     HowItWorksStep("2", "Grayzone overlays a pause screen", GZPrimaryLight)

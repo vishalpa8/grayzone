@@ -3,6 +3,7 @@ package com.grayzone.app.data
 import android.content.SharedPreferences
 import com.grayzone.app.DateUtils
 import com.grayzone.app.PrefsKeys
+import java.util.TimeZone
 
 /**
  * Clears runtime-only session lock state (active sessions, lockouts, paused
@@ -11,6 +12,9 @@ import com.grayzone.app.PrefsKeys
  *
  * Called from GrayzoneApplication.onCreate() (process restart) AND from
  * OverlayService (long-running service crossing midnight).
+ *
+ * A timezone change that advances the local date string must NOT clear lockouts
+ * (F-240) — only a same-zone midnight crossing does.
  */
 object RuntimeSessionReset {
 
@@ -21,25 +25,58 @@ object RuntimeSessionReset {
      * Returns true when a reset was actually performed.
      *
      * [now] is injectable so midnight-boundary tests do not depend on wall clock.
+     * [zoneId] is injectable for tests; production uses the device default zone.
      */
     fun resetIfNeeded(
         prefs: SharedPreferences,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        zoneId: String = TimeZone.getDefault().id
     ): Boolean {
         val lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, "") ?: ""
+        val lastZone = prefs.getString(PrefsKeys.DAILY_RESET_ZONE_ID, null)
+        val currentDateKey = DateUtils.formatDateKey(now)
+
+        // Timezone jump: realign the stored date key without clearing protection state.
+        if (lastZone != null && lastZone != zoneId) {
+            prefs.edit()
+                .putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, currentDateKey)
+                .putString(PrefsKeys.DAILY_RESET_ZONE_ID, zoneId)
+                .apply()
+            return false
+        }
 
         if (!DateUtils.shouldResetDailyRuntimeState(now, lastResetDateKey)) {
+            if (lastZone == null) {
+                prefs.edit().putString(PrefsKeys.DAILY_RESET_ZONE_ID, zoneId).apply()
+            }
             return false
         }
 
         val editor = prefs.edit()
-        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-        monitoredApps.forEach { pkg ->
+        // F-052: clear runtime locks for every package that has keys, not only currently monitored.
+        val packages = linkedSetOf<String>()
+        prefs.all.keys.forEach { key ->
+            when {
+                key.startsWith(PrefsKeys.ACTIVE_UNTIL) ->
+                    packages.add(key.removePrefix(PrefsKeys.ACTIVE_UNTIL))
+                key.startsWith(PrefsKeys.LOCKED_UNTIL) ->
+                    packages.add(key.removePrefix(PrefsKeys.LOCKED_UNTIL))
+                key.startsWith(PrefsKeys.REMAINING_MILLIS) ->
+                    packages.add(key.removePrefix(PrefsKeys.REMAINING_MILLIS))
+            }
+        }
+        packages.forEach { pkg ->
+            if (pkg.isEmpty()) return@forEach
             editor.remove(PrefsKeys.ACTIVE_UNTIL + pkg)
                 .remove(PrefsKeys.LOCKED_UNTIL + pkg)
                 .remove(PrefsKeys.REMAINING_MILLIS + pkg)
+                .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg)
+                .remove(PrefsKeys.ACTIVE_DURATION_MS + pkg)
+                .remove(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg)
+                .remove(PrefsKeys.LOCKED_DURATION_MS + pkg)
         }
-        editor.putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, DateUtils.formatDateKey(now))
+        editor.putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, currentDateKey)
+            .putString(PrefsKeys.DAILY_RESET_ZONE_ID, zoneId)
             .apply()
         return true
     }

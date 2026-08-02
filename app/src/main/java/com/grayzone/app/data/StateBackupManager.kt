@@ -58,13 +58,55 @@ import javax.crypto.spec.SecretKeySpec
  */
 object StateBackupManager {
 
+    /**
+     * Set after a successful [restoreIfWiped] in this process so [com.grayzone.app.MainActivity]
+     * can skip repeating the binder + decrypt path on every onResume (F-044).
+     */
+    @Volatile
+    var restoredThisProcess: Boolean = false
+        private set
+
     private const val SCHEMA_VERSION = 1
+
+    /** Exact keys and prefixes that may be restored. Unknown keys are dropped (F-043). */
+    private val ALLOWED_EXACT_KEYS: Set<String> = setOf(
+        PrefsKeys.GRAYZONE_ENABLED, PrefsKeys.THEME_MODE,
+        // F-090: never restore prompt-suppressor flags — wipe+restore must re-prompt.
+        PrefsKeys.ONBOARDING_COMPLETED,
+        PrefsKeys.WAIT_SECONDS, PrefsKeys.SESSION_MINUTES,
+        PrefsKeys.LOCKOUT_MINUTES, PrefsKeys.MONITORED_APPS, PrefsKeys.DEFAULT_APPS_SEEDED,
+        PrefsKeys.SCHEDULE_RULES_JSON, PrefsKeys.FOCUS_MODE_ACTIVE, PrefsKeys.FOCUS_MODE_UNTIL,
+        PrefsKeys.FOCUS_STARTED_ELAPSED, PrefsKeys.FOCUS_DURATION_MS,
+        PrefsKeys.BREAK_UNTIL, PrefsKeys.BREAK_USED_DATE,
+        PrefsKeys.BREAK_STARTED_ELAPSED, PrefsKeys.BREAK_DURATION_MS_KEY,
+        PrefsKeys.DAILY_RESET_ZONE_ID, PrefsKeys.VPN_BYPASS_APPS,
+        PrefsKeys.CUSTOM_PROMPTS_JSON, PrefsKeys.USE_CUSTOM_PROMPTS_ONLY,
+        PrefsKeys.CURRENT_STREAK, PrefsKeys.LONGEST_STREAK, PrefsKeys.STREAK_LAST_DATE,
+        PrefsKeys.TOTAL_SESSIONS_BLOCKED, PrefsKeys.TOTAL_TIME_SAVED_MINS,
+        PrefsKeys.ACHIEVEMENTS_JSON, PrefsKeys.VPN_ENABLED,
+        PrefsKeys.VPN_HOLD_STARTED_WALL, PrefsKeys.VPN_HOLD_STARTED_ELAPSED,
+        PrefsKeys.DAILY_RESET_DATE + "runtime"
+    )
+
+    private val ALLOWED_PREFIXES: List<String> = listOf(
+        PrefsKeys.ACTIVE_UNTIL, PrefsKeys.LOCKED_UNTIL, PrefsKeys.REMAINING_MILLIS,
+        PrefsKeys.ACTIVE_STARTED_ELAPSED, PrefsKeys.ACTIVE_DURATION_MS,
+        PrefsKeys.LOCKED_STARTED_ELAPSED, PrefsKeys.LOCKED_DURATION_MS,
+        PrefsKeys.PER_APP_WAIT_SECONDS, PrefsKeys.PER_APP_SESSION_MINUTES,
+        PrefsKeys.PER_APP_LOCKOUT_MINUTES, PrefsKeys.PER_APP_HAS_CUSTOM,
+        PrefsKeys.DAILY_BUDGET_MINUTES, PrefsKeys.DAILY_USED_MILLIS, PrefsKeys.DAILY_RESET_DATE
+    )
+
+    private fun isAllowedKey(key: String): Boolean =
+        key in ALLOWED_EXACT_KEYS || ALLOWED_PREFIXES.any { key.startsWith(it) }
 
     // Preferred hidden location: a dot-prefixed folder at the root of shared storage. Writable only
     // with all-files access (MANAGE_EXTERNAL_STORAGE / legacy WRITE) via the raw File API — MediaStore
     // cannot touch hidden folders. Survives clear-data and is invisible to the gallery/casual browsing.
     private const val HIDDEN_DIR = ".grayzone"
     private const val FILE_NAME = "backup.dat"
+    /** High-water generation marker so an older backup file cannot roll locks back (F-045). */
+    private const val GEN_MARKER_NAME = "backup.gen"
 
     /**
      * How often the app-wide coarse flush loop re-checks the dirty flag. Writes only happen when
@@ -116,6 +158,7 @@ object StateBackupManager {
                 } else {
                     val restored = applyInto(prefs, json)
                     if (restored) {
+                        restoredThisProcess = true
                         GrayzoneLogger.i(
                             LogComponent.BOOT,
                             "State restored from external backup after a data/cache wipe"
@@ -157,12 +200,21 @@ object StateBackupManager {
      * write (a MediaStore file cannot be read back after a data clear because ownership attribution
      * is lost), so the write is skipped and logged. Safe to call frequently; failures are logged.
      */
-    fun writeBackup(context: Context) {
+    /**
+     * @return true when a snapshot was written successfully; false when skipped or failed
+     *   (caller should keep any dirty flag set so a later flush can retry — F-063).
+     */
+    fun writeBackup(context: Context): Boolean {
         if (!hasAllFilesAccess(context)) {
             GrayzoneLogger.i(LogComponent.BOOT, "State backup skipped — all-files access not granted")
-            return
+            return false
         }
-        try {
+        if (androidId(context).isNullOrEmpty()) {
+            // F-046: empty ANDROID_ID would derive a constant key shared by every install.
+            GrayzoneLogger.w(LogComponent.BOOT, "State backup skipped — ANDROID_ID unavailable")
+            return false
+        }
+        return try {
             val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val plaintext = serialize(context, prefs.all).toByteArray(Charsets.UTF_8)
             val bytes = encrypt(context, plaintext)
@@ -173,8 +225,10 @@ object StateBackupManager {
                 LogComponent.BOOT,
                 "State backup written (${bytes.size} bytes) -> ${file.absolutePath}"
             )
+            true
         } catch (e: Exception) {
             GrayzoneLogger.w(LogComponent.BOOT, "State backup write failed", e)
+            false
         }
     }
 
@@ -197,14 +251,43 @@ object StateBackupManager {
         }
     }
 
+    private fun generationMarkerFile(): File =
+        File(Environment.getExternalStorageDirectory(), "$HIDDEN_DIR/$GEN_MARKER_NAME")
+
+    private fun readHighWaterGeneration(): Long = try {
+        val f = generationMarkerFile()
+        if (!f.exists()) 0L else f.readText().trim().toLongOrNull() ?: 0L
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun writeHighWaterGeneration(gen: Long) {
+        try {
+            val f = generationMarkerFile()
+            f.parentFile?.mkdirs()
+            f.writeText(gen.toString())
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.BOOT, "Failed to write backup generation marker", e)
+        }
+    }
+
     private fun serialize(context: Context, all: Map<String, Any?>): String {
+        val nextGen = readHighWaterGeneration() + 1L
+        writeHighWaterGeneration(nextGen)
         val root = JsonObject().apply {
             addProperty("schema", SCHEMA_VERSION)
-            addProperty("androidId", androidId(context))
+            addProperty("androidId", androidId(context).orEmpty())
             addProperty("savedAt", System.currentTimeMillis())
+            addProperty("generation", nextGen)
         }
         val entries = JsonObject()
         for ((key, value) in all) {
+            // F-090: do not persist prompt-suppressor flags into the anti-tamper backup.
+            if (key == PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS ||
+                key == PrefsKeys.ALL_FILES_PROMPTED
+            ) {
+                continue
+            }
             val entry = JsonObject()
             when (value) {
                 is Boolean -> { entry.addProperty("t", "bool"); entry.addProperty("v", value) }
@@ -228,11 +311,40 @@ object StateBackupManager {
 
     private fun applyInto(prefs: SharedPreferences, json: String): Boolean {
         val root = JsonParser.parseString(json).asJsonObject
+        val schema = root.get("schema")?.asInt
+        if (schema != SCHEMA_VERSION) {
+            GrayzoneLogger.w(
+                LogComponent.BOOT,
+                "Backup schema mismatch (got $schema, want $SCHEMA_VERSION); refusing restore"
+            )
+            return false
+        }
+        // F-045: refuse a file older than the high-water marker (rollback attack).
+        val generation = root.get("generation")?.asLong ?: 0L
+        val highWater = readHighWaterGeneration()
+        if (generation > 0L && highWater > 0L && generation < highWater) {
+            GrayzoneLogger.w(
+                LogComponent.BOOT,
+                "Backup generation $generation is older than high-water $highWater; refusing restore"
+            )
+            return false
+        }
         val entries = root.getAsJsonObject("entries") ?: return false
         val editor = prefs.edit()
         for ((key, element) in entries.entrySet()) {
+            if (!isAllowedKey(key)) continue
             val obj = element.asJsonObject
-            when (obj.get("t")?.asString) {
+            val type = obj.get("t")?.asString ?: continue
+            // Expected types for known keys — refuse type drift that would crash getters (F-060).
+            val expected = expectedType(key)
+            if (expected != null && expected != type) {
+                GrayzoneLogger.w(
+                    LogComponent.BOOT,
+                    "Backup key $key has type $type, expected $expected; skipping"
+                )
+                continue
+            }
+            when (type) {
                 "bool" -> editor.putBoolean(key, obj.get("v").asBoolean)
                 "int" -> editor.putInt(key, obj.get("v").asInt)
                 "long" -> editor.putLong(key, obj.get("v").asLong)
@@ -247,18 +359,72 @@ object StateBackupManager {
         }
         // commit(), not apply(): the restored values must be durably visible before the rest of
         // onCreate (and any service/UI) reads them on this same launch.
-        return editor.commit()
+        val ok = editor.commit()
+        if (ok && generation > highWater) writeHighWaterGeneration(generation)
+        return ok
+    }
+
+    private fun expectedType(key: String): String? = when {
+        key == PrefsKeys.GRAYZONE_ENABLED ||
+            key == PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS ||
+            key == PrefsKeys.ONBOARDING_COMPLETED ||
+            key == PrefsKeys.ALL_FILES_PROMPTED ||
+            key == PrefsKeys.DEFAULT_APPS_SEEDED ||
+            key == PrefsKeys.FOCUS_MODE_ACTIVE ||
+            key == PrefsKeys.USE_CUSTOM_PROMPTS_ONLY ||
+            key == PrefsKeys.VPN_ENABLED ||
+            key.startsWith(PrefsKeys.PER_APP_HAS_CUSTOM) -> "bool"
+        key == PrefsKeys.WAIT_SECONDS ||
+            key == PrefsKeys.SESSION_MINUTES ||
+            key == PrefsKeys.LOCKOUT_MINUTES ||
+            key == PrefsKeys.CURRENT_STREAK ||
+            key == PrefsKeys.LONGEST_STREAK ||
+            key == PrefsKeys.TOTAL_SESSIONS_BLOCKED ||
+            key == PrefsKeys.TOTAL_TIME_SAVED_MINS ||
+            key.startsWith(PrefsKeys.PER_APP_WAIT_SECONDS) ||
+            key.startsWith(PrefsKeys.PER_APP_SESSION_MINUTES) ||
+            key.startsWith(PrefsKeys.PER_APP_LOCKOUT_MINUTES) ||
+            key.startsWith(PrefsKeys.DAILY_BUDGET_MINUTES) -> "int"
+        key == PrefsKeys.FOCUS_MODE_UNTIL ||
+            key == PrefsKeys.FOCUS_STARTED_ELAPSED ||
+            key == PrefsKeys.FOCUS_DURATION_MS ||
+            key == PrefsKeys.BREAK_UNTIL ||
+            key == PrefsKeys.BREAK_STARTED_ELAPSED ||
+            key == PrefsKeys.BREAK_DURATION_MS_KEY ||
+            key == PrefsKeys.VPN_HOLD_STARTED_WALL ||
+            key == PrefsKeys.VPN_HOLD_STARTED_ELAPSED ||
+            key.startsWith(PrefsKeys.ACTIVE_UNTIL) ||
+            key.startsWith(PrefsKeys.LOCKED_UNTIL) ||
+            key.startsWith(PrefsKeys.REMAINING_MILLIS) ||
+            key.startsWith(PrefsKeys.ACTIVE_STARTED_ELAPSED) ||
+            key.startsWith(PrefsKeys.ACTIVE_DURATION_MS) ||
+            key.startsWith(PrefsKeys.LOCKED_STARTED_ELAPSED) ||
+            key.startsWith(PrefsKeys.LOCKED_DURATION_MS) ||
+            key.startsWith(PrefsKeys.DAILY_USED_MILLIS) -> "long"
+        key == PrefsKeys.MONITORED_APPS || key == PrefsKeys.VPN_BYPASS_APPS -> "stringset"
+        key == PrefsKeys.THEME_MODE ||
+            key == PrefsKeys.SCHEDULE_RULES_JSON ||
+            key == PrefsKeys.CUSTOM_PROMPTS_JSON ||
+            key == PrefsKeys.STREAK_LAST_DATE ||
+            key == PrefsKeys.ACHIEVEMENTS_JSON ||
+            key == PrefsKeys.BREAK_USED_DATE ||
+            key == PrefsKeys.DAILY_RESET_ZONE_ID ||
+            key.startsWith(PrefsKeys.DAILY_RESET_DATE) -> "string"
+        else -> null
     }
 
     @SuppressLint("HardwareIds")
-    private fun androidId(context: Context): String = try {
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
+    private fun androidId(context: Context): String? = try {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotEmpty() }
     } catch (_: Exception) {
-        ""
+        null
     }
 
     private fun deriveKey(context: Context): SecretKey {
-        val material = "${androidId(context)}|$KEY_PEPPER".toByteArray(Charsets.UTF_8)
+        val id = androidId(context)
+            ?: throw IllegalStateException("ANDROID_ID unavailable — refusing weak backup key")
+        val material = "$id|$KEY_PEPPER".toByteArray(Charsets.UTF_8)
         val keyBytes = MessageDigest.getInstance("SHA-256").digest(material) // 32 bytes → AES-256
         return SecretKeySpec(keyBytes, "AES")
     }

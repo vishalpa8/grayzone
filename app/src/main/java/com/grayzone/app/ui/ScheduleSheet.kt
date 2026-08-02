@@ -171,8 +171,8 @@ fun ScheduleSheet(
                             Text("$startStr to $endStr", color = GZTextSecondary, fontSize = 13.sp)
                         }
                         Switch(
-                            checked = rule.enabled,
-                            onCheckedChange = { 
+                            checked = rule.isEffectivelyEnabled(),
+                            onCheckedChange = {
                                 scheduleManager.toggleRule(rule.id, it)
                                 reloadRules()
                             },

@@ -20,22 +20,22 @@ class PerAppLimitsTest {
     }
 
     @Test
-    fun `session minutes clamp to 1 minute through 24 hours`() {
-        assertEquals(1, PerAppLimits.sessionMinutes(true, 0, 10))
-        assertEquals(1, PerAppLimits.sessionMinutes(true, -5, 10))
-        assertEquals(24 * 60, PerAppLimits.sessionMinutes(true, 99_999, 10))
+    fun `session minutes clamp to ConfigValidator range`() {
+        assertEquals(ConfigValidator.SESSION_MINUTES_RANGE.first, PerAppLimits.sessionMinutes(true, 0, 10))
+        assertEquals(ConfigValidator.SESSION_MINUTES_RANGE.first, PerAppLimits.sessionMinutes(true, -5, 10))
+        assertEquals(ConfigValidator.SESSION_MINUTES_RANGE.last, PerAppLimits.sessionMinutes(true, 99_999, 10))
     }
 
     @Test
-    fun `lockout minutes clamp to 15 through 24 hours`() {
-        assertEquals(15, PerAppLimits.lockoutMinutes(true, 1, 60))
-        assertEquals(15, PerAppLimits.lockoutMinutes(true, 14, 60))
-        assertEquals(24 * 60, PerAppLimits.lockoutMinutes(true, 99_999, 60))
+    fun `lockout minutes clamp to per-app ConfigValidator range`() {
+        assertEquals(ConfigValidator.PER_APP_LOCKOUT_MINUTES_RANGE.first, PerAppLimits.lockoutMinutes(true, 1, 60))
+        assertEquals(ConfigValidator.PER_APP_LOCKOUT_MINUTES_RANGE.first, PerAppLimits.lockoutMinutes(true, 14, 60))
+        assertEquals(ConfigValidator.PER_APP_LOCKOUT_MINUTES_RANGE.last, PerAppLimits.lockoutMinutes(true, 99_999, 60))
     }
 
     @Test
-    fun `wait seconds clamp to 1 through 60`() {
-        assertEquals(1, PerAppLimits.waitSeconds(true, 0, 5))
-        assertEquals(60, PerAppLimits.waitSeconds(true, 120, 5))
+    fun `wait seconds clamp to ConfigValidator range`() {
+        assertEquals(ConfigValidator.WAIT_SECONDS_RANGE.first, PerAppLimits.waitSeconds(true, 0, 5))
+        assertEquals(ConfigValidator.WAIT_SECONDS_RANGE.last, PerAppLimits.waitSeconds(true, 120, 5))
     }
 }

@@ -43,11 +43,20 @@ class MainActivity : ComponentActivity() {
         // Covers devices that revoke all-files access on clear-data: the onCreate restore in
         // GrayzoneApplication couldn't read the hidden backup without the permission, but once the
         // user returns from granting it, restore what was wiped. Runs before super so the UI's
-        // ON_RESUME screen re-evaluation sees the restored prefs. Cheap no-op once state is present.
-        if (StateBackupManager.hasAllFilesAccess(this)) {
-            StateBackupManager.restoreIfWiped(this)
-        } else {
-            requestAllFilesAccessOnce(this)
+        // ON_RESUME screen re-evaluation sees the restored prefs.
+        // F-044: skip binder + decrypt after a successful restore this process; otherwise cheap
+        // ONBOARDING_COMPLETED sentinel before hasAllFilesAccess.
+        if (!StateBackupManager.restoredThisProcess) {
+            val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+            if (!prefs.contains(PrefsKeys.ONBOARDING_COMPLETED)) {
+                if (StateBackupManager.hasAllFilesAccess(this)) {
+                    // F-088: clearing the prompt flag on grant lets a later revoke re-prompt.
+                    prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, false).apply()
+                    StateBackupManager.restoreIfWiped(this)
+                } else {
+                    requestAllFilesAccessOnce(this)
+                }
+            }
         }
         super.onResume()
     }
@@ -84,28 +93,48 @@ class MainActivity : ComponentActivity() {
  * live in a hidden folder that survives a data/cache wipe. If declined, the backup silently falls
  * back to a visible location, so this is best-effort and never blocks the app.
  */
-private fun requestAllFilesAccessOnce(context: Context) {
-    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
-    if (android.os.Environment.isExternalStorageManager()) return
+/**
+ * Prompts for storage access used by the anti-tamper backup.
+ * - API 30+: all-files manager settings
+ * - API 29 (F-131): runtime [WRITE_EXTERNAL_STORAGE] via [onRequestWriteStorage]
+ */
+private fun requestAllFilesAccessOnce(
+    context: Context,
+    onRequestWriteStorage: (() -> Unit)? = null
+) {
     val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-    if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
-    prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
-    try {
-        context.startActivity(
-            Intent(
-                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                android.net.Uri.parse("package:${context.packageName}")
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    } catch (_: Exception) {
-        try {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (_: Exception) {
-            // No settings activity available; fallback storage will be used.
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+        // F-131: on API 29 the backup needs the legacy write permission.
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return
         }
+        if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
+        onRequestWriteStorage?.invoke()
+        return
+    }
+    if (android.os.Environment.isExternalStorageManager()) return
+    if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
+    // F-209: only suppress future prompts after a successful settings launch.
+    val primary = Intent(
+        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+        android.net.Uri.parse("package:${context.packageName}")
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (startActivitySafely(context, primary, "allFilesAccess", showToast = false)) {
+        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
+        return
+    }
+    val fallback = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (startActivitySafely(context, fallback, "allFilesAccessFallback", showToast = false)) {
+        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
+    } else {
+        GrayzoneLogger.w(
+            LogComponent.BOOT,
+            "All-files settings unavailable; will retry later"
+        )
     }
 }
 
@@ -166,8 +195,10 @@ private fun startRestoredVpn(context: Context) {
             }
         )
         VpnHoldExpiryScheduler.rearmFromPrefs(context)
-    } catch (_: Exception) {
-        // Best-effort; the user can still enable the VPN manually from the VPN screen.
+    } catch (e: Exception) {
+        // F-208: fail closed on health — UI must not keep showing a live hold while tunnel is off.
+        GrayzoneLogger.e(LogComponent.BOOT, "Failed to resume restored VPN", e)
+        ProtectionHealthRepository.markVpnReconnectPending(true)
     }
 }
 
@@ -232,7 +263,26 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
 
     val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { granted ->
+        // F-086: do not silently discard the result — surface denial in logs / health.
+        if (!granted) {
+            GrayzoneLogger.w(
+                LogComponent.BOOT,
+                "POST_NOTIFICATIONS denied — ongoing protection notification may be hidden"
+            )
+        }
+    }
+
+    val writeStorageLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        // F-131/F-209: only suppress re-prompt after the system dialog was shown.
+        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
+        if (!granted) {
+            GrayzoneLogger.w(LogComponent.BOOT, "WRITE_EXTERNAL_STORAGE denied — anti-tamper backup inert on API 29")
+        }
+    }
 
     // Re-grants VPN consent after a reinstall/clear-data wiped it. On approval we resume the tunnel
     // with the restored 24h hold; nothing to do on denial (the honest countdown keeps showing off).
@@ -244,6 +294,56 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
         }
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, vpnConsentLauncher) {
+        fun runVpnReconcile() {
+            reconcileVpnState(context) { consentIntent ->
+                try {
+                    vpnConsentLauncher.launch(consentIntent)
+                } catch (e: Exception) {
+                    // F-210: consent UI missing must not leave hold UI looking healthy.
+                    GrayzoneLogger.w(
+                        LogComponent.BOOT,
+                        "VPN consent activity unavailable: ${e.message}"
+                    )
+                    ProtectionHealthRepository.markVpnReconnectPending(true)
+                }
+            }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // After Force stop the OS clears Accessibility and blocks self-start until the user
+                // opens Grayzone again — re-sync health and restart OverlayService when grants return.
+                val a11yOn = isAccessibilityServiceEnabled(context)
+                ProtectionHealthRepository.updateAccessibilityStatus(a11yOn)
+                if (a11yOn && Settings.canDrawOverlays(context)) {
+                    try {
+                        context.startForegroundService(Intent(context, OverlayService::class.java))
+                    } catch (e: Exception) {
+                        GrayzoneLogger.e(
+                            LogComponent.OVERLAY,
+                            "Failed to restart OverlayService on resume: ${e.message}"
+                        )
+                        ProtectionHealthRepository.updateOverlayStatus(false)
+                    }
+                } else {
+                    ProtectionHealthRepository.updateOverlayStatus(false)
+                }
+                // F-089: re-check VPN consent whenever the user returns to the app.
+                runVpnReconcile()
+                // F-086: re-check notifications on every resume (not only the one-shot request).
+                if (!areAppNotificationsEnabled(context)) {
+                    GrayzoneLogger.w(
+                        LogComponent.BOOT,
+                        "Notifications disabled — ongoing protection notification may be hidden"
+                    )
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LaunchedEffect(Unit) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (androidx.core.content.ContextCompat.checkSelfPermission(
@@ -253,13 +353,27 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        requestAllFilesAccessOnce(context)
-        context.startForegroundService(Intent(context, OverlayService::class.java))
+        requestAllFilesAccessOnce(context) {
+            writeStorageLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        try {
+            context.startForegroundService(Intent(context, OverlayService::class.java))
+        } catch (e: Exception) {
+            GrayzoneLogger.e(
+                LogComponent.OVERLAY,
+                "Failed to start OverlayService from MainScreen",
+                e
+            )
+        }
         reconcileVpnState(context) { consentIntent ->
             try {
                 vpnConsentLauncher.launch(consentIntent)
-            } catch (_: Exception) {
-                // No VPN consent activity available; the user can enable the VPN manually.
+            } catch (e: Exception) {
+                GrayzoneLogger.w(
+                    LogComponent.BOOT,
+                    "VPN consent activity unavailable: ${e.message}"
+                )
+                ProtectionHealthRepository.markVpnReconnectPending(true)
             }
         }
     }

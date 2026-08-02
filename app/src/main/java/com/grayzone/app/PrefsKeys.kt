@@ -35,6 +35,14 @@ object PrefsKeys {
     const val ACTIVE_UNTIL       = "active_until_"
     const val LOCKED_UNTIL       = "locked_until_"
     const val REMAINING_MILLIS   = "remaining_millis_"
+    /** elapsedRealtime when the current active-until window was set (0 = wall-only). */
+    const val ACTIVE_STARTED_ELAPSED = "active_started_elapsed_"
+    /** Duration ms of the active window from ACTIVE_STARTED_ELAPSED. */
+    const val ACTIVE_DURATION_MS = "active_duration_ms_"
+    /** elapsedRealtime when the current lockout was set (0 = wall-only). */
+    const val LOCKED_STARTED_ELAPSED = "locked_started_elapsed_"
+    /** Duration ms of the lockout from LOCKED_STARTED_ELAPSED. */
+    const val LOCKED_DURATION_MS = "locked_duration_ms_"
 
     // App list
     const val MONITORED_APPS     = "monitored_apps"
@@ -56,10 +64,17 @@ object PrefsKeys {
     const val SCHEDULE_RULES_JSON     = "schedule_rules_json"
     const val FOCUS_MODE_ACTIVE       = "focus_mode_active"
     const val FOCUS_MODE_UNTIL        = "focus_mode_until"
+    const val FOCUS_STARTED_ELAPSED   = "focus_started_elapsed"
+    const val FOCUS_DURATION_MS       = "focus_duration_ms"
 
     // ── Daily Break (1 hour/day where nothing is locked) ──────────────────
     const val BREAK_UNTIL             = "break_until"
     const val BREAK_USED_DATE         = "break_used_date"   // "yyyy-MM-dd", once per day
+    const val BREAK_STARTED_ELAPSED   = "break_started_elapsed"
+    const val BREAK_DURATION_MS_KEY   = "break_duration_ms"
+
+    /** Zone ID last used for daily date-key resets; TZ jump must not clear lockouts. */
+    const val DAILY_RESET_ZONE_ID     = "daily_reset_zone_id"
 
     // ── VPN app bypass ─────────────────────────────────────────────────────
     /** Extra packages the user excluded from the VPN tunnel. */

@@ -1,16 +1,21 @@
 package com.grayzone.app.ui
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import com.grayzone.app.PrefsKeys
+import com.grayzone.app.SetupRequirement
 import com.grayzone.app.SetupRequirements
+import com.grayzone.app.appInfoSettingsIntent
 import com.grayzone.app.isAccessibilityServiceEnabled
+import com.grayzone.app.settingsIntentFor
+import com.grayzone.app.startActivitySafely
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -57,21 +62,28 @@ fun OnboardingScreen(onContinue: () -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(GZBackground).padding(24.dp), verticalArrangement = Arrangement.Center) {
+    // F-160: scrollable column so large font / landscape never clips permission CTAs.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GZBackground)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
         Text("Welcome to Grayzone", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
         Text("To provide friction, Grayzone needs these permissions:", color = GZTextSecondary)
         Spacer(Modifier.height(32.dp))
-        
-        // Permission 1: Usage Access
+
+        // Permission 1: Accessibility
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (hasUsageAccess) GZGreenContainer else GZSurface)
                 .border(
-                    1.dp, 
-                    if (hasUsageAccess) GZGreen else GZBorder, 
+                    1.dp,
+                    if (hasUsageAccess) GZGreen else GZBorder,
                     RoundedCornerShape(12.dp)
                 )
                 .padding(16.dp)
@@ -101,7 +113,13 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             if (!hasUsageAccess) {
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                    onClick = {
+                        startActivitySafely(
+                            context,
+                            settingsIntentFor(context, SetupRequirement.ACCESSIBILITY),
+                            "onboardingAccessibility"
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = GZPrimary,
@@ -110,11 +128,37 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 ) {
                     Text("Grant Accessibility")
                 }
+                // F-092: sideloaded installs on Android 13+ may need Allow restricted settings.
+                if (SetupRequirements.needsRestrictedSettingsHint(
+                        Build.VERSION.SDK_INT,
+                        SetupRequirement.ACCESSIBILITY
+                    )
+                ) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "On Android 13+, apps installed from a file must first allow " +
+                            "restricted settings: ⋮ → Allow restricted settings.",
+                        color = GZTextSecondary,
+                        fontSize = 12.sp
+                    )
+                    TextButton(
+                        onClick = {
+                            startActivitySafely(
+                                context,
+                                appInfoSettingsIntent(context),
+                                "onboardingAppInfo"
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open app info")
+                    }
+                }
             }
         }
-        
+
         Spacer(Modifier.height(16.dp))
-        
+
         // Permission 2: Overlay
         Column(
             modifier = Modifier
@@ -153,7 +197,13 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             if (!hasOverlay) {
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) },
+                    onClick = {
+                        startActivitySafely(
+                            context,
+                            settingsIntentFor(context, SetupRequirement.OVERLAY),
+                            "onboardingOverlay"
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = GZPrimary,
@@ -164,9 +214,9 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 }
             }
         }
-        
+
         Spacer(Modifier.height(16.dp))
-        
+
         // Permission 3: Battery Optimization
         Column(
             modifier = Modifier
@@ -205,11 +255,17 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             if (!hasBatteryOpt) {
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { 
-                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = Uri.parse("package:${context.packageName}")
+                    onClick = {
+                        startActivitySafely(
+                            context,
+                            settingsIntentFor(context, SetupRequirement.BATTERY),
+                            "onboardingBattery",
+                            showToast = false
+                        )
+                        // F-061: follow with OEM-specific autostart / no-kill screen when needed.
+                        if (com.grayzone.app.OemBatteryHelper.needsOemOptimization()) {
+                            com.grayzone.app.OemBatteryHelper.openBatterySettings(context)
                         }
-                        context.startActivity(intent)
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
@@ -220,14 +276,29 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                     Text("Exclude from Battery Opt")
                 }
             }
+            if (hasBatteryOpt && com.grayzone.app.OemBatteryHelper.needsOemOptimization()) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    com.grayzone.app.OemBatteryHelper.getOptimizationInstructions(),
+                    color = GZTextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = { com.grayzone.app.OemBatteryHelper.openBatterySettings(context) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Open ${com.grayzone.app.OemBatteryHelper.getManufacturerName()} battery settings")
+                }
+            }
         }
-        
+
         // Battery exemption is recommended, not required — gating "Continue" on it would trap
         // users who decline it, so only the two functional permissions block entry.
         if (hasUsageAccess && hasOverlay) {
             Spacer(Modifier.height(32.dp))
             Button(
-                onClick = onContinue, 
+                onClick = onContinue,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = GZPrimary,

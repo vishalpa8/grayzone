@@ -1,5 +1,7 @@
 package com.grayzone.app.service.overlay
 
+import com.grayzone.app.data.ConfigValidator
+
 /** Friction / pause screen shown before a session starts. */
 object FrictionPresentation : OverlayPresentation {
     override val title = "Pause."
@@ -10,9 +12,16 @@ object FrictionPresentation : OverlayPresentation {
     override fun bodyText(prompt: String) = "\u201C$prompt\u201D"
     override fun countdownText(secondsRemaining: Int) = "$secondsRemaining"
     override fun subText(secondsRemaining: Int) = "Opening in $secondsRemaining seconds…"
-    override fun initialSeconds(inputs: SecondsInputs) = inputs.waitSeconds
+    // F-100: never allow 0/negative wait to skip friction via prefs type drift.
+    override fun initialSeconds(inputs: SecondsInputs) =
+        inputs.waitSeconds.coerceIn(ConfigValidator.WAIT_SECONDS_RANGE)
 
     override fun onCountdownFinished(ctx: CountdownFinishContext) {
+        // F-095: never grant a session if the user already left (or screen went off).
+        if (!ctx.isStillForeground()) {
+            ctx.dismissOverlay()
+            return
+        }
         ctx.markAppUnlocked()
         ctx.dismissOverlay()
     }

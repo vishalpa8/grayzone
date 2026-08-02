@@ -47,12 +47,21 @@ object SessionExpiryScheduler {
             if (canExact) {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, activeUntil, pi)
             } else {
+                // F-003: inexact path is the default on API 31+ without exact-alarm permission.
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, activeUntil, pi)
+                GrayzoneLogger.w(
+                    LogComponent.OVERLAY,
+                    "Exact alarms unavailable; session lock for $packageName may be delayed under Doze"
+                )
             }
         } catch (e: SecurityException) {
             // Exact-alarm permission changed between check and call — fall back to the inexact path.
             try {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, activeUntil, pi)
+                GrayzoneLogger.w(
+                    LogComponent.OVERLAY,
+                    "Exact alarms unavailable; session lock for $packageName may be delayed under Doze"
+                )
             } catch (e2: Exception) {
                 GrayzoneLogger.e(
                     LogComponent.OVERLAY,

@@ -29,10 +29,11 @@ class OverlayPresentationTest {
     }
 
     @Test
-    fun `resolve defaults unknown modes to friction`() {
-        assertSame(FrictionPresentation, OverlayPresentation.resolve(3))
-        assertSame(FrictionPresentation, OverlayPresentation.resolve(4))
-        assertSame(FrictionPresentation, OverlayPresentation.resolve(9999))
+    fun `resolve fails closed for unknown modes`() {
+        assertSame(FrictionPresentation, OverlayPresentation.resolve(OverlayMode.FRICTION))
+        assertSame(LockPresentation, OverlayPresentation.resolve(3))
+        assertSame(LockPresentation, OverlayPresentation.resolve(4))
+        assertSame(LockPresentation, OverlayPresentation.resolve(9999))
     }
 
     @Test
@@ -69,7 +70,7 @@ class OverlayPresentationTest {
         assertEquals("Locked.", p.title)
         assertEquals("$arrow Leave App", p.skipButtonLabel)
         assertFalse(p.showsProgress)
-        assertEquals(72f, p.countdownTextSizeSp)
+        assertEquals(24f, p.countdownTextSizeSp) // F-097: was 72f (clipped)
         assertEquals("Daily usage limit reached.", p.bodyText("ignored"))
         assertEquals(dash, p.countdownText(123))
         assertEquals("Resets tomorrow", p.subText(123))
@@ -82,7 +83,7 @@ class OverlayPresentationTest {
         assertEquals("Locked.", p.title)
         assertEquals("$arrow Leave App", p.skipButtonLabel)
         assertFalse(p.showsProgress)
-        assertEquals(72f, p.countdownTextSizeSp)
+        assertEquals(24f, p.countdownTextSizeSp) // F-097: was 72f (clipped)
         assertEquals("Focus mode / schedule is active.", p.bodyText("ignored"))
         assertEquals(dash, p.countdownText(123))
         assertEquals("Try again later", p.subText(123))
@@ -104,6 +105,24 @@ class OverlayPresentationTest {
             )
         )
         assertTrue(unlocked)
+        assertTrue(dismissed)
+    }
+
+    @Test
+    fun `friction countdown finish does not unlock when app left`() {
+        var unlocked = false
+        var dismissed = false
+        FrictionPresentation.onCountdownFinished(
+            CountdownFinishContext(
+                packageName = "pkg",
+                appName = "App",
+                markAppUnlocked = { unlocked = true },
+                dismissOverlay = { dismissed = true },
+                isStillForeground = { false },
+                showFriction = { throw AssertionError("should not re-show") }
+            )
+        )
+        assertFalse(unlocked)
         assertTrue(dismissed)
     }
 

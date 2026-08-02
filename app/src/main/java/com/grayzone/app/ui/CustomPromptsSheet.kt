@@ -19,7 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.grayzone.app.GrayzoneLogger
+import com.grayzone.app.LogComponent
 import com.grayzone.app.Prompts
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.ui.theme.*
@@ -32,25 +33,26 @@ fun CustomPromptsSheet(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     val gson = remember { Gson() }
-    
+
     var useCustomOnly by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.USE_CUSTOM_PROMPTS_ONLY, false)) }
-    
-    val initialPrompts = remember {
-        val json = prefs.getString(PrefsKeys.CUSTOM_PROMPTS_JSON, null)
-        if (json != null) {
-            try {
-                val type = object : TypeToken<List<String>>() {}.type
-                gson.fromJson<List<String>>(json, type) ?: emptyList()
-            } catch (e: Exception) { emptyList() }
-        } else {
-            emptyList()
+
+    // F-148: corrupt JSON must not be treated as emptyList() then persisted over the real value.
+    val parsedPrompts = remember {
+        val parsed = Prompts.parseCustom(prefs.getString(PrefsKeys.CUSTOM_PROMPTS_JSON, null), gson)
+        if (parsed == null) {
+            GrayzoneLogger.e(
+                LogComponent.PREFS,
+                "custom prompts JSON unparseable; refusing to overwrite"
+            )
         }
+        parsed
     }
-    
-    var prompts by remember { mutableStateOf(initialPrompts) }
+    val promptsCorrupt = parsedPrompts == null
+    var prompts by remember { mutableStateOf(parsedPrompts ?: emptyList()) }
     var newPrompt by remember { mutableStateOf("") }
-    
+
     fun savePrompts(newList: List<String>) {
+        if (!Prompts.mayOverwrite(parsedPrompts)) return
         prompts = newList
         prefs.edit().putString(PrefsKeys.CUSTOM_PROMPTS_JSON, gson.toJson(newList)).apply()
     }
@@ -73,11 +75,20 @@ fun CustomPromptsSheet(
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text("Add your own reflection questions to the pause screen.", color = GZTextSecondary, fontSize = 14.sp)
-            
-            Spacer(Modifier.height(24.dp))
-            
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            if (promptsCorrupt) {
+                Text(
+                    "Your saved prompts could not be read. Add/delete is disabled so nothing is overwritten.",
+                    color = GZRed,
+                    fontSize = 14.sp
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -88,10 +99,11 @@ fun CustomPromptsSheet(
                 }
                 Switch(
                     checked = useCustomOnly,
-                    onCheckedChange = { 
+                    onCheckedChange = {
                         useCustomOnly = it
                         prefs.edit().putBoolean(PrefsKeys.USE_CUSTOM_PROMPTS_ONLY, it).apply()
                     },
+                    enabled = !promptsCorrupt,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = GZPrimary,
@@ -100,15 +112,15 @@ fun CustomPromptsSheet(
                     )
                 )
             }
-            
-            Spacer(Modifier.height(24.dp))
+
+            Spacer(modifier = Modifier.height(24.dp))
             Divider(color = GZBorder, thickness = 0.5.dp)
-            Spacer(Modifier.height(24.dp))
-            
-            // Add new prompt
+            Spacer(modifier = Modifier.height(24.dp))
+
             OutlinedTextField(
                 value = newPrompt,
                 onValueChange = { newPrompt = it },
+                enabled = !promptsCorrupt,
                 label = { Text("New Prompt", color = GZTextTertiary) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = GZPrimary,
@@ -121,23 +133,33 @@ fun CustomPromptsSheet(
                 trailingIcon = {
                     IconButton(
                         onClick = {
-                            if (newPrompt.isNotBlank()) {
+                            if (!promptsCorrupt && newPrompt.isNotBlank()) {
                                 savePrompts(prompts + newPrompt.trim())
                                 newPrompt = ""
                             }
                         },
-                        enabled = newPrompt.isNotBlank()
+                        enabled = !promptsCorrupt && newPrompt.isNotBlank()
                     ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add", tint = if (newPrompt.isNotBlank()) GZPrimary else GZTextTertiary)
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "Add",
+                            tint = if (!promptsCorrupt && newPrompt.isNotBlank()) GZPrimary else GZTextTertiary
+                        )
                     }
                 }
             )
-            
-            Spacer(Modifier.height(32.dp))
+
+            Spacer(modifier = Modifier.height(32.dp))
             Text("Your Prompts", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-            Spacer(Modifier.height(16.dp))
-            
-            if (prompts.isEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (promptsCorrupt) {
+                Text(
+                    "Stored prompts are unreadable — original JSON left untouched.",
+                    color = GZTextTertiary,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            } else if (prompts.isEmpty()) {
                 Text("No custom prompts added yet.", color = GZTextTertiary, modifier = Modifier.padding(bottom = 16.dp))
             } else {
                 prompts.forEachIndexed { index, prompt ->
@@ -163,18 +185,18 @@ fun CustomPromptsSheet(
                         Divider(color = GZBorder.copy(alpha = 0.5f), thickness = 0.5.dp)
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
             }
-            
+
             if (!useCustomOnly) {
                 Divider(color = GZBorder, thickness = 0.5.dp)
-                Spacer(Modifier.height(24.dp))
-                
+                Spacer(modifier = Modifier.height(24.dp))
+
                 Text("Default Prompts", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                Spacer(Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text("These will be shown randomly alongside your custom prompts.", color = GZTextSecondary, fontSize = 13.sp)
-                Spacer(Modifier.height(16.dp))
-                
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Prompts.DEFAULT.forEachIndexed { index, prompt ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),

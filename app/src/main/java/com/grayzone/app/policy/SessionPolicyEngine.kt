@@ -14,7 +14,13 @@ class SessionPolicyEngine {
      * Evaluates a given event against the current state and returns a list of commands 
      * (side-effects) to be executed by the service.
      */
-    fun evaluate(event: AppEvent, state: SessionState, now: Long, appName: String): List<SessionCommand> {
+    fun evaluate(
+        event: AppEvent,
+        state: SessionState,
+        now: Long,
+        appName: String,
+        nowElapsed: Long = -1L
+    ): List<SessionCommand> {
         val commands = mutableListOf<SessionCommand>()
 
         // 1. Global kill switch check
@@ -53,13 +59,13 @@ class SessionPolicyEngine {
                 // checked lockout first, re-foregrounding mid-session would wrongly show
                 // the lockout screen counting down `sessionRemaining + lockout`
                 // (e.g. "1h 3m") even though the session still has time left.
-                if (state.hasActiveSession(now)) {
+                if (state.hasActiveSession(now, nowElapsed)) {
                     commands.add(SessionCommand.DismissOverlay)
                     return commands
                 }
 
                 // Currently locked out? (Penalty box)
-                if (state.isLockedOut(now)) {
+                if (state.isLockedOut(now, nowElapsed)) {
                     commands.add(SessionCommand.ShowLockoutScreen(state.packageName, appName, state.lockedUntil))
                     return commands
                 }
@@ -98,7 +104,7 @@ class SessionPolicyEngine {
 
                 // No active session, not locked out, budget exists.
                 // Action: Show the wait screen (Countdown).
-                commands.add(SessionCommand.ShowWaitScreen(state.packageName, appName, DEFAULT_WAIT_SECONDS))
+                commands.add(SessionCommand.ShowWaitScreen(state.packageName, appName, state.waitSeconds))
             }
 
             is AppEvent.AppBackgrounded -> {

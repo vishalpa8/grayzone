@@ -7,6 +7,10 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+kotlin {
+    jvmToolchain(21)
+}
+
 // Release signing credentials are read from a git-ignored keystore.properties at the repo root so
 // no secret ever lives in version control. When the file is absent (fresh clone, CI without secrets)
 // the release signing config is simply not created and release builds stay unsigned — debug builds
@@ -66,6 +70,18 @@ android {
                 "proguard-rules.pro"
             )
         }
+        debug {
+            // Make the everyday build behave like what ships: NOT debuggable, and signed with the
+            // SAME release key (when keystore.properties is present). This way `installDebug` (and the
+            // IDE Run button) always installs a signed, non-debuggable app whose signature matches the
+            // distributed release APK — so the two are interchangeable on-device with no "signature
+            // mismatch" uninstall. Minify stays off so builds stay fast. Without the keystore
+            // (fresh clone/CI) it silently falls back to the default Android debug key.
+            isDebuggable = false
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
@@ -87,8 +103,19 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    lint {
+        // The release-only "lintVital" gate tries to download lint-gradle from dl.google.com. On a
+        // TLS-inspecting network that download fails and blocks the signed build, even though it has
+        // no bearing on the produced APK. Skip it so release builds are reproducible offline/behind a
+        // proxy; run `./gradlew lintDebug` explicitly when you want a lint report.
+        checkReleaseBuilds = false
+    }
     sourceSets {
         getByName("androidTest").assets.srcDirs("$projectDir/schemas")
+    }
+    testOptions {
+        // JVM unit tests call Android framework stubs; without this, SystemClock/Log throw.
+        unitTests.isReturnDefaultValues = true
     }
 }
 

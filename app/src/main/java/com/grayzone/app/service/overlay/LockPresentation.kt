@@ -14,7 +14,10 @@ object LockPresentation : OverlayPresentation {
     override fun subText(secondsRemaining: Int) = "Remaining lockout time"
 
     override fun initialSeconds(inputs: SecondsInputs): Int =
-        ((inputs.lockedUntil - inputs.now) / 1000).coerceAtLeast(0).toInt()
+        // F-103: coerce remaining ms first, then bound the Int conversion.
+        ((inputs.lockedUntil - inputs.now).coerceAtLeast(0) / 1000)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
 
     override fun onCountdownFinished(ctx: CountdownFinishContext) {
         // Lockout expired while the lock screen was showing. Don't grant silent, untracked

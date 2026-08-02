@@ -1,9 +1,10 @@
 package com.grayzone.app
 
-import org.junit.Test
 import org.junit.Assert.assertTrue
+import org.junit.Test
 
-class CleanupAndLoggingTest {
+/** Renamed from CleanupAndLoggingTest (T078 / F-196). */
+class GrayzoneLoggerTest {
     @Test
     fun logger_shouldAllowWarningsAndErrorsInAllBuilds() {
         assertTrue(GrayzoneLogger.shouldLog(LogLevel.WARN))

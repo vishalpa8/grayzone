@@ -14,7 +14,10 @@ object ConfigValidator {
 
     val WAIT_SECONDS_RANGE = 3..30
     val SESSION_MINUTES_RANGE = 1..60
+    /** Global lockout key only — per-app lockouts may use [PER_APP_LOCKOUT_MINUTES_RANGE]. */
     val LOCKOUT_MINUTES_RANGE = 15..(5 * 60)
+    /** Per-app lockout may legitimately reach 24h (PerAppSettingsSheet). */
+    val PER_APP_LOCKOUT_MINUTES_RANGE = 15..(24 * 60)
 
     fun repairWaitSeconds(value: Int): Int =
         if (value in WAIT_SECONDS_RANGE) value else DEFAULT_WAIT_SECONDS

@@ -145,8 +145,8 @@ class ScheduleManagerTest {
 
         manager.toggleRule(a.id, false)
         val rules = manager.getScheduleRules().associateBy { it.id }
-        assertFalse(rules.getValue(a.id).enabled)
-        assertTrue(rules.getValue(b.id).enabled)
+        assertFalse(rules.getValue(a.id).isEffectivelyEnabled())
+        assertTrue(rules.getValue(b.id).isEffectivelyEnabled())
     }
 
     @Test
@@ -166,6 +166,21 @@ class ScheduleManagerTest {
     fun `corrupt schedule json degrades gracefully to an empty list`() {
         prefs.edit().putString(PrefsKeys.SCHEDULE_RULES_JSON, "{not valid json").apply()
         assertTrue(manager.getScheduleRules().isEmpty())
+    }
+
+    @Test
+    fun `malformedJson_doesNotPersistEmptyOnAdd`() {
+        val corrupt = "{not valid json"
+        prefs.edit().putString(PrefsKeys.SCHEDULE_RULES_JSON, corrupt).apply()
+        manager.addRule(
+            ScheduleRule(
+                name = "New",
+                startHour = 9, startMinute = 0, endHour = 10, endMinute = 0,
+                daysOfWeek = setOf(Calendar.MONDAY)
+            )
+        )
+        // Must refuse the write — original corrupt payload stays so a later fix can recover.
+        assertEquals(corrupt, prefs.getString(PrefsKeys.SCHEDULE_RULES_JSON, null))
     }
 
     // ─── isCurrentlyScheduled wiring (deterministic branches) ────────────────

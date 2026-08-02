@@ -5,7 +5,7 @@ object ScheduleLockPresentation : OverlayPresentation {
     override val title = "Locked."
     override val skipButtonLabel = "← Leave App"
     override val showsProgress = false
-    override val countdownTextSizeSp = 72f
+    override val countdownTextSizeSp = 24f // F-097: 72sp clipped lock "—" in landscape / large font
 
     override fun bodyText(prompt: String) = "Focus mode / schedule is active."
     override fun countdownText(secondsRemaining: Int) = "—"

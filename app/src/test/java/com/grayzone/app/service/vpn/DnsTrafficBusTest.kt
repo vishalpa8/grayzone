@@ -45,16 +45,18 @@ class DnsTrafficBusTest {
     }
 
     @Test
-    fun `status values cover allow ad and doh`() {
+    fun `status values cover allow ad doh and failed`() {
         DnsTrafficBus.emit(event("ok.com", DnsTrafficBus.DnsEvent.Status.ALLOWED))
         DnsTrafficBus.emit(event("ad.com", DnsTrafficBus.DnsEvent.Status.BLOCKED_AD))
         DnsTrafficBus.emit(event("doh.com", DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH))
+        DnsTrafficBus.emit(event("fail.com", DnsTrafficBus.DnsEvent.Status.FAILED))
         val statuses = DnsTrafficBus.events.value.map { it.status }.toSet()
         assertEquals(
             setOf(
                 DnsTrafficBus.DnsEvent.Status.ALLOWED,
                 DnsTrafficBus.DnsEvent.Status.BLOCKED_AD,
-                DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH
+                DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH,
+                DnsTrafficBus.DnsEvent.Status.FAILED
             ),
             statuses
         )

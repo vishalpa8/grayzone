@@ -1,7 +1,18 @@
 package com.grayzone.app
 
-/** A permission Grayzone cannot apply friction without. */
-enum class SetupRequirement { ACCESSIBILITY, OVERLAY }
+/** A permission Grayzone cannot apply friction without, or that degrades protection when missing. */
+enum class SetupRequirement {
+    /** Blocking: detection. */
+    ACCESSIBILITY,
+    /** Blocking: pause overlay. */
+    OVERLAY,
+    /** Degrading: ongoing / countdown notifications (API 33+). */
+    NOTIFICATIONS,
+    /** Degrading: anti-tamper state backup. */
+    ALL_FILES,
+    /** Degrading: background survival. */
+    BATTERY,
+}
 
 /**
  * Maps observed permission state to the exact requirement(s) still missing.
@@ -12,21 +23,50 @@ enum class SetupRequirement { ACCESSIBILITY, OVERLAY }
  */
 object SetupRequirements {
 
-    /** Ordered so the first entry is the one to fix next: detection before drawing. */
-    fun missing(accessibilityEnabled: Boolean, overlayEnabled: Boolean): List<SetupRequirement> =
+    private val CORE = setOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY)
+
+    /**
+     * Ordered so the first entry is the one to fix next: detection before drawing,
+     * then degrading grants (notifications, backup, battery).
+     *
+     * Newer parameters default to granted so existing two-arg call sites stay valid
+     * (onboarding still gates on accessibility + overlay only).
+     */
+    fun missing(
+        accessibilityEnabled: Boolean,
+        overlayEnabled: Boolean,
+        notificationsEnabled: Boolean = true,
+        allFilesGranted: Boolean = true,
+        batteryExempt: Boolean = true,
+    ): List<SetupRequirement> =
         buildList {
             if (!accessibilityEnabled) add(SetupRequirement.ACCESSIBILITY)
             if (!overlayEnabled) add(SetupRequirement.OVERLAY)
+            if (!notificationsEnabled) add(SetupRequirement.NOTIFICATIONS)
+            if (!allFilesGranted) add(SetupRequirement.ALL_FILES)
+            if (!batteryExempt) add(SetupRequirement.BATTERY)
         }
 
     fun label(requirement: SetupRequirement): String = when (requirement) {
         SetupRequirement.ACCESSIBILITY -> "Accessibility"
         SetupRequirement.OVERLAY -> "Display over other apps"
+        SetupRequirement.NOTIFICATIONS -> "Notifications"
+        SetupRequirement.ALL_FILES -> "All files access"
+        SetupRequirement.BATTERY -> "Battery exemption"
     }
 
-    fun headline(missing: List<SetupRequirement>): String = when (missing.size) {
-        0 -> "Protection ready"
-        1 -> "${label(missing.first())} is off"
+    /**
+     * Absolute "Protection ready" only when nothing is missing.
+     * Core grants off → name the permission(s).
+     * Only recommended/degrading grants missing → softer copy (not an absolute ready claim).
+     */
+    fun headline(missing: List<SetupRequirement>): String = when {
+        missing.isEmpty() -> "Protection ready"
+        missing.size == 1 -> when (missing.first()) {
+            SetupRequirement.NOTIFICATIONS -> "Notifications are off"
+            else -> "${label(missing.first())} is off"
+        }
+        missing.none { it in CORE } -> "Recommended setup incomplete"
         else -> "${missing.size} permissions are off"
     }
 
@@ -34,14 +74,33 @@ object SetupRequirements {
         0 -> ""
         1 -> when (missing.first()) {
             SetupRequirement.ACCESSIBILITY ->
-                "Grayzone can't see which app is open. Turn on Accessibility for Grayzone."
+                "Grayzone can't see which app is open. Android turns Accessibility off after a Force stop — re-enable it in Settings (toggle off then on if it looks stuck)."
             SetupRequirement.OVERLAY ->
                 "Grayzone can't draw the pause screen. Allow it to display over other apps."
+            SetupRequirement.NOTIFICATIONS ->
+                "Grayzone can't show the ongoing protection or countdown notifications. Allow notifications."
+            SetupRequirement.ALL_FILES ->
+                "Grayzone can't keep a wipe-resistant backup of your settings. Allow all files access."
+            SetupRequirement.BATTERY ->
+                "Battery optimization can stop Grayzone in the background. Exempt it from optimization."
         }
-        else -> "Turn on ${missing.joinToString(" and ") { label(it) }} to monitor apps."
+        else -> {
+            if (missing.none { it in CORE }) {
+                "Recommended: turn on ${missing.joinToString(" and ") { label(it) }} for full protection."
+            } else {
+                "Turn on ${missing.joinToString(" and ") { label(it) }} to monitor apps."
+            }
+        }
     }
 
     /** Label for the action that fixes [missing] next, e.g. "Turn on Accessibility". */
     fun actionLabel(missing: List<SetupRequirement>): String =
         missing.firstOrNull()?.let { "Turn on ${label(it)}" } ?: ""
+
+    /**
+     * Android 13+ can grey out the accessibility toggle for sideloaded installs until the user
+     * allows restricted settings from App info.
+     */
+    fun needsRestrictedSettingsHint(sdkInt: Int, requirement: SetupRequirement): Boolean =
+        sdkInt >= 33 && requirement == SetupRequirement.ACCESSIBILITY
 }

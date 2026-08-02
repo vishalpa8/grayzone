@@ -2,6 +2,7 @@ package com.grayzone.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,5 +50,26 @@ class PromptResolutionTest {
     fun `single custom prompt in custom-only mode is the only option`() {
         val pool = Prompts.resolvePool(listOf("Solo"), useCustomOnly = true)
         assertEquals(listOf("Solo"), pool)
+    }
+
+    @Test
+    fun `parseCustom null json is empty list and mayOverwrite`() {
+        val parsed = Prompts.parseCustom(null)
+        assertEquals(emptyList<String>(), parsed)
+        assertTrue(Prompts.mayOverwrite(parsed))
+    }
+
+    @Test
+    fun `parseCustom valid json returns list`() {
+        val parsed = Prompts.parseCustom("""["Why now?","Is it worth it?"]""")
+        assertEquals(listOf("Why now?", "Is it worth it?"), parsed)
+        assertTrue(Prompts.mayOverwrite(parsed))
+    }
+
+    @Test
+    fun `parseCustom malformed json returns null and refuses overwrite`() {
+        val parsed = Prompts.parseCustom("{ not json")
+        assertNull(parsed)
+        assertFalse(Prompts.mayOverwrite(parsed))
     }
 }

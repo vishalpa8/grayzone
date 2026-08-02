@@ -12,6 +12,11 @@
 -keep class * implements com.google.gson.TypeAdapterFactory
 -keep class * implements com.google.gson.JsonSerializer
 -keep class * implements com.google.gson.JsonDeserializer
+# Keep generic signatures on Gson TypeToken subclasses (F-125 — R8 was stripping these).
+-keep class * extends com.google.gson.reflect.TypeToken { *; }
+-keepattributes Signature
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
 # Keep data classes serialized with Gson (ScheduleRule, Achievement, etc.)
 -keep class com.grayzone.app.data.ScheduleRule { *; }
@@ -26,7 +31,7 @@
 }
 
 # ── Accessibility Service ─────────────────────────────────────────────────────
--keep class com.grayzone.app.service.AppAccessibilityService { *; }
+-keep class com.grayzone.app.service.GrayzoneAccessibilityService { *; }
 -keep class com.grayzone.app.service.OverlayService          { *; }
 
 # ── MainActivity (used in PendingIntent) ──────────────────────────────────────

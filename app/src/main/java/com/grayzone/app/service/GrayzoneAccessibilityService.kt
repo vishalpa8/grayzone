@@ -3,6 +3,7 @@ package com.grayzone.app.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
@@ -31,7 +32,12 @@ class GrayzoneAccessibilityService : AccessibilityService() {
         private const val TAG = "GZAccessibility"
         const val ACTION_APP_CHANGED = "com.grayzone.app.APP_CHANGED"
         const val EXTRA_PACKAGE_NAME = "package_name"
+        /** Avoid hammering startForegroundService after OEM kills / FGS denials (can trigger a11y disable). */
+        private const val WATCHDOG_MIN_INTERVAL_MS = 5_000L
     }
+
+    @Volatile
+    private var lastWatchdogElapsedMs: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -53,13 +59,30 @@ class GrayzoneAccessibilityService : AccessibilityService() {
             }
 
             serviceInfo = info
-            com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(true)
             Log.d(TAG, "Accessibility service connected - monitoring foreground app changes")
+            // Cross-process: health + notification live in the default process (F-080).
+            requestProtectionStatusRefresh()
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.ACCESSIBILITY,
                 "onServiceConnected failed",
                 e
+            )
+        }
+    }
+
+    private fun requestProtectionStatusRefresh() {
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(
+                this,
+                Intent(this, OverlayService::class.java).apply {
+                    action = OverlayService.ACTION_REFRESH_PROTECTION_STATUS
+                }
+            )
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.w(
+                com.grayzone.app.LogComponent.ACCESSIBILITY,
+                "Failed to refresh protection status: ${e.message}"
             )
         }
     }
@@ -88,6 +111,28 @@ class GrayzoneAccessibilityService : AccessibilityService() {
                 putExtra(EXTRA_PACKAGE_NAME, packageName)
                 setPackage(this@GrayzoneAccessibilityService.packageName)
             })
+
+            // Watchdog: Ensure OverlayService is running (restarts it if swipe-away/crash killed it).
+            // Rate-limit: after force-stop / FGS denial, unbounded retries can crash-loop the default
+            // process and push the OS to disable this accessibility service.
+            val nowElapsed = SystemClock.elapsedRealtime()
+            if (nowElapsed - lastWatchdogElapsedMs >= WATCHDOG_MIN_INTERVAL_MS) {
+                lastWatchdogElapsedMs = nowElapsed
+                try {
+                    androidx.core.content.ContextCompat.startForegroundService(
+                        this@GrayzoneAccessibilityService,
+                        Intent(this@GrayzoneAccessibilityService, OverlayService::class.java).apply {
+                            action = OverlayService.ACTION_APP_CHANGED_WATCHDOG
+                            putExtra(EXTRA_PACKAGE_NAME, packageName)
+                        }
+                    )
+                } catch (e: Exception) {
+                    com.grayzone.app.GrayzoneLogger.w(
+                        com.grayzone.app.LogComponent.ACCESSIBILITY,
+                        "Failed to watchdog OverlayService: ${e.message}"
+                    )
+                }
+            }
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.ACCESSIBILITY,
@@ -103,7 +148,17 @@ class GrayzoneAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
         Log.d(TAG, "Accessibility service destroyed")
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        com.grayzone.app.GrayzoneLogger.w(
+            com.grayzone.app.LogComponent.ACCESSIBILITY,
+            "Accessibility service unbound by the system (force-stop, Settings revoke, or crash)"
+        )
+        // Do NOT startForegroundService here. Force-stop / unbind races with process death; starting
+        // an FGS from a dying :a11y process commonly throws and can worsen OS accessibility disable.
+        // Main process refreshes health on next user-visible launch (Application / MainScreen).
+        return super.onUnbind(intent)
     }
 }

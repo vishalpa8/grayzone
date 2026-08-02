@@ -43,6 +43,12 @@ class BootReceiver : BroadcastReceiver() {
             Log.e(TAG, "Failed to start OverlayService: ${e.message}")
         }
 
+        // F-010: BootReceiver cannot restart the :a11y process — surface the gap in health state.
+        if (!com.grayzone.app.isAccessibilityServiceEnabled(context)) {
+            com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
+            Log.w(TAG, "Accessibility service not enabled after boot — protection incomplete")
+        }
+
         // Only restart AdBlockVpnService if the user previously enabled the VPN.
         // If a 24h hold was tracked but already expired across the reboot, clear intent and skip.
         if (prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) {
@@ -55,10 +61,22 @@ class BootReceiver : BroadcastReceiver() {
                 Log.d(TAG, "VPN hold expired across reboot — cleared enable flag, not restarting")
                 return
             }
+            // F-012: re-arm hold expiry for every still-active hold outcome (consent missing /
+            // start failure included). Alarms do not survive reboot.
+            if (VpnHoldLock.isHoldActive(holdState, nowWall, nowElapsed)) {
+                VpnHoldExpiryScheduler.rearmFromPrefs(context)
+            }
             // VpnService.prepare() returns non-null when consent is missing (e.g. after a reinstall).
             // Starting the tunnel then would fail inside establish(); skip and let the next app launch
             // resume it once consent is present, rather than churning a failing foreground service.
-            if (android.net.VpnService.prepare(context) != null) {
+            // F-212: prepare() itself can throw on some OEMs — preserve VPN intent on throw.
+            val consentNeeded = try {
+                android.net.VpnService.prepare(context) != null
+            } catch (e: Exception) {
+                Log.e(TAG, "VpnService.prepare failed during boot restore; VPN intent preserved: ${e.message}")
+                return
+            }
+            if (consentNeeded) {
                 Log.d(TAG, "VPN consent missing at boot — skipping restart, intent preserved")
                 return
             }
@@ -68,9 +86,6 @@ class BootReceiver : BroadcastReceiver() {
                 }
                 context.startForegroundService(vpnIntent)
                 Log.d(TAG, "AdBlockVpnService restart requested")
-                if (VpnHoldLock.isHoldActive(holdState, nowWall, nowElapsed)) {
-                    VpnHoldExpiryScheduler.rearmFromPrefs(context)
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start AdBlockVpnService; restore intent preserved: ${e.message}")
             }

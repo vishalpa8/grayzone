@@ -13,6 +13,7 @@ import com.grayzone.app.data.ConfigValidator
 import com.grayzone.app.data.DefaultMonitoredApps
 import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.data.StreakEvaluator
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,8 +33,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class GrayzoneApplication : Application() {
 
     // App-scoped background work (DB-backed catch-up); SupervisorJob so one
-    // failure never tears the scope down for later callers.
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // failure never tears the scope down for later callers. Handler (F-206) keeps
+    // an uncaught backup/streak failure from killing the whole process.
+    private val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, t ->
+            GrayzoneLogger.e(LogComponent.BOOT, "Uncaught exception in appScope", t)
+        }
+    )
 
     // Held so SharedPreferences (which keeps only a weak reference to change listeners) does not
     // let the auto-backup listener be garbage-collected.
@@ -49,6 +55,10 @@ class GrayzoneApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         
+        // The :a11y process must NEVER touch prefs, the backup file, WorkManager, or restore —
+        // SharedPreferences isn't multi-process safe and two writers corrupt the backup.
+        if (Application.getProcessName() != packageName) return
+
         GrayzoneLogger.i(
             LogComponent.BOOT,
             "Grayzone ${BuildConfig.VERSION_NAME} starting on ${android.os.Build.MODEL}"
@@ -59,9 +69,15 @@ class GrayzoneApplication : Application() {
         // services, and the UI). Synchronous by design and kept small so it never ANRs onCreate.
         StateBackupManager.restoreIfWiped(this)
 
-        // Keep onCreate light: this process also hosts GrayzoneAccessibilityService. Heavy or
-        // failing work on the main thread can ANR/crash the process, which makes Android disable
-        // the accessibility service.
+        // Force-stop strips Accessibility in Settings; sync health before UI/services assume it is on.
+        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(
+            isAccessibilityServiceEnabled(this)
+        )
+
+        // Keep onCreate light: this is the main app process. GrayzoneAccessibilityService now runs
+        // in an isolated ":a11y" process (see the manifest), so heavy or failing work here can no
+        // longer ANR/crash the accessibility service — but a light onCreate still avoids UI jank and
+        // slow cold starts, so keep deferring non-critical work.
         validateConfiguration()
         resetRuntimeStateIfNeeded()
         runDeferredStartupWork()
@@ -128,10 +144,14 @@ class GrayzoneApplication : Application() {
         }
     }
 
-    /** Writes the backup only if something changed since the last write, then clears the flag. */
+    /** Writes the backup only if something changed since the last write; clears dirty only on success. */
     private fun flushBackupIfDirty() {
-        if (backupDirty.compareAndSet(true, false)) {
-            appScope.launch { StateBackupManager.writeBackup(this@GrayzoneApplication) }
+        if (!backupDirty.compareAndSet(true, false)) return
+        appScope.launch {
+            // F-063: restore dirty so a skipped/failed write is retried on the next flush.
+            if (!StateBackupManager.writeBackup(this@GrayzoneApplication)) {
+                backupDirty.set(true)
+            }
         }
     }
 
@@ -171,41 +191,54 @@ class GrayzoneApplication : Application() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, MODE_PRIVATE)
         val editor = prefs.edit()
         var needsRepair = false
-        
-        // Validate wait duration (3-30 seconds)
-        val waitSeconds = prefs.getInt(PrefsKeys.WAIT_SECONDS, ConfigValidator.DEFAULT_WAIT_SECONDS)
-        if (!ConfigValidator.isWaitSecondsValid(waitSeconds)) {
-            val repaired = ConfigValidator.repairWaitSeconds(waitSeconds)
-            GrayzoneLogger.w(LogComponent.BOOT, "Invalid WAIT_SECONDS=$waitSeconds, resetting to $repaired")
-            editor.putInt(PrefsKeys.WAIT_SECONDS, repaired)
+
+        // Typed getters can throw ClassCastException after a poisoned/type-drifted restore (F-060).
+        // Never let that escape Application.onCreate.
+        try {
+            val waitSeconds = prefs.getInt(PrefsKeys.WAIT_SECONDS, ConfigValidator.DEFAULT_WAIT_SECONDS)
+            if (!ConfigValidator.isWaitSecondsValid(waitSeconds)) {
+                val repaired = ConfigValidator.repairWaitSeconds(waitSeconds)
+                GrayzoneLogger.w(LogComponent.BOOT, "Invalid WAIT_SECONDS=$waitSeconds, resetting to $repaired")
+                editor.putInt(PrefsKeys.WAIT_SECONDS, repaired)
+                needsRepair = true
+            }
+
+            val sessionMinutes = prefs.getInt(PrefsKeys.SESSION_MINUTES, ConfigValidator.DEFAULT_SESSION_MINUTES)
+            if (!ConfigValidator.isSessionMinutesValid(sessionMinutes)) {
+                val repaired = ConfigValidator.repairSessionMinutes(sessionMinutes)
+                GrayzoneLogger.w(LogComponent.BOOT, "Invalid SESSION_MINUTES=$sessionMinutes, resetting to $repaired")
+                editor.putInt(PrefsKeys.SESSION_MINUTES, repaired)
+                needsRepair = true
+            }
+
+            val lockoutMinutes = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, ConfigValidator.DEFAULT_LOCKOUT_MINUTES)
+            if (!ConfigValidator.isLockoutMinutesValid(lockoutMinutes)) {
+                val repaired = ConfigValidator.repairLockoutMinutes(lockoutMinutes)
+                GrayzoneLogger.w(LogComponent.BOOT, "Invalid LOCKOUT_MINUTES=$lockoutMinutes, resetting to $repaired")
+                editor.putInt(PrefsKeys.LOCKOUT_MINUTES, repaired)
+                needsRepair = true
+            }
+
+            val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, null)
+            if (monitoredApps == null) {
+                editor.putStringSet(PrefsKeys.MONITORED_APPS, emptySet())
+                needsRepair = true
+            }
+        } catch (e: ClassCastException) {
+            GrayzoneLogger.e(
+                LogComponent.BOOT,
+                "Preference type drift in validateConfiguration; resetting corrupted keys",
+                e
+            )
+            editor
+                .remove(PrefsKeys.WAIT_SECONDS)
+                .remove(PrefsKeys.SESSION_MINUTES)
+                .remove(PrefsKeys.LOCKOUT_MINUTES)
+                .remove(PrefsKeys.MONITORED_APPS)
+                .putStringSet(PrefsKeys.MONITORED_APPS, emptySet())
             needsRepair = true
         }
-        
-        // Validate session duration (1-60 minutes)
-        val sessionMinutes = prefs.getInt(PrefsKeys.SESSION_MINUTES, ConfigValidator.DEFAULT_SESSION_MINUTES)
-        if (!ConfigValidator.isSessionMinutesValid(sessionMinutes)) {
-            val repaired = ConfigValidator.repairSessionMinutes(sessionMinutes)
-            GrayzoneLogger.w(LogComponent.BOOT, "Invalid SESSION_MINUTES=$sessionMinutes, resetting to $repaired")
-            editor.putInt(PrefsKeys.SESSION_MINUTES, repaired)
-            needsRepair = true
-        }
-        
-        // Validate lockout duration (15 minutes - 5 hours)
-        val lockoutMinutes = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, ConfigValidator.DEFAULT_LOCKOUT_MINUTES)
-        if (!ConfigValidator.isLockoutMinutesValid(lockoutMinutes)) {
-            val repaired = ConfigValidator.repairLockoutMinutes(lockoutMinutes)
-            GrayzoneLogger.w(LogComponent.BOOT, "Invalid LOCKOUT_MINUTES=$lockoutMinutes, resetting to $repaired")
-            editor.putInt(PrefsKeys.LOCKOUT_MINUTES, repaired)
-            needsRepair = true
-        }
-        
-        // Validate monitored apps is a valid set
-        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, null)
-        if (monitoredApps == null) {
-            editor.putStringSet(PrefsKeys.MONITORED_APPS, emptySet())
-            needsRepair = true
-        }
-        
+
         if (needsRepair) {
             editor.apply()
             GrayzoneLogger.i(
@@ -241,7 +274,11 @@ class GrayzoneApplication : Application() {
                     packageManager.getPackageInfo(pkg, 0)
                 }
                 true
-            } catch (_: Exception) {
+            } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+                false
+            } catch (e: Exception) {
+                // F-216: binder failures are not "not installed" — log and skip, don't seed wrongly.
+                GrayzoneLogger.w(LogComponent.BOOT, "getPackageInfo failed for $pkg: ${e.message}")
                 false
             }
         }.toSet()

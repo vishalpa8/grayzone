@@ -55,16 +55,21 @@ interface OverlayPresentation {
 
     companion object {
         /**
-         * Resolves the strategy for an overlay [mode]. LOCK / BUDGET_LOCK / SCHEDULE_LOCK map to
-         * their dedicated screens; every other value (FRICTION, and defensively anything else)
-         * maps to the friction screen, matching the prior `else`-branch behavior.
-         * Non-screen modes never reach this path.
+         * Resolves the strategy for an overlay [mode]. Known modes map explicitly; unknown
+         * values fail closed to [LockPresentation] so a forgotten entry never grants a session (F-099).
          */
         fun resolve(mode: Int): OverlayPresentation = when (mode) {
+            OverlayMode.FRICTION -> FrictionPresentation
             OverlayMode.LOCK -> LockPresentation
             OverlayMode.BUDGET_LOCK -> BudgetLockPresentation
             OverlayMode.SCHEDULE_LOCK -> ScheduleLockPresentation
-            else -> FrictionPresentation
+            else -> {
+                com.grayzone.app.GrayzoneLogger.w(
+                    com.grayzone.app.LogComponent.OVERLAY,
+                    "Unmapped overlay mode $mode; failing closed to LockPresentation"
+                )
+                LockPresentation
+            }
         }
     }
 }

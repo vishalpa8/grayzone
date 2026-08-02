@@ -2,6 +2,8 @@ package com.grayzone.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 // ─── App Name ─────────────────────────────────────────────────────────────────
 
@@ -72,17 +74,6 @@ fun stayedUnderAllBudgets(
     usedMs < budgetMins * 60 * 1000L
 }
 
-/** Milliseconds until local midnight (start of next calendar day). */
-fun millisUntilMidnight(): Long {
-    val cal = java.util.Calendar.getInstance()
-    cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
-    cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-    cal.set(java.util.Calendar.MINUTE, 0)
-    cal.set(java.util.Calendar.SECOND, 0)
-    cal.set(java.util.Calendar.MILLISECOND, 0)
-    return cal.timeInMillis
-}
-
 // ─── Reflection Prompts (Single Source of Truth) ──────────────────────────────
 
 /**
@@ -122,4 +113,22 @@ object Prompts {
         if (pool.isEmpty()) pool.addAll(DEFAULT)
         return pool
     }
+
+    /**
+     * Parse stored custom-prompts JSON.
+     * - `null` json → empty list (legitimate "no prompts yet")
+     * - valid JSON → the list (null Gson result treated as empty)
+     * - malformed JSON → `null` so writers can refuse to overwrite (F-148)
+     */
+    fun parseCustom(json: String?, gson: Gson = Gson()): List<String>? {
+        if (json == null) return emptyList()
+        return try {
+            val type = object : TypeToken<List<String>>() {}.type
+            gson.fromJson<List<String>>(json, type) ?: emptyList()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun mayOverwrite(parsed: List<String>?): Boolean = parsed != null
 }

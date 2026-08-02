@@ -19,10 +19,6 @@ object DateUtils {
         SimpleDateFormat("yyyy-MM-dd", Locale.US)
     }
     
-    private val timestampFormatter = ThreadLocal.withInitial {
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-    }
-    
     // Cache for current date key (valid for up to 1 minute, but never across midnight).
     @Volatile
     private var cachedDateKey: String? = null
@@ -87,14 +83,6 @@ object DateUtils {
     }
     
     /**
-     * Format a timestamp in "yyyy-MM-dd HH:mm:ss" format.
-     * Used for debug logs and user-facing timestamps.
-     */
-    fun formatTimestamp(timestamp: Long): String {
-        return timestampFormatter.get()!!.format(Date(timestamp))
-    }
-    
-    /**
      * Get milliseconds until next midnight (for scheduling daily resets).
      */
     fun millisUntilMidnight(): Long {
@@ -121,17 +109,5 @@ object DateUtils {
     fun shouldResetDailyRuntimeState(now: Long, lastResetDateKey: String): Boolean {
         val currentDateKey = dateKeyFormatter.get()!!.format(Date(now))
         return lastResetDateKey != currentDateKey
-    }
-    
-    /**
-     * Get the start of today (midnight) in milliseconds.
-     */
-    fun getTodayStartMillis(): Long {
-        val calendar = Calendar.getInstance()
-        calendar.set(Calendar.HOUR_OF_DAY, 0)
-        calendar.set(Calendar.MINUTE, 0)
-        calendar.set(Calendar.SECOND, 0)
-        calendar.set(Calendar.MILLISECOND, 0)
-        return calendar.timeInMillis
     }
 }

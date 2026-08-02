@@ -30,6 +30,7 @@ class AdBlockVpnService : VpnService() {
         const val NOTIF_ID = 2
         const val CHANNEL_ID = "adblock_vpn_channel"
 
+        @Volatile
         var isRunning = false
             private set
 
@@ -82,10 +83,13 @@ class AdBlockVpnService : VpnService() {
         )
     }
 
-    private var vpnInterface: ParcelFileDescriptor? = null
-    private var vpnThread: Thread? = null
+    @Volatile private var vpnInterface: ParcelFileDescriptor? = null
+    @Volatile private var vpnThread: Thread? = null
     
-    private var resolverPool: DnsResolverPool? = null
+    @Volatile private var resolverPool: DnsResolverPool? = null
+
+    /** Serializes start/stop so establish cannot interleave with shutdown (F-022). */
+    private val lifecycleLock = Any()
     
     // Exception handler for coroutines to prevent silent failures
     private val coroutineExceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
@@ -115,7 +119,22 @@ class AdBlockVpnService : VpnService() {
         maxConcurrentSockets = 20,
         socketTimeoutMs = DNS_TIMEOUT_MS
     ) { socket ->
-        try { protect(socket) } catch (e: Exception) { /* ignore */ }
+        try {
+            if (!protect(socket)) {
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "protect(socket) returned false — DNS would re-enter the tunnel"
+                )
+                throw IllegalStateException("VpnService.protect returned false")
+            }
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.e(
+                com.grayzone.app.LogComponent.VPN,
+                "protect(socket) failed — refusing to use unprotected resolver socket",
+                e
+            )
+            throw e
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -142,7 +161,8 @@ class AdBlockVpnService : VpnService() {
                     com.grayzone.app.LogComponent.VPN,
                     "Ignoring ACTION_STOP — VPN hold active for ${VpnHoldLock.formatRemaining(VpnHoldLock.remainingMs(state, nowWall, nowElapsed))}"
                 )
-                if (vpnInterface == null) startVpn()
+                // Hold still wants the tunnel; VPN_ENABLED should already be true.
+                if (vpnInterface == null) startVpn(allowWhenDisabled = false)
                 return START_STICKY
             }
             // Hold already elapsed (or never tracked): allow manual stop.
@@ -163,12 +183,25 @@ class AdBlockVpnService : VpnService() {
         }
 
         if (vpnInterface == null) {
-            startVpn()
+            // Explicit START may not have persisted VPN_ENABLED yet; sticky/boot already has it.
+            startVpn(allowWhenDisabled = intent?.action == ACTION_START)
         }
         return START_STICKY
     }
 
     private fun stopVpnAfterHoldExpired() {
+        // F-021: alarm may fire early under clock skew — re-check dual-clock hold first.
+        val hold = VpnHoldLockStore.read(this)
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        if (VpnHoldLock.isHoldActive(hold, nowWall, nowElapsed)) {
+            com.grayzone.app.GrayzoneLogger.w(
+                com.grayzone.app.LogComponent.VPN,
+                "Hold-expiry alarm fired while hold still active; re-arming"
+            )
+            VpnHoldExpiryScheduler.rearmFromPrefs(this)
+            return
+        }
         stopVpn()
         VpnHoldLockStore.clear(this)
         VpnHoldExpiryScheduler.cancel(this)
@@ -178,75 +211,109 @@ class AdBlockVpnService : VpnService() {
         )
     }
 
-    private fun startVpn() {
-        if (isRunning) return
+    /**
+     * @param allowWhenDisabled true for an explicit user/boot [ACTION_START] where `VPN_ENABLED`
+     *   may not yet be persisted; false for reconnect paths that must honour a concurrent stop (F-022).
+     */
+    private fun startVpn(allowWhenDisabled: Boolean = false) {
+        synchronized(lifecycleLock) {
+            if (isRunning) return
 
-        // Satisfy the foreground-service contract up front. This service is launched via
-        // startForegroundService(), which requires startForeground() to be called within ~5s or the
-        // system kills the process. establish() below can fail (VPN consent revoked on reinstall, or
-        // another VPN active) and throw before we'd otherwise post the notification, so post it first.
-        startForeground(NOTIF_ID, buildNotification())
-
-        try {
-            val builder = Builder()
-                .addAddress("10.0.0.2", 32)
-                .addDnsServer("10.0.0.3")
-                .addRoute("10.0.0.3", 32)
-                .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
-                .addDnsServer("fd00:1:fd00:1:fd00:1:fd00:2")
-                .addRoute("fd00:1:fd00:1:fd00:1:fd00:2", 128)
-                .setSession("Grayzone AdBlock")
-                .setBlocking(true)
-
-            applyAppBypassList(builder)
-
-            // establish() returns null when the app is no longer the prepared VPN
-            // (permission revoked or another VPN took over). Treat it as a failure
-            // instead of silently entering a broken "running without interface" state.
-            vpnInterface = builder.establish()
-                ?: throw IllegalStateException("VpnService.Builder.establish() returned null - VPN permission revoked or another VPN is active")
-
-            // The pool is destroyed on shutdown, so recreate it when (re)starting.
-            if (resolverPool == null) {
-                resolverPool = createResolverPool()
-            }
-            isRunning = true
-
-            // Persist the VPN-active flag so BootReceiver can restart it after reboot.
             val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-            prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, true).apply()
-            // Start (or keep) the 24h hold — reconnects must not reset the timer.
-            VpnHoldLockStore.markEnabledIfAbsent(prefs)
-            VpnHoldExpiryScheduler.rearmFromPrefs(this)
-
-            vpnThread = Thread { runVpnLoop() }
-            vpnThread?.start()
-
-            com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
-            Log.d(TAG, "VPN Started")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start VPN", e)
-            
-            // Show user-friendly error message
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                android.widget.Toast.makeText(
-                    this,
-                    "Failed to start VPN service. Another VPN may be active. Please disable it and try again.",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
+            // Re-check intent under the lock so a stop during restartVpnAfterDelay's delay cannot
+            // race past the post-delay read and resurrect the tunnel / 24h hold.
+            if (!allowWhenDisabled &&
+                !prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false)
+            ) {
+                com.grayzone.app.GrayzoneLogger.i(
+                    com.grayzone.app.LogComponent.VPN,
+                    "startVpn aborted — VPN_ENABLED cleared before establish"
+                )
+                return
             }
-            
-            com.grayzone.app.GrayzoneLogger.e(
-                com.grayzone.app.LogComponent.VPN,
-                "VPN startup failed, possibly due to another active VPN or permission denial",
-                e
-            )
 
-            // We already entered the foreground above; tear it down cleanly so the process is never
-            // killed for "started foreground service but stopped without a matching state".
-            com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            // Satisfy the foreground-service contract up front. This service is launched via
+            // startForegroundService(), which requires startForeground() to be called within ~5s or the
+            // system kills the process. establish() below can fail (VPN consent revoked on reinstall, or
+            // another VPN active) and throw before we'd otherwise post the notification, so post it first.
+            try {
+                startForeground(NOTIF_ID, buildNotification())
+            } catch (e: Exception) {
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "startForeground failed — VPN cannot start",
+                    e
+                )
+                com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
+                stopSelf()
+                return
+            }
+
+            try {
+                val builder = Builder()
+                    .addAddress("10.0.0.2", 32)
+                    .addDnsServer("10.0.0.3")
+                    .addRoute("10.0.0.3", 32)
+                    .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
+                    .addDnsServer("fd00:1:fd00:1:fd00:1:fd00:2")
+                    .addRoute("fd00:1:fd00:1:fd00:1:fd00:2", 128)
+                    .setSession("Grayzone AdBlock")
+                    .setBlocking(true)
+
+                applyAppBypassList(builder)
+
+                // establish() returns null when the app is no longer the prepared VPN
+                // (permission revoked or another VPN took over). Treat it as a failure
+                // instead of silently entering a broken "running without interface" state.
+                vpnInterface = builder.establish()
+                    ?: throw IllegalStateException("VpnService.Builder.establish() returned null - VPN permission revoked or another VPN is active")
+
+                // The pool is destroyed on shutdown, so recreate it when (re)starting.
+                if (resolverPool == null) {
+                    resolverPool = createResolverPool()
+                }
+                isRunning = true
+
+                // Persist the VPN-active flag so BootReceiver can restart it after reboot.
+                prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, true).apply()
+                // Start (or keep) the 24h hold — reconnects must not reset the timer.
+                VpnHoldLockStore.markEnabledIfAbsent(prefs)
+                VpnHoldExpiryScheduler.rearmFromPrefs(this)
+
+                vpnThread = Thread({ runVpnLoop() }, "Grayzone-VPN-DNS")
+                vpnThread?.start()
+
+                com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
+                Log.d(TAG, "VPN Started")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start VPN", e)
+
+                // F-036: distinguish consent/establish failure from other startup errors.
+                val toastMessage = if (e is IllegalStateException) {
+                    "Grayzone can't start its VPN. Re-allow the VPN connection request, or turn off any other VPN app."
+                } else {
+                    "Grayzone couldn't start VPN filtering (${e.javaClass.simpleName}). Please try again."
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(
+                        this,
+                        toastMessage,
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "VPN startup failed, possibly due to another active VPN or permission denial",
+                    e
+                )
+
+                // We already entered the foreground above; tear it down cleanly so the process is never
+                // killed for "started foreground service but stopped without a matching state".
+                com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 
@@ -280,34 +347,57 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun shutdownVpn(clearPersistedFlag: Boolean, stopService: Boolean) {
-        isRunning = false
-        vpnThread?.interrupt()
-        try {
-            vpnInterface?.close()
-        } catch (e: Exception) { /* ignored */ }
-        vpnInterface = null
-        vpnThread = null
-        pendingQueries.clear()
+        synchronized(lifecycleLock) {
+            val thread = vpnThread
+            isRunning = false
+            thread?.interrupt()
+            try {
+                vpnInterface?.close()
+            } catch (e: Exception) {
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Failed to close tun interface (clearPersistedFlag=$clearPersistedFlag)",
+                    e
+                )
+            }
+            // F-029: closing the tun fd should unblock read(); join with a bound so we can detect stalls.
+            try {
+                thread?.join(1000)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            if (thread?.isAlive == true) {
+                com.grayzone.app.GrayzoneLogger.w(
+                    com.grayzone.app.LogComponent.VPN,
+                    "VPN packet thread still alive 1s after tun close — read() did not unblock"
+                )
+            }
+            vpnInterface = null
+            vpnThread = null
+            // F-038: complete in-flight followers before dropping map entries.
+            pendingQueries.values.forEach { it.complete(null) }
+            pendingQueries.clear()
 
-        DnsTrafficBus.clear()
+            DnsTrafficBus.clear()
 
-        // Synchronous shutdown: no dependency on serviceScope, which may already
-        // be cancelled when this runs from onDestroy().
-        resolverPool?.shutdown()
-        resolverPool = null
+            // Synchronous shutdown: no dependency on serviceScope, which may already
+            // be cancelled when this runs from onDestroy().
+            resolverPool?.shutdown()
+            resolverPool = null
 
-        if (clearPersistedFlag) {
-            val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-            prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
-            VpnHoldLockStore.clear(prefs)
-            VpnHoldExpiryScheduler.cancel(this)
+            if (clearPersistedFlag) {
+                val prefs = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+                prefs.edit().putBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false).apply()
+                VpnHoldLockStore.clear(prefs)
+                VpnHoldExpiryScheduler.cancel(this)
+            }
+
+            if (stopService) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
         }
-
-        if (stopService) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        }
-        com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
     }
 
     private fun restartVpnAfterDelay(delayMs: Long) {
@@ -319,8 +409,25 @@ class AdBlockVpnService : VpnService() {
             }
             shutdownVpn(clearPersistedFlag = false, stopService = false)
             kotlinx.coroutines.delay(delayMs)
+            // F-023: user may have stopped VPN during the delay — do not resurrect intent.
+            val stillWants = prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false)
+            if (!stillWants) {
+                com.grayzone.app.data.ProtectionHealthRepository.markVpnReconnectPending(false)
+                return@launch
+            }
             startVpn()
         }
+    }
+
+    override fun onRevoke() {
+        // F-025: framework signal that consent was revoked or another VPN took the slot.
+        com.grayzone.app.GrayzoneLogger.w(
+            com.grayzone.app.LogComponent.VPN,
+            "VPN consent revoked by the user or another VPN app — protection stopping"
+        )
+        com.grayzone.app.data.ProtectionHealthRepository.markVpnReconnectPending(true)
+        com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
+        super.onRevoke()
     }
 
     override fun onDestroy() {
@@ -340,22 +447,23 @@ class AdBlockVpnService : VpnService() {
 
     private fun runVpnLoop() {
         val pfd = vpnInterface ?: return
-        val inputStream = FileInputStream(pfd.fileDescriptor)
-        val outputStream = FileOutputStream(pfd.fileDescriptor)
-
         var consecutiveErrors = 0
         val maxConsecutiveErrors = 5
         var lastErrorTime = 0L
-
-        // NOTE: FileInputStream.read() on VPN file descriptors can block indefinitely
-        // if no packets arrive. The VPN interface is typically closed gracefully via
-        // pfd.close() when stopVpn() is called, which will unblock the read() and throw IOException.
-        // This is the standard Android VPN pattern. For additional safety, we have:
-        // 1. Error recovery with exponential backoff
-        // 2. Service restart on consecutive failures
-        // 3. Graceful shutdown via isRunning flag
-        
         try {
+            val inputStream = FileInputStream(pfd.fileDescriptor)
+            val outputStream = FileOutputStream(pfd.fileDescriptor)
+            
+            Thread.currentThread().setUncaughtExceptionHandler { _, e ->
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Uncaught exception on VPN thread",
+                    e
+                )
+                if (isRunning) restartVpnAfterDelay(3000)
+            }
+
+            // Closing the tun fd (shutdownVpn) unblocks a parked FileInputStream.read.
             val packet = ByteArray(32767) // reuse large buffer to avoid per-iteration GC pressure
             while (isRunning) {
                 try {
@@ -378,37 +486,50 @@ class AdBlockVpnService : VpnService() {
                 } catch (e: java.io.IOException) {
                     val now = System.currentTimeMillis()
                     consecutiveErrors++
-                    
+
                     com.grayzone.app.GrayzoneLogger.w(
                         com.grayzone.app.LogComponent.VPN,
-                        "VPN loop error #$consecutiveErrors: ${e.message}"
+                        "VPN loop I/O error #$consecutiveErrors (${e.javaClass.simpleName})",
+                        e
                     )
-                    
+
                     // Reset counter if errors are not consecutive (>5 seconds apart)
                     if (now - lastErrorTime > 5000) {
                         consecutiveErrors = 1
                     }
                     lastErrorTime = now
-                    
+
                     if (consecutiveErrors >= maxConsecutiveErrors) {
                         com.grayzone.app.GrayzoneLogger.e(
                             com.grayzone.app.LogComponent.VPN,
                             "VPN failed $maxConsecutiveErrors times consecutively, restarting service",
                             e
                         )
-                        
+
                         restartVpnAfterDelay(2000)
                         break
                     }
-                    
+
                     // Gradual exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
-                    // This gives the system time to recover without immediately retrying
                     val backoffMs = (100L * (1 shl (consecutiveErrors - 1))).coerceAtMost(1600L)
                     com.grayzone.app.GrayzoneLogger.d(
                         com.grayzone.app.LogComponent.VPN,
                         "Backing off for ${backoffMs}ms before retry"
                     )
-                    Thread.sleep(backoffMs)
+                    try {
+                        Thread.sleep(backoffMs)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                } catch (e: Exception) {
+                    // F-028: programming errors are not transient — log and escalate immediately.
+                    com.grayzone.app.GrayzoneLogger.e(
+                        com.grayzone.app.LogComponent.VPN,
+                        "VPN loop non-I/O error (${e.javaClass.simpleName}); restarting",
+                        e
+                    )
+                    restartVpnAfterDelay(2000)
+                    break
                 }
             }
         } catch (e: Exception) {
@@ -451,9 +572,9 @@ class AdBlockVpnService : VpnService() {
                 writeSinkhole(packet, length, outputStream)
             }
 
-            // Allowed — forward to real DNS with fallback and deduplication
+            // Allowed — forward to real DNS with fallback and deduplication.
+            // Emit ALLOWED/FAILED only after the upstream outcome is known (F-032).
             DnsQueryClassifier.Action.FORWARD -> {
-                DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED)
                 serviceScope.launch {
                     forwardDnsQueryWithDeduplication(domain, normalizedDomain, packet, length, outputStream)
                 }
@@ -494,7 +615,7 @@ class AdBlockVpnService : VpnService() {
         val key = normalizedDomain?.let { DnsPacketHelper.getQuestionKey(packet, length, it) }
         if (key == null) {
             val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
-            writeForwardedResponse(packet, dnsPayload, outputStream)
+            writeForwardedResponse(domain, packet, dnsPayload, outputStream)
             return
         }
 
@@ -506,14 +627,14 @@ class AdBlockVpnService : VpnService() {
                 "Deduplicating DNS query",
                 mapOf("domain" to domain, "type" to key.qType, "class" to key.qClass)
             )
-            writeForwardedResponse(packet, existingQuery.await(), outputStream)
+            writeForwardedResponse(domain, packet, existingQuery.await(), outputStream)
             return
         }
 
         try {
             val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
             deferred.complete(dnsPayload)
-            writeForwardedResponse(packet, dnsPayload, outputStream)
+            writeForwardedResponse(domain, packet, dnsPayload, outputStream)
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.DNS,
@@ -521,19 +642,28 @@ class AdBlockVpnService : VpnService() {
                 e
             )
             deferred.complete(null)
+            DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.FAILED)
         } finally {
             pendingQueries.remove(key, deferred)
         }
     }
 
     private fun writeForwardedResponse(
+        domain: String,
         requestPacket: ByteArray,
         dnsPayload: ByteArray?,
         outputStream: FileOutputStream
     ) {
-        if (dnsPayload == null) return
-        val wrapped = DnsPacketHelper.wrapDnsResponse(requestPacket, dnsPayload, dnsPayload.size) ?: return
+        if (dnsPayload == null) {
+            DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.FAILED)
+            return
+        }
+        val wrapped = DnsPacketHelper.wrapDnsResponse(requestPacket, dnsPayload, dnsPayload.size) ?: run {
+            DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.FAILED)
+            return
+        }
         synchronized(outputStream) { outputStream.write(wrapped) }
+        DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.ALLOWED)
     }
     
     /**

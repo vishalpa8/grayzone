@@ -6,7 +6,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.PowerManager
+import android.widget.Toast
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -65,14 +69,6 @@ suspend fun getInstalledAppsCached(context: Context): List<AppInfo> {
  * flashing an empty list / spinner while the async load re-runs.
  */
 fun peekCachedApps(): List<AppInfo>? = AppMetadataCache.peek()
-
-/**
- * Force refresh of app cache (call when user manually refreshes).
- */
-suspend fun refreshInstalledApps(context: Context): List<AppInfo> {
-    AppMetadataCache.invalidate()
-    return getInstalledAppsCached(context)
-}
 
 suspend fun getInstalledApps(context: Context): List<AppInfo> = withContext(Dispatchers.IO) {
     val pm = context.packageManager
@@ -134,32 +130,72 @@ fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent =
             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
             android.net.Uri.parse("package:${context.packageName}")
         )
+    SetupRequirement.NOTIFICATIONS ->
+        Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+        }
+    SetupRequirement.ALL_FILES ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}")
+            )
+        } else {
+            Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.parse("package:${context.packageName}")
+            )
+        }
+    SetupRequirement.BATTERY ->
+        Intent(
+            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            android.net.Uri.parse("package:${context.packageName}")
+        )
 }
 
 fun isBatteryOptimized(context: Context): Boolean =
     !context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
 /**
- * Returns true when Android's "Private DNS" (DoT on port 853) is active.
- *
- * Private DNS routes DNS queries directly over TLS to a third-party resolver
- * on port 853, completely bypassing our VPN's DNS-interception mechanism.
- * The user must be warned so they can disable it or understand the limitation.
- *
- * Mode values (android.provider.Settings.Global.PRIVATE_DNS_MODE):
- *   "off"        – feature disabled (safe for us)
- *   "opportunistic" – uses system DoT if available (may bypass us)
- *   "hostname"   – strict mode pointed at a custom resolver (definitely bypasses us)
+ * True when the app can post notifications. On API 33+ both the runtime permission and the
+ * user-level notification master switch must be on (F-086).
  */
-fun isPrivateDnsActive(context: Context): Boolean {
-    return try {
-        val mode = android.provider.Settings.Global.getString(
-            context.contentResolver,
-            "private_dns_mode"          // Settings.Global.PRIVATE_DNS_MODE (API 29+)
-        )
-        // "off" or null means disabled; anything else means it's on
-        mode != null && mode != "off"
-    } catch (_: Exception) {
+fun areAppNotificationsEnabled(context: Context): Boolean {
+    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        return ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.POST_NOTIFICATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    return true
+}
+
+/** App-info screen used for the Android 13+ "Allow restricted settings" escape hatch (F-092). */
+fun appInfoSettingsIntent(context: Context): Intent =
+    Intent(
+        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        android.net.Uri.parse("package:${context.packageName}")
+    )
+
+/**
+ * F-211: settings / deep-link starts must not crash the UI when the OEM lacks the activity.
+ * Logs at WARN and optionally toasts so the user sees a failure instead of a silent no-op.
+ */
+fun startActivitySafely(
+    context: Context,
+    intent: Intent,
+    logTag: String,
+    showToast: Boolean = true,
+): Boolean =
+    try {
+        context.startActivity(intent)
+        true
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.BOOT, "$logTag failed: ${e.message}", e)
+        if (showToast) {
+            Toast.makeText(context, "Couldn't open settings", Toast.LENGTH_SHORT).show()
+        }
         false
     }
-}
+

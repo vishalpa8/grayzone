@@ -24,7 +24,7 @@ class ScheduleLogicTest {
         dayOfWeek: Int,
         minutesSinceMidnight: Int
     ): Boolean {
-        if (!rule.enabled) return false
+        if (!rule.isEffectivelyEnabled()) return false
 
         val startMin = rule.startHour * 60 + rule.startMinute
         val endMin = rule.endHour * 60 + rule.endMinute

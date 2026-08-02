@@ -205,10 +205,10 @@ class SessionPolicyEngineForegroundTest {
     // ─── Fresh wait ──────────────────────────────────────────────────────────
 
     @Test
-    fun `no session shows friction wait screen with default wait seconds`() {
-        val cmds = eval(state())
+    fun `no session shows friction wait screen with state wait seconds`() {
+        val cmds = eval(state(waitSeconds = 30))
         assertEquals(1, cmds.size)
         val cmd = cmds[0] as SessionCommand.ShowWaitScreen
-        assertEquals(SessionPolicyEngine.DEFAULT_WAIT_SECONDS, cmd.waitSeconds)
+        assertEquals(30, cmd.waitSeconds)
     }
 }

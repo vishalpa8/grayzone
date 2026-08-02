@@ -149,12 +149,17 @@ object BlocklistManager {
                 abusedTlds  = loadAbusedTlds(context)
                 isLoaded = true
             } catch (e: Exception) {
+                // F-026: do not swallow Errors (e.g. OutOfMemoryError) — let them propagate.
                 adFilter = null
                 adultFilter = null
                 abusedTlds = AbusedTldList.EMPTY
                 isLoaded = false
                 loadStarted.set(false)
-                Log.e(TAG, "Error loading bloom filters", e)
+                com.grayzone.app.GrayzoneLogger.e(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Blocklist load failed — filtering degraded to fallback domains only",
+                    e
+                )
             }
         }.start()
     }

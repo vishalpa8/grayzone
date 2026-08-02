@@ -21,7 +21,8 @@ enum class LogComponent {
     SESSION,
     BOOT,
     ACCESSIBILITY,
-    CLEANUP
+    CLEANUP,
+    PREFS
 }
 
 enum class LogLevel {
@@ -73,10 +74,5 @@ object GrayzoneLogger {
     fun e(component: LogComponent, message: String, throwable: Throwable? = null) {
         if (!shouldLog(LogLevel.ERROR)) return
         Log.e(TAG, "[${component.name}] $message", throwable)
-        
-        // Future: Production crash reporting integration
-        // if (!BuildConfig.DEBUG && throwable != null) {
-        //     FirebaseCrashlytics.getInstance().recordException(throwable)
-        // }
     }
 }

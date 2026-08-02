@@ -32,17 +32,21 @@ abstract class UsageDatabase : RoomDatabase() {
         }
 
         fun getInstance(context: Context): UsageDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+            // Re-check inside the lock (F-040): `INSTANCE ?: synchronized { build }` can build
+            // twice when two threads both observe null before either assigns.
+            INSTANCE?.let { return it }
+            return synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     UsageDatabase::class.java,
                     "grayzone_usage.db"
                 )
-                .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(MIGRATION_1_2)  // Add migration instead of destructive fallback
-                .build()
-                INSTANCE = instance
-                instance
+                    .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                    .addMigrations(MIGRATION_1_2)
+                    // F-041: installing an older APK over newer schema must not brick usage logging.
+                    .fallbackToDestructiveMigrationOnDowngrade()
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

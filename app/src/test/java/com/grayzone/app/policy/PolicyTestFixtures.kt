@@ -20,8 +20,13 @@ internal fun state(
     sessionRemainingMs: Long = 0L,
     defaultSessionMins: Int = 10,
     defaultLockoutMins: Int = 60,
+    waitSeconds: Int = 5,
     isScheduleLocked: Boolean = false,
-    isOnBreak: Boolean = false
+    isOnBreak: Boolean = false,
+    activeStartedElapsedMs: Long = 0L,
+    activeDurationMs: Long = 0L,
+    lockedStartedElapsedMs: Long = 0L,
+    lockedDurationMs: Long = 0L
 ) = SessionState(
     packageName = PKG,
     isMonitored = isMonitored,
@@ -32,6 +37,11 @@ internal fun state(
     sessionRemainingMs = sessionRemainingMs,
     defaultSessionMins = defaultSessionMins,
     defaultLockoutMins = defaultLockoutMins,
+    waitSeconds = waitSeconds,
     isScheduleLocked = isScheduleLocked,
-    isOnBreak = isOnBreak
+    isOnBreak = isOnBreak,
+    activeStartedElapsedMs = activeStartedElapsedMs,
+    activeDurationMs = activeDurationMs,
+    lockedStartedElapsedMs = lockedStartedElapsedMs,
+    lockedDurationMs = lockedDurationMs
 )

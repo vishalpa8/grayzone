@@ -18,8 +18,15 @@ data class ScheduleRule(
     val endHour: Int,               // 0-23
     val endMinute: Int,             // 0-59
     val daysOfWeek: Set<Int>,       // Calendar.MONDAY, Calendar.TUESDAY, etc.
-    val enabled: Boolean = true
-)
+    /**
+     * Nullable so Gson missing-field deserializes to null (not JVM `false`).
+     * Treat null as enabled — see [isEffectivelyEnabled].
+     */
+    val enabled: Boolean? = true
+) {
+    /** F-055: missing/null `enabled` in JSON must not disable the rule. */
+    fun isEffectivelyEnabled(): Boolean = enabled != false
+}
 
 /**
  * Manages schedule rules and focus mode for blocking apps at certain times.
@@ -30,12 +37,33 @@ class ScheduleManager(private val context: Context) {
         context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
 
-    fun getScheduleRules(): List<ScheduleRule> {
-        val json = prefs.getString(PrefsKeys.SCHEDULE_RULES_JSON, null) ?: return emptyList()
+    /**
+     * Parse result that distinguishes "no rules" from "corrupt JSON" so writers never
+     * persist an empty list over the user's real rules (F-241).
+     */
+    private sealed class RulesLoad {
+        data class Ok(val rules: List<ScheduleRule>) : RulesLoad()
+        object Corrupt : RulesLoad()
+    }
+
+    private fun loadScheduleRules(): RulesLoad {
+        val json = prefs.getString(PrefsKeys.SCHEDULE_RULES_JSON, null) ?: return RulesLoad.Ok(emptyList())
         return try {
             val type = object : TypeToken<List<ScheduleRule>>() {}.type
-            gson.fromJson(json, type) ?: emptyList()
-        } catch (_: Exception) { emptyList() }
+            val parsed = gson.fromJson<List<ScheduleRule>>(json, type) ?: emptyList()
+            // F-055: normalize null enabled → true so Gson Unsafe defaults never disable rules.
+            RulesLoad.Ok(parsed.map { rule ->
+                rule.copy(enabled = rule.isEffectivelyEnabled())
+            })
+        } catch (e: Exception) {
+            android.util.Log.e("ScheduleManager", "Failed to parse SCHEDULE_RULES_JSON; refusing to overwrite", e)
+            RulesLoad.Corrupt
+        }
+    }
+
+    fun getScheduleRules(): List<ScheduleRule> = when (val load = loadScheduleRules()) {
+        is RulesLoad.Ok -> load.rules
+        RulesLoad.Corrupt -> emptyList() // read path degrades; writers must check loadScheduleRules
     }
 
     fun saveScheduleRules(rules: List<ScheduleRule>) {
@@ -43,30 +71,38 @@ class ScheduleManager(private val context: Context) {
     }
 
     fun addRule(rule: ScheduleRule) {
-        val rules = getScheduleRules().toMutableList()
-        rules.add(rule)
-        saveScheduleRules(rules)
+        when (val load = loadScheduleRules()) {
+            RulesLoad.Corrupt -> return // do not wipe
+            is RulesLoad.Ok -> {
+                val rules = load.rules.toMutableList()
+                // Never persist enabled=false from a null/missing Gson default (F-055).
+                rules.add(rule.copy(enabled = rule.isEffectivelyEnabled()))
+                saveScheduleRules(rules)
+            }
+        }
     }
 
     fun removeRule(ruleId: String) {
-        val rules = getScheduleRules().filter { it.id != ruleId }
-        saveScheduleRules(rules)
+        when (val load = loadScheduleRules()) {
+            RulesLoad.Corrupt -> return
+            is RulesLoad.Ok -> saveScheduleRules(load.rules.filter { it.id != ruleId })
+        }
     }
 
     fun toggleRule(ruleId: String, enabled: Boolean) {
-        val rules = getScheduleRules().map {
-            if (it.id == ruleId) it.copy(enabled = enabled) else it
+        when (val load = loadScheduleRules()) {
+            RulesLoad.Corrupt -> return
+            is RulesLoad.Ok -> saveScheduleRules(
+                load.rules.map { if (it.id == ruleId) it.copy(enabled = enabled) else it }
+            )
         }
-        saveScheduleRules(rules)
     }
 
     /**
      * Returns true if any active schedule rule blocks apps right now.
      */
     fun isCurrentlyScheduled(): Boolean {
-        // Check quick focus mode first
-        val focusUntil = prefs.getLong(PrefsKeys.FOCUS_MODE_UNTIL, 0L)
-        if (System.currentTimeMillis() < focusUntil) return true
+        if (isFocusModeActive()) return true
 
         val cal = Calendar.getInstance()
         val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
@@ -78,10 +114,14 @@ class ScheduleManager(private val context: Context) {
     // ── Quick Focus Mode ──────────────────────────────────────────────────
 
     fun startFocusMode(durationMinutes: Int) {
-        val until = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
+        val durationMs = durationMinutes * 60 * 1000L
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
         prefs.edit()
             .putBoolean(PrefsKeys.FOCUS_MODE_ACTIVE, true)
-            .putLong(PrefsKeys.FOCUS_MODE_UNTIL, until)
+            .putLong(PrefsKeys.FOCUS_MODE_UNTIL, nowWall + durationMs)
+            .putLong(PrefsKeys.FOCUS_STARTED_ELAPSED, nowElapsed)
+            .putLong(PrefsKeys.FOCUS_DURATION_MS, durationMs)
             .apply()
     }
 
@@ -89,13 +129,21 @@ class ScheduleManager(private val context: Context) {
         prefs.edit()
             .putBoolean(PrefsKeys.FOCUS_MODE_ACTIVE, false)
             .putLong(PrefsKeys.FOCUS_MODE_UNTIL, 0L)
+            .putLong(PrefsKeys.FOCUS_STARTED_ELAPSED, 0L)
+            .putLong(PrefsKeys.FOCUS_DURATION_MS, 0L)
             .apply()
     }
 
     fun isFocusModeActive(): Boolean {
         val until = prefs.getLong(PrefsKeys.FOCUS_MODE_UNTIL, 0L)
-        if (System.currentTimeMillis() >= until) {
-            if (prefs.getBoolean(PrefsKeys.FOCUS_MODE_ACTIVE, false)) {
+        val startedElapsed = prefs.getLong(PrefsKeys.FOCUS_STARTED_ELAPSED, 0L)
+        val durationMs = prefs.getLong(PrefsKeys.FOCUS_DURATION_MS, 0L)
+        val pending = com.grayzone.app.policy.MonotonicDeadline.isPending(
+            until, startedElapsed, durationMs,
+            System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime()
+        )
+        if (!pending) {
+            if (prefs.getBoolean(PrefsKeys.FOCUS_MODE_ACTIVE, false) || until > 0L) {
                 stopFocusMode()
             }
             return false
@@ -105,18 +153,37 @@ class ScheduleManager(private val context: Context) {
 
     fun getFocusModeRemainingMillis(): Long {
         val until = prefs.getLong(PrefsKeys.FOCUS_MODE_UNTIL, 0L)
-        return (until - System.currentTimeMillis()).coerceAtLeast(0L)
+        val startedElapsed = prefs.getLong(PrefsKeys.FOCUS_STARTED_ELAPSED, 0L)
+        val durationMs = prefs.getLong(PrefsKeys.FOCUS_DURATION_MS, 0L)
+        return com.grayzone.app.policy.MonotonicDeadline.remainingMs(
+            until, startedElapsed, durationMs,
+            System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime()
+        )
     }
 
     // ── Daily Break ────────────────────────────────────────────────────────
     // One hour per day during which nothing is locked: no friction screens,
     // no lockouts, no schedule blocks. Usable once per calendar day.
 
-    fun isBreakActive(): Boolean =
-        System.currentTimeMillis() < prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L)
+    fun isBreakActive(): Boolean {
+        val until = prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L)
+        val startedElapsed = prefs.getLong(PrefsKeys.BREAK_STARTED_ELAPSED, 0L)
+        val durationMs = prefs.getLong(PrefsKeys.BREAK_DURATION_MS_KEY, 0L)
+        return com.grayzone.app.policy.MonotonicDeadline.isPending(
+            until, startedElapsed, durationMs,
+            System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime()
+        )
+    }
 
-    fun getBreakRemainingMillis(): Long =
-        (prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L) - System.currentTimeMillis()).coerceAtLeast(0L)
+    fun getBreakRemainingMillis(): Long {
+        val until = prefs.getLong(PrefsKeys.BREAK_UNTIL, 0L)
+        val startedElapsed = prefs.getLong(PrefsKeys.BREAK_STARTED_ELAPSED, 0L)
+        val durationMs = prefs.getLong(PrefsKeys.BREAK_DURATION_MS_KEY, 0L)
+        return com.grayzone.app.policy.MonotonicDeadline.remainingMs(
+            until, startedElapsed, durationMs,
+            System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime()
+        )
+    }
 
     /** The break can be started once per calendar day. */
     fun canStartBreakToday(): Boolean =
@@ -128,15 +195,23 @@ class ScheduleManager(private val context: Context) {
      */
     fun startDailyBreak(): Boolean {
         if (!canStartBreakToday()) return false
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
         prefs.edit()
-            .putLong(PrefsKeys.BREAK_UNTIL, System.currentTimeMillis() + BREAK_DURATION_MILLIS)
+            .putLong(PrefsKeys.BREAK_UNTIL, nowWall + BREAK_DURATION_MILLIS)
+            .putLong(PrefsKeys.BREAK_STARTED_ELAPSED, nowElapsed)
+            .putLong(PrefsKeys.BREAK_DURATION_MS_KEY, BREAK_DURATION_MILLIS)
             .putString(PrefsKeys.BREAK_USED_DATE, com.grayzone.app.DateUtils.getCurrentDateKey())
             .apply()
         return true
     }
 
     fun stopBreak() {
-        prefs.edit().putLong(PrefsKeys.BREAK_UNTIL, 0L).apply()
+        prefs.edit()
+            .putLong(PrefsKeys.BREAK_UNTIL, 0L)
+            .putLong(PrefsKeys.BREAK_STARTED_ELAPSED, 0L)
+            .putLong(PrefsKeys.BREAK_DURATION_MS_KEY, 0L)
+            .apply()
     }
 
     companion object {
@@ -165,7 +240,7 @@ class ScheduleManager(private val context: Context) {
             // Calendar day that was "yesterday" — kept in [1..7].
             val yesterday = ((dayOfWeek - 2 + 7) % 7) + 1
             return rules.any { rule ->
-                if (!rule.enabled) return@any false
+                if (!rule.isEffectivelyEnabled()) return@any false
 
                 val startMin = rule.startHour * 60 + rule.startMinute
                 val endMin   = rule.endHour   * 60 + rule.endMinute

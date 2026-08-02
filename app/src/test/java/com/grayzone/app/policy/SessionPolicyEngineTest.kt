@@ -189,9 +189,9 @@ class SessionPolicyEngineTest {
 
     @Test
     fun `resuming a paused session after the clock jumps forward grants full remaining`() {
-        // Simulate the wall clock moving far into the future while a paused session
-        // still had 5s remaining. The resume must anchor to the new `now`, not grant
-        // a stale/negative window.
+        // sessionRemainingMs is a duration, not a wall deadline — re-anchoring to the
+        // new wall clock is correct. Distinct from F-110/F-111 (active/lockout dual-clock).
+        // F-191 previously misread this as locking in the C5 tamper outcome.
         val future = now + 30L * 24 * 60 * 60 * 1000L // +30 days
         val state = defaultState.copy(sessionRemainingMs = 5000L)
         val commands = engine.evaluate(AppEvent.AppForegrounded(pkg), state, future, appName)
@@ -202,6 +202,22 @@ class SessionPolicyEngineTest {
         assertEquals(future + 5000L + state.defaultLockoutMins * 60 * 1000L, update.newLockedUntil)
         assertEquals(0L, update.newSessionRemainingMs)
         assertTrue(commands[1] is SessionCommand.DismissOverlay)
+    }
+
+    @Test
+    fun `active lockout with dual clock is not cleared by wall clock jump`() {
+        val elapsed = 10_000L
+        val state = defaultState.copy(
+            lockedUntil = now + 60_000L,
+            lockedStartedElapsedMs = elapsed,
+            lockedDurationMs = 60_000L,
+            sessionRemainingMs = 0L
+        )
+        val future = now + 30L * 24 * 60 * 60 * 1000L
+        val commands = engine.evaluate(
+            AppEvent.AppForegrounded(pkg), state, future, appName, elapsed + 1_000L
+        )
+        assertTrue(commands.single() is SessionCommand.ShowLockoutScreen)
     }
 
     @Test
