@@ -26,6 +26,13 @@ object PrefsKeys {
     /** True once we've sent the user to the All-files-access screen for the hidden state backup. */
     const val ALL_FILES_PROMPTED = "all_files_prompted"
 
+    /**
+     * True when a wipe/reinstall was detected but restore could not run yet (usually missing
+     * all-files access). Cleared after a successful restore or when no backup file exists.
+     * Allows restore to overwrite a raced [ONBOARDING_COMPLETED] from early setup.
+     */
+    const val RESTORE_PENDING = "restore_pending"
+
     // Timing settings (global defaults)
     const val WAIT_SECONDS       = "wait_seconds"
     const val SESSION_MINUTES    = "session_minutes"

@@ -41,25 +41,30 @@ import com.grayzone.app.ui.theme.*
 
 class MainActivity : ComponentActivity() {
     override fun onResume() {
-        // Covers devices that revoke all-files access on clear-data: the onCreate restore in
-        // GrayzoneApplication couldn't read the hidden backup without the permission, but once the
-        // user returns from granting it, restore what was wiped. Runs before super so the UI's
-        // ON_RESUME screen re-evaluation sees the restored prefs.
-        // F-044: skip binder + decrypt after a successful restore this process; otherwise cheap
-        // ONBOARDING_COMPLETED sentinel before hasAllFilesAccess.
+        // Automatic restore: Application may have deferred (no all-files yet). Retry every resume
+        // until applied once this process. If restore lands after UI already drew, recreate so
+        // Compose / services pick up the restored prefs without a half-old race.
+        var justRestored = false
         if (!StateBackupManager.restoredThisProcess) {
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-            if (!prefs.contains(PrefsKeys.ONBOARDING_COMPLETED)) {
+            val needsRestore = !prefs.contains(PrefsKeys.ONBOARDING_COMPLETED) ||
+                prefs.getBoolean(PrefsKeys.RESTORE_PENDING, false)
+            if (needsRestore) {
                 if (StateBackupManager.hasAllFilesAccess(this)) {
                     // F-088: clearing the prompt flag on grant lets a later revoke re-prompt.
                     prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, false).apply()
-                    StateBackupManager.restoreIfWiped(this)
+                    justRestored = StateBackupManager.restoreIfWiped(this)
                 } else {
+                    // Mark pending + send user to grant (once); restore runs on the next resume.
+                    StateBackupManager.restoreIfWiped(this)
                     requestAllFilesAccessOnce(this)
                 }
             }
         }
         super.onResume()
+        if (justRestored) {
+            window.decorView.post { recreate() }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

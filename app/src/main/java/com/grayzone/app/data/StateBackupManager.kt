@@ -151,13 +151,17 @@ object StateBackupManager {
     private const val GCM_TAG_BITS = 128
 
     /**
-     * Restores **all** allowed control state from the external backup when the app looks wiped.
+     * Restores **all** allowed control state from the external backup when the sandbox looks wiped
+     * or a previous attempt was deferred ([PrefsKeys.RESTORE_PENDING]).
      *
-     * "Wiped" = no [PrefsKeys.ONBOARDING_COMPLETED]. Single-flight under [restoreLock]: Application
-     * and MainActivity cannot apply in parallel. Apply is clear-then-write so restored prefs fully
-     * replace any empty/partial sandbox (no mixed old+new keys). Never throws to callers.
+     * Automatic + race-safe:
+     * - Single-flight under [restoreLock] (Application + Activity cannot double-apply).
+     * - If all-files access is missing, marks [PrefsKeys.RESTORE_PENDING] and returns — retries on
+     *   the next call once access is granted (does not confuse "no permission" with "no backup").
+     * - Pending restore still runs even if the user raced through onboarding and set
+     *   [PrefsKeys.ONBOARDING_COMPLETED] first — clear-then-commit overwrites that sandbox.
      *
-     * @return true if a backup was found and applied.
+     * @return true if a backup was found and applied this call.
      */
     fun restoreIfWiped(context: Context): Boolean {
         synchronized(restoreLock) {
@@ -165,30 +169,59 @@ object StateBackupManager {
             restoreInProgress = true
             try {
                 val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-                if (prefs.contains(PrefsKeys.ONBOARDING_COMPLETED)) return false
+                val wiped = !prefs.contains(PrefsKeys.ONBOARDING_COMPLETED)
+                val pending = prefs.getBoolean(PrefsKeys.RESTORE_PENDING, false)
+                if (!wiped && !pending) return false
+
+                if (!hasAllFilesAccess(context)) {
+                    // Defer — do not claim "no backup"; we simply cannot read `.grayzone` yet.
+                    val editor = prefs.edit().putBoolean(PrefsKeys.RESTORE_PENDING, true)
+                    if (!pending) {
+                        // First defer after wipe: allow one fresh settings launch (not every resume).
+                        editor.putBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)
+                    }
+                    editor.commit()
+                    GrayzoneLogger.i(
+                        LogComponent.BOOT,
+                        "Backup restore deferred — waiting for all-files access"
+                    )
+                    return false
+                }
 
                 val json = readBackup(context)
                 if (json == null) {
+                    prefs.edit().remove(PrefsKeys.RESTORE_PENDING).commit()
                     GrayzoneLogger.i(
                         LogComponent.BOOT,
-                        "Prefs look wiped but no external backup was found to restore"
+                        "No external backup file to restore (sandbox wiped or first install)"
                     )
                     return false
                 }
 
                 val restored = applyInto(prefs, json, clearFirst = true)
                 if (restored) {
+                    // clearFirst removed RESTORE_PENDING; keep it cleared explicitly for clarity.
+                    prefs.edit().remove(PrefsKeys.RESTORE_PENDING).commit()
                     restoredThisProcess = true
                     restoredVpnIntent = prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)
                     GrayzoneLogger.i(
                         LogComponent.BOOT,
-                        "State restored from external backup after a data/cache wipe" +
+                        "State restored from external backup automatically" +
                             if (restoredVpnIntent) " (VPN intent restored)" else ""
                     )
+                } else {
+                    // Schema/generation refuse won't succeed on retry — drop pending so writes
+                    // are not blocked forever by a permanently unusable file.
+                    prefs.edit().remove(PrefsKeys.RESTORE_PENDING).commit()
                 }
                 return restored
             } catch (e: Exception) {
                 GrayzoneLogger.w(LogComponent.BOOT, "State restore failed: ${e.message}", e)
+                // Transient failure (I/O, decrypt race) — keep pending and retry on next resume.
+                try {
+                    context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PrefsKeys.RESTORE_PENDING, true).commit()
+                } catch (_: Exception) { /* ignore */ }
                 return false
             } finally {
                 restoreInProgress = false
@@ -243,6 +276,12 @@ object StateBackupManager {
         }
         return try {
             val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+            // Never overwrite the on-disk backup with a raced empty/partial sandbox while a
+            // deferred restore still needs to apply the previous install's snapshot.
+            if (prefs.getBoolean(PrefsKeys.RESTORE_PENDING, false)) {
+                GrayzoneLogger.i(LogComponent.BOOT, "State backup skipped — restore pending")
+                return false
+            }
             val plaintext = serialize(context, prefs.all).toByteArray(Charsets.UTF_8)
             val bytes = encrypt(context, plaintext)
             val file = hiddenFile()
