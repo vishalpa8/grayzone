@@ -81,11 +81,7 @@ fun CustomPromptsSheet(
             Spacer(modifier = Modifier.height(24.dp))
 
             if (promptsCorrupt) {
-                Text(
-                    "Your saved prompts could not be read. Add/delete is disabled so nothing is overwritten.",
-                    color = GZRed,
-                    fontSize = 14.sp
-                )
+                Text("Saved prompts unreadable — editing disabled.", color = GZRed, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
@@ -155,7 +151,7 @@ fun CustomPromptsSheet(
 
             if (promptsCorrupt) {
                 Text(
-                    "Stored prompts are unreadable — original JSON left untouched.",
+                    "Original data left untouched.",
                     color = GZTextTertiary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )

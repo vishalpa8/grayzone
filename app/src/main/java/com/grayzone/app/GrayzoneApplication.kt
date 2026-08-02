@@ -112,7 +112,10 @@ class GrayzoneApplication : Application() {
 
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, MODE_PRIVATE)
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            backupDirty.set(true) // no I/O here; the flush points below do the actual write
+            // Ignore restore's clear+write storm — would race a flush against applyInto.
+            if (!StateBackupManager.restoreInProgress) {
+                backupDirty.set(true) // no I/O here; the flush points below do the actual write
+            }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
         backupListener = listener
@@ -146,6 +149,7 @@ class GrayzoneApplication : Application() {
 
     /** Writes the backup only if something changed since the last write; clears dirty only on success. */
     private fun flushBackupIfDirty() {
+        if (StateBackupManager.restoreInProgress) return
         if (!backupDirty.compareAndSet(true, false)) return
         appScope.launch {
             // F-063: restore dirty so a skipped/failed write is retried on the next flush.

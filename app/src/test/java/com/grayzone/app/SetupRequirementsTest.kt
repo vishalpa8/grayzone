@@ -18,8 +18,8 @@ class SetupRequirementsTest {
         val missing = SetupRequirements.missing(accessibilityEnabled = true, overlayEnabled = false)
 
         assertEquals(listOf(SetupRequirement.OVERLAY), missing)
-        assertEquals("Display over other apps is off", SetupRequirements.headline(missing))
-        assertTrue(SetupRequirements.body(missing).contains("display over other apps"))
+        assertEquals("Display over other apps off", SetupRequirements.headline(missing))
+        assertEquals("Tap below to allow.", SetupRequirements.body(missing))
     }
 
     @Test
@@ -27,7 +27,7 @@ class SetupRequirementsTest {
         val missing = SetupRequirements.missing(accessibilityEnabled = false, overlayEnabled = true)
 
         assertEquals(listOf(SetupRequirement.ACCESSIBILITY), missing)
-        assertEquals("Accessibility is off", SetupRequirements.headline(missing))
+        assertEquals("Accessibility off", SetupRequirements.headline(missing))
     }
 
     @Test
@@ -35,8 +35,8 @@ class SetupRequirementsTest {
         val missing = SetupRequirements.missing(accessibilityEnabled = false, overlayEnabled = false)
 
         assertEquals(listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY), missing)
-        assertEquals("2 permissions are off", SetupRequirements.headline(missing))
-        assertEquals("Turn on Accessibility", SetupRequirements.actionLabel(missing))
+        assertEquals("2 permissions off", SetupRequirements.headline(missing))
+        assertEquals("Enable Accessibility", SetupRequirements.actionLabel(missing))
     }
 
     @Test
@@ -56,7 +56,7 @@ class SetupRequirementsTest {
         )
 
         assertEquals(listOf(SetupRequirement.NOTIFICATIONS), missing)
-        assertEquals("Notifications are off", SetupRequirements.headline(missing))
+        assertEquals("Notifications off", SetupRequirements.headline(missing))
     }
 
     @Test
@@ -74,7 +74,7 @@ class SetupRequirementsTest {
             missing
         )
         assertNotEquals("Protection ready", SetupRequirements.headline(missing))
-        assertEquals("Recommended setup incomplete", SetupRequirements.headline(missing))
+        assertEquals("Setup incomplete", SetupRequirements.headline(missing))
     }
 
     @Test

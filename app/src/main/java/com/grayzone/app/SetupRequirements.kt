@@ -62,40 +62,26 @@ object SetupRequirements {
      */
     fun headline(missing: List<SetupRequirement>): String = when {
         missing.isEmpty() -> "Protection ready"
-        missing.size == 1 -> when (missing.first()) {
-            SetupRequirement.NOTIFICATIONS -> "Notifications are off"
-            else -> "${label(missing.first())} is off"
-        }
-        missing.none { it in CORE } -> "Recommended setup incomplete"
-        else -> "${missing.size} permissions are off"
+        missing.size == 1 -> "${label(missing.first())} off"
+        missing.none { it in CORE } -> "Setup incomplete"
+        else -> "${missing.size} permissions off"
     }
 
     fun body(missing: List<SetupRequirement>): String = when (missing.size) {
         0 -> ""
         1 -> when (missing.first()) {
-            SetupRequirement.ACCESSIBILITY ->
-                "Grayzone can't see which app is open. Android turns Accessibility off after a Force stop — re-enable it in Settings (toggle off then on if it looks stuck)."
-            SetupRequirement.OVERLAY ->
-                "Grayzone can't draw the pause screen. Allow it to display over other apps."
-            SetupRequirement.NOTIFICATIONS ->
-                "Grayzone can't show the ongoing protection or countdown notifications. Allow notifications."
-            SetupRequirement.ALL_FILES ->
-                "Grayzone can't keep a wipe-resistant backup of your settings. Allow all files access."
-            SetupRequirement.BATTERY ->
-                "Battery optimization can stop Grayzone in the background. Exempt it from optimization."
+            SetupRequirement.ACCESSIBILITY -> "Tap below to enable."
+            SetupRequirement.OVERLAY -> "Tap below to allow."
+            SetupRequirement.NOTIFICATIONS -> "Tap below to allow."
+            SetupRequirement.ALL_FILES -> "Tap below to allow."
+            SetupRequirement.BATTERY -> "Tap below to exempt."
         }
-        else -> {
-            if (missing.none { it in CORE }) {
-                "Recommended: turn on ${missing.joinToString(" and ") { label(it) }} for full protection."
-            } else {
-                "Turn on ${missing.joinToString(" and ") { label(it) }} to monitor apps."
-            }
-        }
+        else -> "Enable the missing items below."
     }
 
-    /** Label for the action that fixes [missing] next, e.g. "Turn on Accessibility". */
+    /** Label for the action that fixes [missing] next, e.g. "Enable Accessibility". */
     fun actionLabel(missing: List<SetupRequirement>): String =
-        missing.firstOrNull()?.let { "Turn on ${label(it)}" } ?: ""
+        missing.firstOrNull()?.let { "Enable ${label(it)}" } ?: ""
 
     /**
      * Android 13+ can grey out the accessibility toggle for sideloaded installs until the user

@@ -58,6 +58,8 @@ import javax.crypto.spec.SecretKeySpec
  */
 object StateBackupManager {
 
+    private val restoreLock = Any()
+
     /**
      * Set after a successful [restoreIfWiped] in this process so [com.grayzone.app.MainActivity]
      * can skip repeating the binder + decrypt path on every onResume (F-044).
@@ -66,12 +68,28 @@ object StateBackupManager {
     var restoredThisProcess: Boolean = false
         private set
 
+    /**
+     * True while a restore is applying. Writers ([writeBackup]) and preference listeners must not
+     * flush mid-restore or they can race and persist a half-applied snapshot.
+     */
+    @Volatile
+    var restoreInProgress: Boolean = false
+        private set
+
+    /**
+     * True when this process applied a backup that had VPN intent on. MainScreen may offer the
+     * system VPN consent dialog at most once (see [VpnRestoreGate]).
+     */
+    @Volatile
+    var restoredVpnIntent: Boolean = false
+        private set
+
     private const val SCHEMA_VERSION = 1
 
     /** Exact keys and prefixes that may be restored. Unknown keys are dropped (F-043). */
     private val ALLOWED_EXACT_KEYS: Set<String> = setOf(
         PrefsKeys.GRAYZONE_ENABLED, PrefsKeys.THEME_MODE,
-        // F-090: never restore prompt-suppressor flags — wipe+restore must re-prompt.
+        // F-090: never restore prompt-suppressor flags — wipe+restore must re-prompt permissions.
         PrefsKeys.ONBOARDING_COMPLETED,
         PrefsKeys.WAIT_SECONDS, PrefsKeys.SESSION_MINUTES,
         PrefsKeys.LOCKOUT_MINUTES, PrefsKeys.MONITORED_APPS, PrefsKeys.DEFAULT_APPS_SEEDED,
@@ -83,7 +101,8 @@ object StateBackupManager {
         PrefsKeys.CUSTOM_PROMPTS_JSON, PrefsKeys.USE_CUSTOM_PROMPTS_ONLY,
         PrefsKeys.CURRENT_STREAK, PrefsKeys.LONGEST_STREAK, PrefsKeys.STREAK_LAST_DATE,
         PrefsKeys.TOTAL_SESSIONS_BLOCKED, PrefsKeys.TOTAL_TIME_SAVED_MINS,
-        PrefsKeys.ACHIEVEMENTS_JSON, PrefsKeys.VPN_ENABLED,
+        PrefsKeys.ACHIEVEMENTS_JSON,
+        PrefsKeys.VPN_ENABLED,
         PrefsKeys.VPN_HOLD_STARTED_WALL, PrefsKeys.VPN_HOLD_STARTED_ELAPSED,
         PrefsKeys.DAILY_RESET_DATE + "runtime"
     )
@@ -132,45 +151,49 @@ object StateBackupManager {
     private const val GCM_TAG_BITS = 128
 
     /**
-     * Restores state from the external backup when the app looks freshly wiped.
+     * Restores **all** allowed control state from the external backup when the app looks wiped.
      *
-     * "Wiped" is detected by the absence of the [PrefsKeys.ONBOARDING_COMPLETED] sentinel: a user
-     * who finished setup always has it, so its disappearance means data was cleared (or this is a
-     * genuine first launch, in which case there is simply no backup to restore and this is a no-op).
-     *
-     * Runs synchronously so the restored values are visible before the rest of onCreate — and before
-     * any service or the UI — reads preferences. Keep the payload small (control state only).
+     * "Wiped" = no [PrefsKeys.ONBOARDING_COMPLETED]. Single-flight under [restoreLock]: Application
+     * and MainActivity cannot apply in parallel. Apply is clear-then-write so restored prefs fully
+     * replace any empty/partial sandbox (no mixed old+new keys). Never throws to callers.
      *
      * @return true if a backup was found and applied.
      */
-    fun restoreIfWiped(context: Context): Boolean = try {
-        val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-        when {
-            prefs.contains(PrefsKeys.ONBOARDING_COMPLETED) -> false // live state present; never clobber
-            else -> {
+    fun restoreIfWiped(context: Context): Boolean {
+        synchronized(restoreLock) {
+            if (restoredThisProcess) return false
+            restoreInProgress = true
+            try {
+                val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                if (prefs.contains(PrefsKeys.ONBOARDING_COMPLETED)) return false
+
                 val json = readBackup(context)
                 if (json == null) {
                     GrayzoneLogger.i(
                         LogComponent.BOOT,
                         "Prefs look wiped but no external backup was found to restore"
                     )
-                    false
-                } else {
-                    val restored = applyInto(prefs, json)
-                    if (restored) {
-                        restoredThisProcess = true
-                        GrayzoneLogger.i(
-                            LogComponent.BOOT,
-                            "State restored from external backup after a data/cache wipe"
-                        )
-                    }
-                    restored
+                    return false
                 }
+
+                val restored = applyInto(prefs, json, clearFirst = true)
+                if (restored) {
+                    restoredThisProcess = true
+                    restoredVpnIntent = prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)
+                    GrayzoneLogger.i(
+                        LogComponent.BOOT,
+                        "State restored from external backup after a data/cache wipe" +
+                            if (restoredVpnIntent) " (VPN intent restored)" else ""
+                    )
+                }
+                return restored
+            } catch (e: Exception) {
+                GrayzoneLogger.w(LogComponent.BOOT, "State restore failed: ${e.message}", e)
+                return false
+            } finally {
+                restoreInProgress = false
             }
         }
-    } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.BOOT, "State restore failed: ${e.message}")
-        false
     }
 
     /**
@@ -205,6 +228,10 @@ object StateBackupManager {
      *   (caller should keep any dirty flag set so a later flush can retry — F-063).
      */
     fun writeBackup(context: Context): Boolean {
+        if (restoreInProgress) {
+            GrayzoneLogger.i(LogComponent.BOOT, "State backup skipped — restore in progress")
+            return false
+        }
         if (!hasAllFilesAccess(context)) {
             GrayzoneLogger.i(LogComponent.BOOT, "State backup skipped — all-files access not granted")
             return false
@@ -309,59 +336,76 @@ object StateBackupManager {
         return root.toString()
     }
 
-    private fun applyInto(prefs: SharedPreferences, json: String): Boolean {
-        val root = JsonParser.parseString(json).asJsonObject
-        val schema = root.get("schema")?.asInt
-        if (schema != SCHEMA_VERSION) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "Backup schema mismatch (got $schema, want $SCHEMA_VERSION); refusing restore"
-            )
-            return false
-        }
-        // F-045: refuse a file older than the high-water marker (rollback attack).
-        val generation = root.get("generation")?.asLong ?: 0L
-        val highWater = readHighWaterGeneration()
-        if (generation > 0L && highWater > 0L && generation < highWater) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "Backup generation $generation is older than high-water $highWater; refusing restore"
-            )
-            return false
-        }
-        val entries = root.getAsJsonObject("entries") ?: return false
-        val editor = prefs.edit()
-        for ((key, element) in entries.entrySet()) {
-            if (!isAllowedKey(key)) continue
-            val obj = element.asJsonObject
-            val type = obj.get("t")?.asString ?: continue
-            // Expected types for known keys — refuse type drift that would crash getters (F-060).
-            val expected = expectedType(key)
-            if (expected != null && expected != type) {
+    private fun applyInto(
+        prefs: SharedPreferences,
+        json: String,
+        clearFirst: Boolean,
+    ): Boolean {
+        return try {
+            val root = JsonParser.parseString(json).asJsonObject
+            val schema = root.get("schema")?.asInt
+            if (schema != SCHEMA_VERSION) {
                 GrayzoneLogger.w(
                     LogComponent.BOOT,
-                    "Backup key $key has type $type, expected $expected; skipping"
+                    "Backup schema mismatch (got $schema, want $SCHEMA_VERSION); refusing restore"
                 )
-                continue
+                return false
             }
-            when (type) {
-                "bool" -> editor.putBoolean(key, obj.get("v").asBoolean)
-                "int" -> editor.putInt(key, obj.get("v").asInt)
-                "long" -> editor.putLong(key, obj.get("v").asLong)
-                "float" -> editor.putFloat(key, obj.get("v").asFloat)
-                "string" -> editor.putString(key, obj.get("v").asString)
-                "stringset" -> {
-                    val set = obj.getAsJsonArray("v").map { it.asString }.toSet()
-                    editor.putStringSet(key, set)
+            // F-045: refuse a file older than the high-water marker (rollback attack).
+            val generation = root.get("generation")?.asLong ?: 0L
+            val highWater = readHighWaterGeneration()
+            if (generation > 0L && highWater > 0L && generation < highWater) {
+                GrayzoneLogger.w(
+                    LogComponent.BOOT,
+                    "Backup generation $generation is older than high-water $highWater; refusing restore"
+                )
+                return false
+            }
+            val entries = root.getAsJsonObject("entries") ?: return false
+            // One atomic commit: optional clear + all restores, so readers never see a half mix.
+            val editor = prefs.edit()
+            if (clearFirst) editor.clear()
+            for ((key, element) in entries.entrySet()) {
+                if (!isAllowedKey(key)) continue
+                try {
+                    val obj = element.asJsonObject
+                    val type = obj.get("t")?.asString ?: continue
+                    // Expected types for known keys — refuse type drift that would crash getters (F-060).
+                    val expected = expectedType(key)
+                    if (expected != null && expected != type) {
+                        GrayzoneLogger.w(
+                            LogComponent.BOOT,
+                            "Backup key $key has type $type, expected $expected; skipping"
+                        )
+                        continue
+                    }
+                    when (type) {
+                        "bool" -> editor.putBoolean(key, obj.get("v").asBoolean)
+                        "int" -> editor.putInt(key, obj.get("v").asInt)
+                        "long" -> editor.putLong(key, obj.get("v").asLong)
+                        "float" -> editor.putFloat(key, obj.get("v").asFloat)
+                        "string" -> editor.putString(key, obj.get("v").asString)
+                        "stringset" -> {
+                            val set = obj.getAsJsonArray("v").map { it.asString }.toSet()
+                            editor.putStringSet(key, set)
+                        }
+                        else -> Unit
+                    }
+                } catch (e: Exception) {
+                    GrayzoneLogger.w(
+                        LogComponent.BOOT,
+                        "Backup entry $key skipped — malformed value: ${e.message}"
+                    )
                 }
-                else -> Unit
             }
+            // commit(), not apply(): restored values must be durable before services/UI read them.
+            val ok = editor.commit()
+            if (ok && generation > highWater) writeHighWaterGeneration(generation)
+            ok
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.BOOT, "Backup apply failed; leaving prefs untouched", e)
+            false
         }
-        // commit(), not apply(): the restored values must be durably visible before the rest of
-        // onCreate (and any service/UI) reads them on this same launch.
-        val ok = editor.commit()
-        if (ok && generation > highWater) writeHighWaterGeneration(generation)
-        return ok
     }
 
     private fun expectedType(key: String): String? = when {

@@ -23,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.data.ProtectionHealthRepository
 import com.grayzone.app.data.StateBackupManager
+import com.grayzone.app.data.VpnRestoreGate
 import com.grayzone.app.service.OverlayService
 import com.grayzone.app.service.vpn.AdBlockVpnService
 import com.grayzone.app.service.vpn.VpnHoldExpiryScheduler
@@ -139,15 +140,18 @@ private fun requestAllFilesAccessOnce(
 }
 
 /**
- * Reconciles the AdBlock VPN with its persisted intent after the app (re)starts — notably after a
- * backup restore, which brings back [PrefsKeys.VPN_ENABLED] and the 24h hold timestamps but does not
- * restart the service, leaving the UI showing a hold countdown while the VPN is actually off.
+ * Reconciles VPN with persisted intent (including after full backup restore).
  *
- * Mirrors [com.grayzone.app.service.BootReceiver]: if the hold already elapsed, drop the stale
- * enable flag; otherwise resume the VPN so the app picks up exactly where the user left off. Runs
- * from the foreground (MainScreen), where starting a foreground service is permitted.
+ * @param offerConsent when non-null, may open the system VPN dialog **once** per process
+ *   ([VpnRestoreGate]). ON_RESUME passes null so returning from the dialog cannot re-stack prompts.
+ *   VPN_ENABLED / hold are never cleared here — backup restore must stick.
  */
-private fun reconcileVpnState(context: Context, onConsentNeeded: (Intent) -> Unit) {
+private fun reconcileVpnState(
+    context: Context,
+    offerConsent: ((Intent) -> Unit)? = null,
+) {
+    if (StateBackupManager.restoreInProgress) return
+
     val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
     if (!prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) return
 
@@ -156,30 +160,38 @@ private fun reconcileVpnState(context: Context, onConsentNeeded: (Intent) -> Uni
     val nowElapsed = android.os.SystemClock.elapsedRealtime()
 
     if (hold.isTracked && !VpnHoldLock.isHoldActive(hold, nowWall, nowElapsed)) {
-        // Hold finished while the app was gone (e.g. restored from an older backup): clear intent so
-        // no phantom "stays on" countdown is shown and the toggle is usable again.
         prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
         VpnHoldLockStore.clear(prefs)
         return
     }
 
-    if (!ProtectionHealthRepository.status.value.vpnActive) {
-        // The restored intent says "VPN on" with an active hold, but the tunnel isn't running.
-        val consentIntent = android.net.VpnService.prepare(context)
-        if (consentIntent != null) {
-            // An uninstall/reinstall (or clear-data on some devices) revoked VPN consent, and Android
-            // forbids an app from silently starting a VPN. Rather than give up and force the user to
-            // hunt for the toggle, surface the one-tap consent dialog automatically. On approval the
-            // tunnel resumes with the SAME restored 24h hold (see the launcher in MainScreen) — so
-            // reinstalling can't be used to escape the hold. Keep the hold alarm armed regardless so
-            // the countdown stays honest even if the dialog is dismissed.
-            VpnHoldExpiryScheduler.rearmFromPrefs(context)
-            onConsentNeeded(consentIntent)
-            return
-        }
-        // Consent still present → resume silently, no user interaction needed.
-        startRestoredVpn(context)
+    if (ProtectionHealthRepository.status.value.vpnActive) return
+
+    val consentIntent = try {
+        android.net.VpnService.prepare(context)
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.BOOT, "VpnService.prepare failed during reconcile: ${e.message}")
+        ProtectionHealthRepository.markVpnReconnectPending(true)
+        return
     }
+
+    if (consentIntent != null) {
+        // Keep restored VPN intent; Android requires a fresh consent after reinstall.
+        VpnHoldExpiryScheduler.rearmFromPrefs(context)
+        ProtectionHealthRepository.markVpnReconnectPending(true)
+        if (offerConsent != null && VpnRestoreGate.tryClaimConsentPrompt()) {
+            try {
+                offerConsent(consentIntent)
+            } catch (e: Exception) {
+                GrayzoneLogger.w(
+                    LogComponent.BOOT,
+                    "VPN consent activity unavailable: ${e.message}"
+                )
+            }
+        }
+        return
+    }
+    startRestoredVpn(context)
 }
 
 /**
@@ -284,32 +296,20 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
         }
     }
 
-    // Re-grants VPN consent after a reinstall/clear-data wiped it. On approval we resume the tunnel
-    // with the restored 24h hold; nothing to do on denial (the honest countdown keeps showing off).
     val vpnConsentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             startRestoredVpn(context)
+            ProtectionHealthRepository.markVpnReconnectPending(false)
+        } else {
+            // Keep restored VPN_ENABLED + hold; user can retry from the VPN tab.
+            ProtectionHealthRepository.markVpnReconnectPending(true)
         }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, vpnConsentLauncher) {
-        fun runVpnReconcile() {
-            reconcileVpnState(context) { consentIntent ->
-                try {
-                    vpnConsentLauncher.launch(consentIntent)
-                } catch (e: Exception) {
-                    // F-210: consent UI missing must not leave hold UI looking healthy.
-                    GrayzoneLogger.w(
-                        LogComponent.BOOT,
-                        "VPN consent activity unavailable: ${e.message}"
-                    )
-                    ProtectionHealthRepository.markVpnReconnectPending(true)
-                }
-            }
-        }
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 // After Force stop the OS clears Accessibility and blocks self-start until the user
@@ -329,8 +329,8 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 } else {
                     ProtectionHealthRepository.updateOverlayStatus(false)
                 }
-                // F-089: re-check VPN consent whenever the user returns to the app.
-                runVpnReconcile()
+                // Silent only — never offer consent here (would re-prompt after the dialog returns).
+                reconcileVpnState(context, offerConsent = null)
                 // F-086: re-check notifications on every resume (not only the one-shot request).
                 if (!areAppNotificationsEnabled(context)) {
                     GrayzoneLogger.w(
@@ -365,16 +365,9 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 e
             )
         }
+        // Single place that may open VPN consent after restore (at most once per process).
         reconcileVpnState(context) { consentIntent ->
-            try {
-                vpnConsentLauncher.launch(consentIntent)
-            } catch (e: Exception) {
-                GrayzoneLogger.w(
-                    LogComponent.BOOT,
-                    "VPN consent activity unavailable: ${e.message}"
-                )
-                ProtectionHealthRepository.markVpnReconnectPending(true)
-            }
+            vpnConsentLauncher.launch(consentIntent)
         }
     }
 

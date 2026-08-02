@@ -223,13 +223,6 @@ fun HomeScreen() {
                                 requirement
                             )
                         ) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "On Android 13+, apps installed from a file must first allow " +
-                                    "restricted settings: ⋮ → Allow restricted settings.",
-                                color = GZTextSecondary,
-                                fontSize = 12.sp
-                            )
                             TextButton(
                                 onClick = {
                                     startActivitySafely(
@@ -240,7 +233,7 @@ fun HomeScreen() {
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Open app info")
+                                Text("Toggle locked? Open app info")
                             }
                         }
                     }
