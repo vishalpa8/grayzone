@@ -1,6 +1,7 @@
 package com.grayzone.app.policy
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -146,7 +147,7 @@ class SessionPolicyEngineTest {
         
         val updateCmd = commands[0] as SessionCommand.UpdateState
         assertEquals(now + 5000L, updateCmd.newActiveUntil)
-        assertEquals(now + 5000L + (state.defaultLockoutMins * 60 * 1000L), updateCmd.newLockedUntil)
+        assertNull("resuming must not arm a lockout", updateCmd.newLockedUntil)
         assertEquals(0L, updateCmd.newSessionRemainingMs) // Cleared
         
         assertTrue(commands[1] is SessionCommand.DismissOverlay)
@@ -199,7 +200,7 @@ class SessionPolicyEngineTest {
         assertEquals(2, commands.size)
         val update = commands[0] as SessionCommand.UpdateState
         assertEquals(future + 5000L, update.newActiveUntil)
-        assertEquals(future + 5000L + state.defaultLockoutMins * 60 * 1000L, update.newLockedUntil)
+        assertNull(update.newLockedUntil)
         assertEquals(0L, update.newSessionRemainingMs)
         assertTrue(commands[1] is SessionCommand.DismissOverlay)
     }

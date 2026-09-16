@@ -57,6 +57,14 @@ data class SessionState(
         )
     }
 
+    /**
+     * True once a granted session has run all the way out with nothing banked — the moment the
+     * lockout becomes owed. A paused session ([sessionRemainingMs] > 0) is never consumed, so
+     * leaving an app mid-session can never trigger the penalty box.
+     */
+    fun isSessionConsumed(now: Long, nowElapsed: Long = -1L): Boolean =
+        activeUntil > 0L && sessionRemainingMs <= 0L && !hasActiveSession(now, nowElapsed)
+
     fun isBudgetExhausted(): Boolean = budgetRemainingMs <= 0
 }
 

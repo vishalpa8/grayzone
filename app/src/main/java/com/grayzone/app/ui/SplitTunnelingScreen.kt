@@ -60,10 +60,10 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
         bypassApps = newSet
         prefs.edit().putStringSet(PrefsKeys.VPN_BYPASS_APPS, newSet).apply()
         
-        // Re-apply bypass lists by sending START to the VPN service
+        // Re-apply bypass lists by sending RELOAD_RULES to bounce the VPN tunnel
         if (prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) {
             context.startService(Intent(context, AdBlockVpnService::class.java).apply {
-                action = AdBlockVpnService.ACTION_START
+                action = AdBlockVpnService.ACTION_RELOAD_RULES
             })
         }
     }
@@ -172,13 +172,15 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                         Spacer(Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(app.name, color = GZTextPrimary, fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                if (isBypassed) "Bypassing VPN" else app.packageName,
-                                color = if (isBypassed) GZPrimary else GZTextTertiary,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            if (isBypassed) {
+                                Text(
+                                    "Bypassing VPN",
+                                    color = GZPrimary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         GZSwitch(
                             checked = isBypassed,

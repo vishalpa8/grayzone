@@ -8,6 +8,9 @@ class SessionPolicyEngine {
 
     companion object {
         const val DEFAULT_WAIT_SECONDS = 5
+
+        /** Lockout length for [state], in millis. */
+        fun lockoutMs(state: SessionState): Long = state.defaultLockoutMins * 60 * 1000L
     }
 
     /**
@@ -53,12 +56,6 @@ class SessionPolicyEngine {
                 }
 
                 // Active session exists? Let them pass.
-                // IMPORTANT: this must be checked BEFORE the lockout/budget gates.
-                // `lockedUntil` is set to `activeUntil + lockout` when a session starts,
-                // so during an active session `isLockedOut(now)` is always true. If we
-                // checked lockout first, re-foregrounding mid-session would wrongly show
-                // the lockout screen counting down `sessionRemaining + lockout`
-                // (e.g. "1h 3m") even though the session still has time left.
                 if (state.hasActiveSession(now, nowElapsed)) {
                     commands.add(SessionCommand.DismissOverlay)
                     return commands
@@ -67,6 +64,20 @@ class SessionPolicyEngine {
                 // Currently locked out? (Penalty box)
                 if (state.isLockedOut(now, nowElapsed)) {
                     commands.add(SessionCommand.ShowLockoutScreen(state.packageName, appName, state.lockedUntil))
+                    return commands
+                }
+
+                // The session ran all the way out but the lockout was never written — the expiry
+                // alarm was missed (Doze, process death, OEM alarm throttling). Start the penalty
+                // box now, measured from this moment so it lasts exactly `defaultLockoutMins`.
+                if (state.isSessionConsumed(now, nowElapsed)) {
+                    val lockedUntil = now + lockoutMs(state)
+                    commands.add(SessionCommand.UpdateState(
+                        packageName = state.packageName,
+                        newLockedUntil = lockedUntil,
+                        clearActiveSession = true
+                    ))
+                    commands.add(SessionCommand.ShowLockoutScreen(state.packageName, appName, lockedUntil))
                     return commands
                 }
 
@@ -83,11 +94,11 @@ class SessionPolicyEngine {
                     val newActiveUntil = now + state.sessionRemainingMs
                     // Clock skew sanity check
                     if (newActiveUntil > now) {
-                        val newLockedUntil = newActiveUntil + (state.defaultLockoutMins * 60 * 1000L)
+                        // No lockout is written here: the penalty box only starts once the
+                        // session is actually used up (see isSessionConsumed).
                         commands.add(SessionCommand.UpdateState(
                             packageName = state.packageName,
                             newActiveUntil = newActiveUntil,
-                            newLockedUntil = newLockedUntil,
                             newSessionRemainingMs = 0L // Clear remaining
                         ))
                         commands.add(SessionCommand.DismissOverlay)
@@ -120,8 +131,9 @@ class SessionPolicyEngine {
                     commands.add(SessionCommand.RecordUsage(state.packageName, event.sessionDurationMs, wasBlocked))
                 }
 
-                // Pause the session if time remains
-                if (state.hasActiveSession(now)) {
+                // Pause the session if time remains. The lockout is deliberately untouched:
+                // leaving mid-session banks the remainder, it is not a penalty.
+                if (state.hasActiveSession(now, nowElapsed)) {
                     val remainingMs = state.activeUntil - now
                     if (remainingMs > 0) {
                         commands.add(SessionCommand.UpdateState(
@@ -130,8 +142,10 @@ class SessionPolicyEngine {
                             clearActiveSession = true
                         ))
                     } else {
+                        // Session ran out at the exact moment the app left — owe the lockout.
                         commands.add(SessionCommand.UpdateState(
                             packageName = state.packageName,
+                            newLockedUntil = now + lockoutMs(state),
                             clearActiveSession = true
                         ))
                     }

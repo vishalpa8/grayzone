@@ -197,28 +197,17 @@ fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
                 items(filtered, key = { it.packageName }) { app ->
                     val isMonitored = monitoredApps.contains(app.packageName)
                     val state = lockStateMap[app.packageName] ?: AppLockState(0L, 0L, 0L)
-                    val activeUntil = state.activeUntil
-                    val lockedUntil = state.lockedUntil
-                    val remaining = state.remainingMillis
-                    
-                    val normalizedRemaining = getNormalizedRemainingMillis(remaining)
-                    val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
-                    val isActiveOrPaused = currentTime < activeUntil || normalizedRemaining > 0
+                    val snapshot = state.statusAt(currentTime)
 
-                    val statusText = when {
-                        isAppLocked -> {
-                            val remainingMins = ((lockedUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                            "🔒 Locked ($remainingMins m)"
-                        }
-                        currentTime < activeUntil -> {
-                            val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                            "⏳ Session Active ($remainingMins m left)"
-                        }
-                        normalizedRemaining > 0 -> {
-                            val remainingMins = (normalizedRemaining / (60 * 1000)).coerceAtLeast(1)
-                            "⏳ Session Paused ($remainingMins m left)"
-                        }
-                        else -> null
+                    val isAppLocked = snapshot.status == AppRuntimeStatus.LOCKED
+                    val isActiveOrPaused = snapshot.status == AppRuntimeStatus.ACTIVE ||
+                        snapshot.status == AppRuntimeStatus.PAUSED
+
+                    val statusText = when (snapshot.status) {
+                        AppRuntimeStatus.LOCKED -> "🔒 Locked (${snapshot.remainingMinutes}m)"
+                        AppRuntimeStatus.ACTIVE -> "⏳ Session Active (${snapshot.remainingMinutes}m left)"
+                        AppRuntimeStatus.PAUSED -> "⏸ Session Paused (${snapshot.remainingMinutes}m left)"
+                        AppRuntimeStatus.READY -> null
                     }
 
                     PremiumAppListItem(
@@ -302,20 +291,22 @@ fun PremiumAppListItem(
             val subtitle = when {
                 isLocked -> statusText ?: "Locked"
                 isActiveOrPaused -> statusText ?: "Session active"
-                else -> app.packageName
+                else -> ""
             }
-            Text(
-                subtitle,
-                color = when {
-                    isLocked -> GZRed
-                    isActiveOrPaused -> GZGreen
-                    else -> GZTextTertiary.copy(alpha = rowAlpha)
-                },
-                fontSize = 12.sp,
-                fontWeight = if (isLocked || isActiveOrPaused) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
+                    color = when {
+                        isLocked -> GZRed
+                        isActiveOrPaused -> GZGreen
+                        else -> GZTextTertiary.copy(alpha = rowAlpha)
+                    },
+                    fontSize = 12.sp,
+                    fontWeight = if (isLocked || isActiveOrPaused) FontWeight.Medium else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         if (isMonitored) {
             IconButton(

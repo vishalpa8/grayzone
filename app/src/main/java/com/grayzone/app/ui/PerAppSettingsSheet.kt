@@ -151,8 +151,19 @@ fun PerAppSettingsSheet(
             // Block Now Button
             Button(
                 onClick = {
-                    val until = System.currentTimeMillis() + (24 * 60 * 60 * 1000L)
-                    prefs.edit().putLong(PrefsKeys.LOCKED_UNTIL + pkg, until).apply()
+                    val lockoutMs = 24 * 60 * 60 * 1000L
+                    val until = System.currentTimeMillis() + lockoutMs
+                    // Any running or banked session is retired, otherwise the policy engine would
+                    // still wave the user through on its active-session gate.
+                    prefs.edit()
+                        .putLong(PrefsKeys.LOCKED_UNTIL + pkg, until)
+                        .putLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, android.os.SystemClock.elapsedRealtime())
+                        .putLong(PrefsKeys.LOCKED_DURATION_MS + pkg, lockoutMs)
+                        .remove(PrefsKeys.ACTIVE_UNTIL + pkg)
+                        .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg)
+                        .remove(PrefsKeys.ACTIVE_DURATION_MS + pkg)
+                        .remove(PrefsKeys.REMAINING_MILLIS + pkg)
+                        .apply()
                     onDismiss()
                 },
                 modifier = Modifier.fillMaxWidth(),

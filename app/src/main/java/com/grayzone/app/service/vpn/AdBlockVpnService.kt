@@ -164,7 +164,12 @@ class AdBlockVpnService : VpnService() {
 
         if (intent?.action == ACTION_RELOAD_RULES) {
             BlocklistManager.load(this)
-            com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Reloaded blocklist rules")
+            if (isRunning) {
+                // Bounce the tunnel to apply new Split Tunnel bypass routes real-time without releasing the 24h hold
+                shutdownVpn(clearPersistedFlag = false, stopService = false)
+                startVpn(allowWhenDisabled = true)
+            }
+            com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Reloaded blocklist rules and tunnel")
             return START_STICKY
         }
 

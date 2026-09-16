@@ -24,6 +24,24 @@ object BlocklistManager {
     private var customDenylist: Set<String> = emptySet()
     @Volatile private var blockTelemetry: Boolean = false
 
+    // Hardcoded allowlist for domains that are frequently flagged as false-positives 
+    // by community blocklists, breaking core functionality of essential apps.
+    private val falsePositiveAllowlist: Set<String> = hashSetOf(
+        "rapido.bike",
+        "rapido.com",
+        "olacabs.com",
+        "swiggy.in",
+        "swiggy.com",
+        "zomato.com",
+        "uber.com",
+        "ubereats.com",
+        "juspay.in", // Common payment gateway
+        "razorpay.com",
+        "paytm.com",
+        "paytm.in",
+        "phonepe.com"
+    )
+
     private val telemetryDomains: Set<String> = hashSetOf(
         "tracking.miui.com",
         "api.ad.xiaomi.com",
@@ -280,16 +298,19 @@ object BlocklistManager {
     /**
      * Checks if a domain is blocked.
      * Evaluation order:
-     * 1. Hardcoded DoH fallback bypass (always allowed)
-     * 2. Custom Allowlist (takes precedence over Denylist)
-     * 3. Custom Denylist
-     * 4. Telemetry rules
-     * 5. High-confidence rules
-     * 6. Bloom Filter
+     * 1. Hardcoded DoH fallback bypass (always blocked)
+     * 2. Hardcoded False-Positive Allowlist (always allowed)
+     * 3. Custom Allowlist (takes precedence over Denylist)
+     * 4. Custom Denylist
+     * 5. Telemetry rules
+     * 6. High-confidence rules
+     * 7. Bloom Filter
      */
     fun isBlocked(domain: String): Boolean {
         if (isDoHBypass(domain)) return true
         val normalized = normalizeDomain(domain) ?: return false
+
+        if (matchesHighConfidence(normalized, falsePositiveAllowlist)) return false
 
         synchronized(cacheLock) {
             if (matchesHighConfidence(normalized, customAllowlist)) return false

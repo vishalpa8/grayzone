@@ -92,14 +92,7 @@ fun LimitsScreen() {
             LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                 items(monitoredList, key = { it.packageName }) { app ->
                     val state = lockStateMap[app.packageName] ?: AppLockState(0L, 0L, 0L)
-                    val activeUntil = state.activeUntil
-                    val lockedUntil = state.lockedUntil
-                    val remaining = state.remainingMillis
-                    
-                    val normalizedRemaining = getNormalizedRemainingMillis(remaining)
-                    val isAppLocked = currentTime > activeUntil && currentTime < lockedUntil
-                    val isActive = currentTime < activeUntil
-                    val isPaused = normalizedRemaining > 0
+                    val snapshot = state.statusAt(currentTime)
 
                     val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + app.packageName, false)
                     val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
@@ -110,17 +103,20 @@ fun LimitsScreen() {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(app.name, color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 Spacer(modifier = Modifier.weight(1f))
-                                if (isAppLocked) {
-                                    val remainingMins = ((lockedUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                                    Text("🔒 Locked (${remainingMins}m)", color = GZRed.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                } else if (isActive) {
-                                    val remainingMins = ((activeUntil - currentTime) / (60 * 1000)).coerceAtLeast(1)
-                                    Text("⏳ Active (${remainingMins}m)", color = GZGreen.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                } else if (isPaused) {
-                                    val remainingMins = (normalizedRemaining / (60 * 1000)).coerceAtLeast(1)
-                                    Text("⏸ Paused (${remainingMins}m)", color = GZAmber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                } else {
-                                    Text("Ready", color = GZTextSecondary, fontSize = 12.sp)
+                                when (snapshot.status) {
+                                    AppRuntimeStatus.LOCKED -> Text(
+                                        "🔒 Locked (${snapshot.remainingMinutes}m)",
+                                        color = GZRed.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                    )
+                                    AppRuntimeStatus.ACTIVE -> Text(
+                                        "⏳ Active (${snapshot.remainingMinutes}m)",
+                                        color = GZGreen.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                    )
+                                    AppRuntimeStatus.PAUSED -> Text(
+                                        "⏸ Paused (${snapshot.remainingMinutes}m)",
+                                        color = GZAmber, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                    )
+                                    AppRuntimeStatus.READY -> Text("Ready", color = GZTextSecondary, fontSize = 12.sp)
                                 }
                             }
                             Spacer(Modifier.height(12.dp))

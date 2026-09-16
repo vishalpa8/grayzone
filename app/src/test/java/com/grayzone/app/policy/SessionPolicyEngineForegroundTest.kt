@@ -172,23 +172,65 @@ class SessionPolicyEngineForegroundTest {
     // ─── Paused resume ───────────────────────────────────────────────────────
 
     @Test
-    fun `paused session resumes with new active window, lockout and cleared remainder`() {
+    fun `paused session resumes with new active window and cleared remainder`() {
         val remaining = 5_000L
         val cmds = eval(state(sessionRemainingMs = remaining, defaultLockoutMins = 60))
         assertEquals(2, cmds.size)
         val update = cmds[0] as SessionCommand.UpdateState
         assertEquals(now + remaining, update.newActiveUntil)
-        assertEquals(now + remaining + lockoutMs, update.newLockedUntil)
         assertEquals(0L, update.newSessionRemainingMs)
         assertTrue(cmds[1] is SessionCommand.DismissOverlay)
     }
 
     @Test
-    fun `paused resume respects a custom lockout duration`() {
-        val remaining = 90_000L
-        val cmds = eval(state(sessionRemainingMs = remaining, defaultLockoutMins = 15))
+    fun `resuming a paused session never arms a lockout`() {
+        // The lockout is owed only once the session is spent. Arming it on resume (or at grant
+        // time, as an earlier build did) is what made a paused app look locked on re-entry.
+        val update = eval(state(sessionRemainingMs = 90_000L, defaultLockoutMins = 15))[0]
+            as SessionCommand.UpdateState
+        assertEquals(null, update.newLockedUntil)
+    }
+
+    // ─── Paused vs. locked (the "blocked 5 minutes into a 10 minute session" regression) ─────
+
+    @Test
+    fun `leaving mid-session and returning resumes instead of locking out`() {
+        // Session granted, user stepped away with 9 minutes banked. Nothing about that is a
+        // lockout, so coming back must resume the remainder rather than open the penalty box.
+        val cmds = eval(state(sessionRemainingMs = 9 * 60_000L, defaultLockoutMins = 120))
+        assertTrue(cmds.none { it is SessionCommand.ShowLockoutScreen })
+        assertEquals(now + 9 * 60_000L, (cmds[0] as SessionCommand.UpdateState).newActiveUntil)
+    }
+
+    // ─── Missed expiry alarm ─────────────────────────────────────────────────
+
+    @Test
+    fun `consumed session with no lockout on record starts one from now`() {
+        // Doze / process death can swallow the expiry alarm, leaving a spent session with no
+        // lockout written. Re-entry must open the penalty box rather than hand out a fresh one.
+        val cmds = eval(state(activeUntil = now - 60_000, sessionRemainingMs = 0L, defaultLockoutMins = 120))
+        assertEquals(2, cmds.size)
         val update = cmds[0] as SessionCommand.UpdateState
-        assertEquals(now + remaining + 15 * 60_000L, update.newLockedUntil)
+        assertEquals(now + 120 * 60_000L, update.newLockedUntil)
+        assertTrue(update.clearActiveSession)
+        assertEquals(now + 120 * 60_000L, (cmds[1] as SessionCommand.ShowLockoutScreen).lockedUntil)
+    }
+
+    @Test
+    fun `lockout length never includes unused session time`() {
+        // 10 minute session abandoned after 1 minute, 120 minute lockout: the penalty box is
+        // 120 minutes, not 129. Overstating it was the "2h 4m" the lock screen used to show.
+        val cmds = eval(state(activeUntil = now - 1, sessionRemainingMs = 0L, defaultLockoutMins = 120))
+        val lockedUntil = (cmds.last() as SessionCommand.ShowLockoutScreen).lockedUntil
+        assertEquals(120 * 60_000L, lockedUntil - now)
+    }
+
+    @Test
+    fun `consumed session does not steal priority from an existing lockout`() {
+        val lu = now + 30 * 60_000L
+        val cmds = eval(state(activeUntil = now - 60_000, lockedUntil = lu, defaultLockoutMins = 120))
+        assertEquals(1, cmds.size)
+        assertEquals(lu, (cmds[0] as SessionCommand.ShowLockoutScreen).lockedUntil)
     }
 
     @Test

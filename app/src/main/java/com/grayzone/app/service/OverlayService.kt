@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.pm.PackageManager
@@ -67,8 +68,16 @@ class OverlayService : Service() {
         const val TAG = "GrayzoneOverlay"
         const val CHANNEL_ID = "grayzone_overlay"
         const val RECOVERY_CHANNEL_ID = "grayzone_recovery"
+        /** Session countdown lives on its own channel so it can be tuned/muted independently. */
+        const val COUNTDOWN_CHANNEL_ID = "grayzone_session_timer"
         const val NOTIF_ID = 1
         const val RECOVERY_NOTIF_ID = 2
+        /**
+         * The countdown must NOT reuse [NOTIF_ID]. Sharing the foreground-service slot meant every
+         * protection refresh (each app switch, each screen-on) overwrote a running timer, and each
+         * countdown post overwrote the protection status — the two clobbered each other endlessly.
+         */
+        const val COUNTDOWN_NOTIF_ID = 3
         const val ACTION_STOP = "com.grayzone.app.ACTION_STOP_OVERLAY"
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
@@ -79,6 +88,13 @@ class OverlayService : Service() {
         const val ACTION_REFRESH_PROTECTION_STATUS = "com.grayzone.app.ACTION_REFRESH_PROTECTION_STATUS"
         private const val DEFAULT_WAIT = 5
         private const val AMBER_WARNING = 0xFFD97706.toInt()
+        /** Upper bound on how long a lock screen lingers after its app was evicted. */
+        private const val LOCK_OVERLAY_MAX_VISIBLE_MS = 30_000L
+        /** How often a running session re-confirms the user is still in the app. */
+        private const val SESSION_HEARTBEAT_INTERVAL_MS = 20_000L
+        /** How long the heartbeat waits for accessibility to answer with a live window list. */
+        private const val WINDOW_SNAPSHOT_REPLY_TIMEOUT_MS = 750L
+        private const val WINDOW_SNAPSHOT_POLL_MS = 50L
 
         // Light / dark chrome mirrors ui.theme palettes (see isNightMode)
         private const val BG_LIGHT          = 0xFFF7F6F3.toInt()
@@ -154,6 +170,17 @@ class OverlayService : Service() {
 
     /** Package paused by screen-off; resumed on USER_PRESENT (F-221). */
     @Volatile private var pausedByScreenOff: String? = null
+
+    /** Package whose lock screen is showing; see [armLockOverlayStickiness]. */
+    @Volatile private var lockOverlayPackage: String? = null
+    private var lockAutoDismissJob: Job? = null
+
+    /** elapsedRealtime of the last window list received from the accessibility service. */
+    @Volatile private var visibleSnapshotElapsedMs: Long = 0L
+    private var sessionHeartbeatJob: Job? = null
+
+    /** Serialises session transitions so the heartbeat cannot pause mid-app-switch. */
+    private val sessionMutex = kotlinx.coroutines.sync.Mutex()
     
     private val policyEngine = com.grayzone.app.policy.SessionPolicyEngine()
 
@@ -222,8 +249,7 @@ class OverlayService : Service() {
                     val activePackages = intent.getStringArrayListExtra(
                         GrayzoneAccessibilityService.EXTRA_ACTIVE_PACKAGES
                     ) ?: return
-                    visibleMonitoredPackages.clear()
-                    visibleMonitoredPackages.addAll(activePackages)
+                    applyWindowSnapshot(activePackages)
                     return
                 }
                 
@@ -231,6 +257,11 @@ class OverlayService : Service() {
                     val packageName = intent.getStringExtra(
                         GrayzoneAccessibilityService.EXTRA_PACKAGE_NAME
                     )
+                    
+                    intent.getStringArrayListExtra(
+                        GrayzoneAccessibilityService.EXTRA_ACTIVE_PACKAGES
+                    )?.let { applyWindowSnapshot(it) }
+
                     if (packageName != null) {
                         handleForegroundAppChanged(packageName)
                     }
@@ -256,6 +287,13 @@ class OverlayService : Service() {
                 e
             )
         }
+    }
+
+    /** Replaces the tracked window list and records when it was read (see [confirmStillInUse]). */
+    private fun applyWindowSnapshot(activePackages: List<String>) {
+        visibleMonitoredPackages.clear()
+        visibleMonitoredPackages.addAll(activePackages)
+        visibleSnapshotElapsedMs = SystemClock.elapsedRealtime()
     }
 
     private fun registerScreenOffReceiver() {
@@ -395,9 +433,10 @@ class OverlayService : Service() {
         }
     }
 
-    private suspend fun processForegroundAppChanged(currentPkg: String) {
+    // Holds [sessionMutex] so the heartbeat cannot bank a session in the middle of an app switch.
+    private suspend fun processForegroundAppChanged(currentPkg: String): Unit = sessionMutex.withLock {
         try {
-            if (currentPkg == packageName) return
+            if (currentPkg == packageName) return@withLock
 
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
@@ -411,13 +450,14 @@ class OverlayService : Service() {
             if (!hasLauncherIntent(currentPkg)) {
                 val oldPackage = lastForegroundPackage
                 if (oldPackage != null) {
+                    stopSessionHeartbeat()
                     backgroundApp(oldPackage, prefs, now)
                     lastForegroundPackage = null
                 }
-                return
+                return@withLock
             }
 
-            if (currentPkg == lastForegroundPackage) return
+            if (currentPkg == lastForegroundPackage) return@withLock
 
             val oldPackage = lastForegroundPackage
 
@@ -427,16 +467,16 @@ class OverlayService : Service() {
                 mapOf("from" to (oldPackage ?: "null"), "to" to currentPkg)
             )
 
-            // 1. Process Background Event for old package — skip when UsageStats says the
-            // previous package is still resumed (split-screen / multi-window, F-230).
+            // 1. Process Background Event for old package — skip when window tracking says the
+            // previous package is still visible (split-screen / multi-window, F-230).
             if (oldPackage != null) {
-                val visibility = visibilityHintFor(oldPackage, now)
-                if (com.grayzone.app.policy.ForegroundTransitionGuard.shouldTreatAsBackgrounded(visibility)) {
+                if (!visibleMonitoredPackages.contains(oldPackage)) {
+                    stopSessionHeartbeat()
                     backgroundApp(oldPackage, prefs, now)
                 } else {
                     com.grayzone.app.GrayzoneLogger.d(
                         com.grayzone.app.LogComponent.OVERLAY,
-                        "Skipping background transition — package still resumed",
+                        "Skipping background transition — package still visible in multi-window",
                         mapOf("package" to oldPackage)
                     )
                 }
@@ -459,16 +499,25 @@ class OverlayService : Service() {
                 nowElapsed
             )
             
+            // The launcher only came forward because Grayzone evicted the blocked app, so its
+            // "nothing to see here" dismissal must not take the lock screen down with it.
+            val keepLockOverlay = lockOverlayPackage != null && isHomeLauncher(currentPkg)
+
             var didShowWaitScreen = false
             // A paused session resumed via UpdateState is also an active session,
             // even though the pre-command state snapshot says otherwise.
             var hasActiveSession = newState.hasActiveSession(now, nowElapsed)
+            var activeUntil = newState.activeUntil
             fgCommands.forEach { cmd ->
+                if (cmd is com.grayzone.app.policy.SessionCommand.DismissOverlay && keepLockOverlay) {
+                    return@forEach
+                }
                 if (cmd is com.grayzone.app.policy.SessionCommand.ShowWaitScreen) didShowWaitScreen = true
                 if (cmd is com.grayzone.app.policy.SessionCommand.UpdateState &&
                     (cmd.newActiveUntil ?: 0L) > now
                 ) {
                     hasActiveSession = true
+                    activeUntil = cmd.newActiveUntil!!
                 }
                 executeCommand(cmd, prefs)
             }
@@ -477,6 +526,14 @@ class OverlayService : Service() {
             // During a break, usage is timed too so daily budgets stay accurate.
             if (!didShowWaitScreen && (hasActiveSession || newState.isOnBreak) && newState.isMonitored) {
                 sessionStartTime = now
+            }
+
+            // Re-entering an app that still has a live session re-posts its countdown: the engine
+            // just dismisses the overlay in that case, so nothing else would bring the timer back.
+            // The heartbeat starts with it, so the clock can only run while the app is on screen.
+            if (hasActiveSession && newState.isMonitored && activeUntil > now) {
+                withContext(Dispatchers.Main) { startCountdownNotification(currentPkg, activeUntil) }
+                startSessionHeartbeat(currentPkg)
             }
 
         } catch (e: Exception) {
@@ -509,12 +566,88 @@ class OverlayService : Service() {
         sessionStartTime = 0L
     }
 
-    /** True when [packageName] is still in front of the user (set, last-fg, or UsageStats hint). */
-    private fun isPackageStillVisible(packageName: String, now: Long = System.currentTimeMillis()): Boolean =
+    /** True when [packageName] is still in front of the user (set, or last-fg). */
+    private fun isPackageStillVisible(packageName: String): Boolean =
         packageName in visibleMonitoredPackages ||
-            lastForegroundPackage == packageName ||
-            visibilityHintFor(packageName, now) ==
-            com.grayzone.app.policy.AppVisibilityHint.STILL_RESUMED
+            lastForegroundPackage == packageName
+
+    /**
+     * Keeps a running session honest: session time may only accrue while the user is genuinely
+     * in [pkg].
+     *
+     * Pausing is otherwise driven entirely by accessibility window-change events. OEM process
+     * kills, dropped broadcasts and gesture navigation that never reports a new window all
+     * swallow that event, and the wall-clock deadline then keeps draining a session the user
+     * isn't using — they put the phone down and come back to a lockout they never spent. This is
+     * the backstop: no positive confirmation that the app is on screen, no session time.
+     */
+    private fun startSessionHeartbeat(pkg: String) {
+        sessionHeartbeatJob?.cancel()
+        sessionHeartbeatJob = serviceScope.launch {
+            while (isActive) {
+                delay(SESSION_HEARTBEAT_INTERVAL_MS)
+                val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val state = buildSessionState(pkg, prefs)
+                if (!state.hasActiveSession(System.currentTimeMillis(), SystemClock.elapsedRealtime())) {
+                    return@launch
+                }
+                if (confirmStillInUse(pkg)) continue
+
+                GrayzoneLogger.i(
+                    LogComponent.OVERLAY,
+                    "Heartbeat found $pkg is no longer on screen — banking the rest of the session"
+                )
+                sessionMutex.withLock {
+                    backgroundApp(pkg, prefs, System.currentTimeMillis())
+                    if (lastForegroundPackage == pkg) lastForegroundPackage = null
+                }
+                return@launch
+            }
+        }
+    }
+
+    private fun stopSessionHeartbeat() {
+        sessionHeartbeatJob?.cancel()
+        sessionHeartbeatJob = null
+    }
+
+    /**
+     * Asks the accessibility service for a freshly read window list and reports whether [pkg] is
+     * in it. The cached list is not trusted here: an outgoing app's window lingers through the
+     * transition animation, which is exactly the stale reading that keeps a dead session alive.
+     *
+     * Returns false when the screen is off, or when accessibility does not answer — if Grayzone
+     * cannot see the screen it cannot claim the user is using the app.
+     */
+    private suspend fun confirmStillInUse(pkg: String): Boolean {
+        val power = getSystemService(android.os.PowerManager::class.java)
+        if (power != null && !power.isInteractive) return false
+
+        val pingedAtElapsed = SystemClock.elapsedRealtime()
+        try {
+            sendBroadcast(
+                Intent(GrayzoneAccessibilityService.ACTION_REQUEST_WINDOW_SNAPSHOT)
+                    .setPackage(getPackageName())
+            )
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.OVERLAY, "Window snapshot ping failed: ${e.message}")
+            return false
+        }
+
+        var waited = 0L
+        while (waited < WINDOW_SNAPSHOT_REPLY_TIMEOUT_MS && visibleSnapshotElapsedMs < pingedAtElapsed) {
+            delay(WINDOW_SNAPSHOT_POLL_MS)
+            waited += WINDOW_SNAPSHOT_POLL_MS
+        }
+        if (visibleSnapshotElapsedMs < pingedAtElapsed) {
+            GrayzoneLogger.w(
+                LogComponent.OVERLAY,
+                "Accessibility did not answer the window snapshot ping; treating $pkg as not in use"
+            )
+            return false
+        }
+        return pkg in visibleMonitoredPackages
+    }
 
     /**
      * Screen turned off: the device is not in use, so pause the current monitored session exactly
@@ -523,11 +656,12 @@ class OverlayService : Service() {
      */
     private fun handleScreenOff() {
         val pkg = lastForegroundPackage ?: return
+        stopSessionHeartbeat()
         serviceScope.launch {
             try {
                 val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
                 val now = System.currentTimeMillis()
-                backgroundApp(pkg, prefs, now)
+                sessionMutex.withLock { backgroundApp(pkg, prefs, now) }
                 pausedByScreenOff = pkg
                 lastForegroundPackage = null
                 com.grayzone.app.GrayzoneLogger.d(
@@ -666,6 +800,8 @@ class OverlayService : Service() {
                     editor.putLong(PrefsKeys.LOCKED_UNTIL + cmd.packageName, until)
                         .putLong(PrefsKeys.LOCKED_STARTED_ELAPSED + cmd.packageName, nowElapsed)
                         .putLong(PrefsKeys.LOCKED_DURATION_MS + cmd.packageName, duration)
+                        // A lockout retires whatever was banked; nothing survives the penalty box.
+                        .remove(PrefsKeys.REMAINING_MILLIS + cmd.packageName)
                 }
                 cmd.newSessionRemainingMs?.let { editor.putLong(PrefsKeys.REMAINING_MILLIS + cmd.packageName, it) }
                 if (cmd.clearActiveSession) {
@@ -753,7 +889,7 @@ class OverlayService : Service() {
 
                 // Don't slam the budget lock down mid-break; it will be enforced
                 // by the policy engine on the next foreground once the break ends.
-                val stillVisible = isPackageStillVisible(pkg, now)
+                val stillVisible = isPackageStillVisible(pkg)
                 if (com.grayzone.app.data.DailyBudget.shouldShowBudgetLock(
                         usedMs = newUsedMs,
                         budgetMins = budgetMins,
@@ -775,6 +911,52 @@ class OverlayService : Service() {
         }
     }
     /**
+     * Starts the penalty box for [pkg] at [now] and retires the spent session, so the lockout
+     * window is exactly the configured `lockoutMins` long. No-op when a lockout is already
+     * running, so repeated expiry deliveries cannot extend it.
+     */
+    private fun beginLockout(
+        pkg: String,
+        prefs: android.content.SharedPreferences,
+        now: Long,
+        nowElapsed: Long
+    ): Long {
+        val existingUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+        val alreadyLocked = com.grayzone.app.policy.MonotonicDeadline.isPending(
+            existingUntil,
+            prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, 0L),
+            prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + pkg, 0L),
+            now,
+            nowElapsed
+        )
+        if (alreadyLocked) return existingUntil
+        stopSessionHeartbeat()
+
+        val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
+        val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(
+            hasCustom = hasCustom,
+            perApp = prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + pkg, 60),
+            global = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+        ).coerceIn(15, 24 * 60)
+        val lockoutMs = lockoutMins * 60 * 1000L
+        val lockedUntil = now + lockoutMs
+
+        prefs.edit()
+            .putLong(PrefsKeys.LOCKED_UNTIL + pkg, lockedUntil)
+            .putLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, nowElapsed)
+            .putLong(PrefsKeys.LOCKED_DURATION_MS + pkg, lockoutMs)
+            .remove(PrefsKeys.ACTIVE_UNTIL + pkg)
+            .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg)
+            .remove(PrefsKeys.ACTIVE_DURATION_MS + pkg)
+            .remove(PrefsKeys.REMAINING_MILLIS + pkg)
+            .commit()
+        SessionExpiryScheduler.cancel(this, pkg)
+
+        GrayzoneLogger.i(LogComponent.OVERLAY, "Lockout started for $pkg ($lockoutMins mins)")
+        return lockedUntil
+    }
+
+    /**
      * Called when the Doze-safe expiry alarm fires (via [SessionExpiryReceiver]). Clamps the
      * countdown notification so it never shows a negative value, and shows the lock when the
      * monitored app is still foreground within its lockout window. Reliable across
@@ -786,13 +968,22 @@ class OverlayService : Service() {
             val now = System.currentTimeMillis()
             val nowElapsed = android.os.SystemClock.elapsedRealtime()
             val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
-            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
             val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + packageName, 0L)
             val activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + packageName, 0L)
+
+            // The session has genuinely run out, so the penalty box is now owed. Starting it here
+            // (rather than at grant time) is what makes the lock last exactly `lockoutMins` and
+            // keeps a merely-paused session out of the lockout gate entirely.
+            val sessionEnded = activeUntil > 0L && !com.grayzone.app.policy.MonotonicDeadline.isPending(
+                activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed
+            )
+            if (sessionEnded) beginLockout(packageName, prefs, now, nowElapsed)
+
+            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
             val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName, 0L)
             val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + packageName, 0L)
 
-            val stillVisible = isPackageStillVisible(packageName, now)
+            val stillVisible = isPackageStillVisible(packageName)
             val outcome = SessionExpiryDecision.decide(
                 now = now,
                 activeUntil = activeUntil,
@@ -842,7 +1033,8 @@ class OverlayService : Service() {
             cancelCountdownNotification()
         } else if (intent?.action == ACTION_SESSION_EXPIRED) {
             val pkg = intent.getStringExtra("package_name") ?: ""
-            if (pkg.isNotEmpty()) handleSessionExpired(pkg)
+            // Off the main thread: expiry starts the lockout, which writes prefs synchronously.
+            if (pkg.isNotEmpty()) serviceScope.launch { handleSessionExpired(pkg) }
         } else if (intent?.action == ACTION_APP_CHANGED_WATCHDOG) {
             val pkg = intent.getStringExtra(GrayzoneAccessibilityService.EXTRA_PACKAGE_NAME) ?: ""
             if (pkg.isNotEmpty()) handleForegroundAppChanged(pkg)
@@ -915,8 +1107,8 @@ class OverlayService : Service() {
             setChronometer(R.id.notif_timer, baseElapsed, null, true)
         }
 
-        nm.notify(NOTIF_ID,
-            NotificationCompat.Builder(this@OverlayService, CHANNEL_ID)
+        nm.notify(COUNTDOWN_NOTIF_ID,
+            NotificationCompat.Builder(this@OverlayService, COUNTDOWN_CHANNEL_ID)
                 // Status-bar glyph only; main shade icon is the adaptive launcher icon.
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(appName)
@@ -940,7 +1132,16 @@ class OverlayService : Service() {
         )
     }
     
+    /**
+     * Takes the timer down. The protection notification is a separate, independently owned slot,
+     * so it stays exactly as it is — there is nothing to restore here.
+     */
     private fun cancelCountdownNotification() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(COUNTDOWN_NOTIF_ID)
+    }
+
+    private fun postProtectionNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification())
     }
@@ -952,6 +1153,9 @@ class OverlayService : Service() {
         appChangeReceiver = null
         safeUnregister(screenReceiver)
         screenReceiver = null
+        // Only the FGS notification is torn down with the service; the timer owns its own slot and
+        // would otherwise be stranded in the shade, counting down against a session that is gone.
+        cancelCountdownNotification()
         serviceScope.cancel()
         dismissOverlay()
     }
@@ -959,6 +1163,51 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     // ─── Overlay UI ──────────────────────────────────────────────────────────
+
+    /**
+     * Pushes a blocked app out of the foreground and stops it running behind the lock screen.
+     *
+     * The overlay alone does not pause the app underneath, so video/audio keeps playing. Sending
+     * the user home pauses the activity; killing the background process afterwards stops anything
+     * that kept playing from a background service. HOME is routed through the accessibility
+     * service because a background `startActivity` is unreliable from API 29 on, with the direct
+     * intent kept as a fallback for when accessibility is not connected.
+     */
+    private fun evictLockedApp(packageName: String) {
+        sendBroadcast(
+            Intent(GrayzoneAccessibilityService.ACTION_PERFORM_HOME)
+                .setPackage(getPackageName())
+        )
+
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try {
+            startActivity(homeIntent)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(
+                LogComponent.OVERLAY,
+                "Failed to launch home screen for locked app: ${e.message}"
+            )
+        }
+
+        if (packageName == getPackageName() || isHomeLauncher(packageName)) return
+        serviceScope.launch {
+            // Let the app finish pausing first: killBackgroundProcesses is a no-op while the
+            // target still counts as foreground.
+            delay(600)
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                am.killBackgroundProcesses(packageName)
+            } catch (e: Exception) {
+                GrayzoneLogger.w(
+                    LogComponent.OVERLAY,
+                    "Failed to stop background processes for $packageName: ${e.message}"
+                )
+            }
+        }
+    }
 
     /** Best-effort: clear stuck system monochrome from older builds. No-op without grant. */
     private fun clearStaleSystemGrayscale() {
@@ -1026,6 +1275,7 @@ class OverlayService : Service() {
         // Lock-type screens (no progress bar) clear any running session countdown notification.
         if (!presentation.showsProgress) {
             cancelCountdownNotification()
+            evictLockedApp(packageName)
         }
 
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
@@ -1058,7 +1308,10 @@ class OverlayService : Service() {
         val root = object : FrameLayout(ctx) {
             override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
                 if (event.action == android.view.KeyEvent.ACTION_UP && event.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
-                    // Send to home on BACK press
+                    // BACK means "I'm leaving": go home and take the overlay with us, so a lock
+                    // screen that lingers past the eviction always has an obvious way out.
+                    // Nothing is granted — dismissing cancels the friction countdown too.
+                    dismissOverlay()
                     val homeIntent = Intent(Intent.ACTION_MAIN).apply {
                         addCategory(Intent.CATEGORY_HOME)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -1225,6 +1478,7 @@ class OverlayService : Service() {
             lastOverlayAppName = appName
             lastOverlayMode = mode
             lastOverlayLockedUntil = lockedUntil
+            if (!presentation.showsProgress) armLockOverlayStickiness(packageName)
         } catch (e: Exception) {
             // Must not fail open during a lockout (F-001): keep the service alive and surface the
             // failure so ProtectionHealth / logs can show protection is broken.
@@ -1286,8 +1540,25 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * A lock screen has to outlive the jump to the launcher that [evictLockedApp] just triggered,
+     * otherwise Grayzone kicks the user out and then instantly hides the explanation. It stays up
+     * over the launcher only — opening anything else dismisses it — with a timeout so a missed
+     * transition can never leave the screen wedged.
+     */
+    private fun armLockOverlayStickiness(packageName: String) {
+        lockOverlayPackage = packageName
+        lockAutoDismissJob?.cancel()
+        lockAutoDismissJob = serviceScope.launch(Dispatchers.Main) {
+            delay(LOCK_OVERLAY_MAX_VISIBLE_MS)
+            if (lockOverlayPackage == packageName) dismissOverlay()
+        }
+    }
+
     private fun dismissOverlay() {
         countdownJobUI?.cancel(); countdownJobUI = null
+        lockAutoDismissJob?.cancel(); lockAutoDismissJob = null
+        lockOverlayPackage = null
         overlayView?.let { view ->
             try {
                 view.clearAnimation()
@@ -1316,23 +1587,14 @@ class OverlayService : Service() {
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
         val sessionMins = com.grayzone.app.data.PerAppLimits.sessionMinutes(hasCustom, prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + packageName, 10), prefs.getInt(PrefsKeys.SESSION_MINUTES, 10))
-        val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(hasCustom, prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60), prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60))
 
-        // Validate session duration: must be between 1 minute and 24 hours
+        // Validate session duration: must be between 1 minute and 24 hours.
+        // The lockout is validated in [beginLockout], where it is actually applied.
         val validSessionMins = sessionMins.coerceIn(1, 24 * 60)
         if (validSessionMins != sessionMins) {
             GrayzoneLogger.w(
                 LogComponent.OVERLAY,
                 "Invalid session duration $sessionMins mins for $packageName, clamped to $validSessionMins"
-            )
-        }
-
-        // Validate lockout duration: must be between 15 minutes and 24 hours
-        val validLockoutMins = lockoutMins.coerceIn(15, 24 * 60)
-        if (validLockoutMins != lockoutMins) {
-            GrayzoneLogger.w(
-                LogComponent.OVERLAY,
-                "Invalid lockout duration $lockoutMins mins for $packageName, clamped to $validLockoutMins"
             )
         }
 
@@ -1352,22 +1614,24 @@ class OverlayService : Service() {
         )
 
         val activeUntil = now + grantedSessionMs
-        val lockoutMs = validLockoutMins * 60 * 1000L
-        val lockedUntil = activeUntil + lockoutMs
         val nowElapsed = android.os.SystemClock.elapsedRealtime()
 
+        // The lockout is NOT written here. It is materialised only when the session is actually
+        // used up (see [beginLockout]); writing it up front made every paused session look like
+        // an active lockout and blocked the user mid-session with a `session + lockout` countdown.
         prefs.edit()
             .remove(PrefsKeys.REMAINING_MILLIS + packageName)
+            .remove(PrefsKeys.LOCKED_UNTIL + packageName)
+            .remove(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName)
+            .remove(PrefsKeys.LOCKED_DURATION_MS + packageName)
             .putLong(PrefsKeys.ACTIVE_UNTIL + packageName, activeUntil)
             .putLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + packageName, nowElapsed)
             .putLong(PrefsKeys.ACTIVE_DURATION_MS + packageName, grantedSessionMs)
-            .putLong(PrefsKeys.LOCKED_UNTIL + packageName, lockedUntil)
-            .putLong(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName, nowElapsed)
-            .putLong(PrefsKeys.LOCKED_DURATION_MS + packageName, grantedSessionMs + lockoutMs)
             .commit()
 
         startCountdownNotification(packageName, activeUntil)
         SessionExpiryScheduler.arm(this, packageName, activeUntil)
+        startSessionHeartbeat(packageName)
         sessionStartTime = now
     }
 
@@ -1465,6 +1729,17 @@ class OverlayService : Service() {
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(recovery)
+        val countdown = NotificationChannel(
+            COUNTDOWN_CHANNEL_ID,
+            "Session Timer",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Live countdown while an app session is running"
+            setShowBadge(false)
+            setSound(null, null)
+            enableVibration(false)
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(countdown)
     }
 
     /** F-082: tappable recovery when background startActivity is blocked. */
@@ -1501,45 +1776,10 @@ class OverlayService : Service() {
             val overlayOn = android.provider.Settings.canDrawOverlays(this)
             com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(a11yOn)
             com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(overlayOn)
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.notify(NOTIF_ID, buildNotification())
+
+            postProtectionNotification()
         } catch (e: Exception) {
             GrayzoneLogger.w(LogComponent.OVERLAY, "refreshProtectionNotification failed: ${e.message}")
-        }
-    }
-
-    /**
-     * Last UsageEvents signal for [pkg] in a short lookback. UNKNOWN when usage access is
-     * missing or the query is empty — callers then keep legacy transition behaviour (F-230).
-     */
-    private fun visibilityHintFor(pkg: String, now: Long): com.grayzone.app.policy.AppVisibilityHint {
-        return try {
-            val usm = getSystemService(android.app.usage.UsageStatsManager::class.java)
-                ?: return com.grayzone.app.policy.AppVisibilityHint.UNKNOWN
-            val events = usm.queryEvents(now - 2_000L, now + 1L)
-            val event = android.app.usage.UsageEvents.Event()
-            var lastType: Int? = null
-            while (events.hasNextEvent()) {
-                events.getNextEvent(event)
-                if (event.packageName == pkg &&
-                    (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED ||
-                        event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED ||
-                        event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED)
-                ) {
-                    lastType = event.eventType
-                }
-            }
-            when (lastType) {
-                android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED ->
-                    com.grayzone.app.policy.AppVisibilityHint.STILL_RESUMED
-                android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
-                android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED ->
-                    com.grayzone.app.policy.AppVisibilityHint.PAUSED_OR_LEFT
-                else -> com.grayzone.app.policy.AppVisibilityHint.UNKNOWN
-            }
-        } catch (e: Exception) {
-            GrayzoneLogger.w(LogComponent.OVERLAY, "visibilityHintFor failed: ${e.message}")
-            com.grayzone.app.policy.AppVisibilityHint.UNKNOWN
         }
     }
 

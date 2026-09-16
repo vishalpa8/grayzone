@@ -81,6 +81,7 @@ class GrayzoneApplication : Application() {
         // longer ANR/crash the accessibility service — but a light onCreate still avoids UI jank and
         // slow cold starts, so keep deferring non-critical work.
         validateConfiguration()
+        migrateLockoutFormat()
         resetRuntimeStateIfNeeded()
         runDeferredStartupWork()
         catchUpStreaks()
@@ -301,6 +302,17 @@ class GrayzoneApplication : Application() {
             LogComponent.BOOT,
             "Default monitored apps seeded: ${seeded.intersect(DefaultMonitoredApps.DEFAULT_PACKAGES.toSet())}"
         )
+    }
+
+    /**
+     * One-shot cleanup of lockouts armed by the old "lock at session grant" format.
+     */
+    private fun migrateLockoutFormat() {
+        val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        val cleared = com.grayzone.app.data.LockoutFormatMigration.run(prefs)
+        if (cleared > 0) {
+            GrayzoneLogger.i(LogComponent.BOOT, "Cleared $cleared stale lockout(s) from the old format")
+        }
     }
 
     /**

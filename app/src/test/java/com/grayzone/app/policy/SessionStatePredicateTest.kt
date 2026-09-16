@@ -62,6 +62,28 @@ class SessionStatePredicateTest {
         assertFalse(state(lockedUntil = 0L).isLockedOut(now))
     }
 
+    // ─── isSessionConsumed: session spent with nothing banked ────────────────
+
+    @Test
+    fun `session is consumed once it expires with no remainder`() {
+        assertTrue(state(activeUntil = now - 1, sessionRemainingMs = 0L).isSessionConsumed(now))
+    }
+
+    @Test
+    fun `a paused session is never consumed`() {
+        assertFalse(state(activeUntil = now - 1, sessionRemainingMs = 5_000L).isSessionConsumed(now))
+    }
+
+    @Test
+    fun `a running session is not consumed`() {
+        assertFalse(state(activeUntil = now + 1).isSessionConsumed(now))
+    }
+
+    @Test
+    fun `an app that never had a session is not consumed`() {
+        assertFalse(state(activeUntil = 0L).isSessionConsumed(now))
+    }
+
     // ─── isBudgetExhausted: `budgetRemainingMs <= 0` ─────────────────────────
 
     @Test
