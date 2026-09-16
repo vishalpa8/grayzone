@@ -5,6 +5,9 @@ import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
+/** Global shared Gson instance to avoid redundant instantiations. */
+val globalGson = Gson()
+
 // ─── App Name ─────────────────────────────────────────────────────────────────
 
 /** Returns the user-facing app label for [pkg], or [pkg] itself on failure. */
@@ -51,11 +54,31 @@ fun isAnyAppLocked(
     prefs: SharedPreferences,
     monitoredApps: Set<String>,
     now: Long
-): Boolean = monitoredApps.any { pkg ->
-    val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL  + pkg, 0L)
-    val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL  + pkg, 0L)
-    val remaining   = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
-    (now < activeUntil) || (now in (activeUntil + 1)..lockedUntil) || (remaining > 0)
+): Boolean {
+    val nowElapsed = android.os.SystemClock.elapsedRealtime()
+    return monitoredApps.any { pkg ->
+        val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+        val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+        val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg, 0L)
+        val activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + pkg, 0L)
+        val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, 0L)
+        val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + pkg, 0L)
+        val remaining = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
+        
+        val isSessionActive = if (activeStartedElapsedMs > 0L) {
+            com.grayzone.app.policy.MonotonicDeadline.isPending(activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed)
+        } else {
+            activeUntil > 0L && now < activeUntil
+        }
+        
+        val isLocked = if (lockedStartedElapsedMs > 0L) {
+            com.grayzone.app.policy.MonotonicDeadline.isPending(lockedUntil, lockedStartedElapsedMs, lockedDurationMs, now, nowElapsed)
+        } else {
+            lockedUntil > 0L && now < lockedUntil
+        }
+        
+        isSessionActive || isLocked || remaining > 0
+    }
 }
 
 /**
@@ -120,7 +143,7 @@ object Prompts {
      * - valid JSON → the list (null Gson result treated as empty)
      * - malformed JSON → `null` so writers can refuse to overwrite (F-148)
      */
-    fun parseCustom(json: String?, gson: Gson = Gson()): List<String>? {
+    fun parseCustom(json: String?, gson: Gson = globalGson): List<String>? {
         if (json == null) return emptyList()
         return try {
             val type = object : TypeToken<List<String>>() {}.type

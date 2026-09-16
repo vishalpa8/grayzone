@@ -3,7 +3,7 @@ package com.grayzone.app.service.overlay
 /** Daily-budget-exhausted lock screen (no countdown; resets at midnight). */
 object BudgetLockPresentation : OverlayPresentation {
     override val title = "Locked."
-    override val skipButtonLabel = "← Leave App"
+    override val skipButtonLabel = "Leave App"
     override val showsProgress = false
     override val countdownTextSizeSp = 24f // F-097: 72sp clipped lock "—" in landscape / large font
 

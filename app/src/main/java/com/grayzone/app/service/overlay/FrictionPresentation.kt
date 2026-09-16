@@ -5,7 +5,7 @@ import com.grayzone.app.data.ConfigValidator
 /** Friction / pause screen shown before a session starts. */
 object FrictionPresentation : OverlayPresentation {
     override val title = "Pause."
-    override val skipButtonLabel = "← I'll Skip This"
+    override val skipButtonLabel = "I'll Skip This"
     override val showsProgress = true
     override val countdownTextSizeSp = 72f
 

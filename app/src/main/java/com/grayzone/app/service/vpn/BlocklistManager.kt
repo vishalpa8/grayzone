@@ -99,7 +99,6 @@ object BlocklistManager {
     )
 
     private val loadStarted = AtomicBoolean(false)
-    private val ipv4LiteralRegex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
     // Bounded LRU cache to avoid unbounded memory growth from per-request additions.
     // Access guarded by cacheLock for simple thread-safety.
     private val cacheLock = Any()
@@ -107,6 +106,24 @@ object BlocklistManager {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String?>?): Boolean {
             return size > 4000
         }
+    }
+
+    private fun isIpv4Literal(domain: String): Boolean {
+        var dots = 0
+        var digits = 0
+        for (i in domain.indices) {
+            val c = domain[i]
+            if (c == '.') {
+                if (digits == 0 || digits > 3) return false
+                dots++
+                digits = 0
+            } else if (c in '0'..'9') {
+                digits++
+            } else {
+                return false
+            }
+        }
+        return dots == 3 && digits in 1..3
     }
 
     // High-confidence fallback domains for immediate blocking before bloom filters
@@ -204,7 +221,16 @@ object BlocklistManager {
                 if (normalizedDomainCache.containsKey(domain)) return normalizedDomainCache[domain]
             }
 
-            var trimmed = domain.trim().lowercase(Locale.US)
+            var trimmed = domain.trim()
+            var hasUpper = false
+            for (i in trimmed.indices) {
+                if (trimmed[i] in 'A'..'Z') {
+                    hasUpper = true
+                    break
+                }
+            }
+            if (hasUpper) trimmed = trimmed.lowercase(Locale.US)
+            
             if (trimmed.startsWith("http://")) trimmed = trimmed.substring(7)
             else if (trimmed.startsWith("https://")) trimmed = trimmed.substring(8)
             
@@ -219,7 +245,7 @@ object BlocklistManager {
             }
 
             // IPv4 literal (e.g. 8.8.8.8) or IPv6 (contains ':') → reject
-            if (ipv4LiteralRegex.matches(withoutTrailingDot) || withoutTrailingDot.contains(':')) {
+            if (withoutTrailingDot.contains(':') || isIpv4Literal(withoutTrailingDot)) {
                 synchronized(cacheLock) { normalizedDomainCache[domain] = null }
                 return null
             }
@@ -250,6 +276,16 @@ object BlocklistManager {
      * reason: ad, adult content, or known DoH bypass endpoint.
      *
      * DoH bypass is checked first and works even before loading completes.
+     */
+    /**
+     * Checks if a domain is blocked.
+     * Evaluation order:
+     * 1. Hardcoded DoH fallback bypass (always allowed)
+     * 2. Custom Allowlist (takes precedence over Denylist)
+     * 3. Custom Denylist
+     * 4. Telemetry rules
+     * 5. High-confidence rules
+     * 6. Bloom Filter
      */
     fun isBlocked(domain: String): Boolean {
         if (isDoHBypass(domain)) return true

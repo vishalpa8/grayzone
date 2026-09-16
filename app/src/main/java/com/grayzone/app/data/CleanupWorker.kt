@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import com.grayzone.app.GrayzoneLogger
 import com.grayzone.app.LogComponent
 import java.text.SimpleDateFormat
+import com.grayzone.app.DateUtils
 import java.util.*
 
 /**
@@ -32,9 +33,7 @@ class CleanupWorker(
          * Extracted so the retention boundary can be unit-tested without Android.
          */
         fun cutoffDateKey(nowMillis: Long, retentionDays: Long = RETENTION_DAYS): String =
-            SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
-                Date(nowMillis - retentionDays * 24 * 60 * 60 * 1000L)
-            )
+            DateUtils.formatDateKey(nowMillis - retentionDays * 24 * 60 * 60 * 1000L)
     }
     
     override suspend fun doWork(): Result {

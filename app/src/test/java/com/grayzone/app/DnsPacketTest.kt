@@ -91,7 +91,7 @@ class DnsPacketTest {
     @Test
     fun `sinkhole response delegates to nxdomain for ipv4`() {
         val request = ipv4DnsQuery(id = 0xBEEF, qType = 1)
-        val sinkhole = DnsPacketHelper.createSinkholeResponse(request, request.size)
+        val sinkhole = DnsPacketHelper.createNxDomainResponse(request, request.size)
         val nx = DnsPacketHelper.createNxDomainResponse(request, request.size)
         assertNotNull(sinkhole)
         assertNotNull(nx)

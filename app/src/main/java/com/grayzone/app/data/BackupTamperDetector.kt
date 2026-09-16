@@ -48,14 +48,10 @@ object BackupTamperDetector {
     }
 
     fun executeTamperLockdown(prefs: SharedPreferences) {
-        val now = System.currentTimeMillis()
-        val tomorrow = now + 24 * 60 * 60 * 1000L
-        // Lock settings and play store for 24 hours as punishment
-        prefs.edit()
-            .putBoolean(com.grayzone.app.PrefsKeys.GRAYZONE_ENABLED, true)
-            .putStringSet(com.grayzone.app.PrefsKeys.MONITORED_APPS, setOf("com.android.settings", "com.android.vending"))
-            .putLong(com.grayzone.app.PrefsKeys.LOCKED_UNTIL + "com.android.settings", tomorrow)
-            .putLong(com.grayzone.app.PrefsKeys.LOCKED_UNTIL + "com.android.vending", tomorrow)
-            .commit()
+        // F-023: Hostile UX removed. We just log the tamper event instead of punishing the user.
+        com.grayzone.app.GrayzoneLogger.w(
+            com.grayzone.app.LogComponent.PREFS,
+            "Tamper detected: State backup wiped while Keystore key survived. Lockdown skipped."
+        )
     }
 }

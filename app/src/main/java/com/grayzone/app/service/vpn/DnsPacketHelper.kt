@@ -129,7 +129,7 @@ object DnsPacketHelper {
             if (qdCount == 0) return null
 
             var offset = dnsOffset + 12
-            val sb = java.lang.StringBuilder()
+            val sb = java.lang.StringBuilder(64)
 
             while (offset < length) {
                 val len = packet[offset].toInt() and 0xFF
@@ -155,22 +155,7 @@ object DnsPacketHelper {
         }
     }
 
-    fun createSinkholeResponse(requestPacket: ByteArray, requestLength: Int): ByteArray? {
-        // For robustness and RFC compliance, respond with NXDOMAIN rather than serving
-        // an A record. This avoids providing A/AAAA mismatched records and is broadly
-        // accepted by clients as an authoritative negative answer for blocked domains.
-        try {
-            return createNxDomainResponse(requestPacket, requestLength)
-        } catch (e: Exception) {
-            sinkholeCreationErrors.incrementAndGet()
-            GrayzoneLogger.e(
-                LogComponent.DNS,
-                "Failed to create sinkhole response (delegated to NXDOMAIN): ${e.message}",
-                e
-            )
-            return null
-        }
-    }
+
 
     fun createNxDomainResponse(requestPacket: ByteArray, requestLength: Int): ByteArray? {
         try {
@@ -305,7 +290,8 @@ object DnsPacketHelper {
 
     private fun createNxDomainResponseIPv6(requestPacket: ByteArray, requestLength: Int): ByteArray? {
         try {
-            val dnsOffset = 48
+            val dnsOffset = getDnsPayloadOffset(requestPacket, requestLength) ?: return null
+            val udpOffset = dnsOffset - 8
             val response = ByteArray(requestLength)
             System.arraycopy(requestPacket, 0, response, 0, requestLength)
 
@@ -315,22 +301,22 @@ object DnsPacketHelper {
                 response[24 + i] = tmp
             }
 
-            val sp1 = response[40]
-            val sp2 = response[41]
-            response[40] = response[42]
-            response[41] = response[43]
-            response[42] = sp1
-            response[43] = sp2
+            val sp1 = response[udpOffset]
+            val sp2 = response[udpOffset + 1]
+            response[udpOffset] = response[udpOffset + 2]
+            response[udpOffset + 1] = response[udpOffset + 3]
+            response[udpOffset + 2] = sp1
+            response[udpOffset + 3] = sp2
 
-            response[46] = 0
-            response[47] = 0
+            response[udpOffset + 6] = 0
+            response[udpOffset + 7] = 0
 
             response[dnsOffset + 2] = 0x81.toByte()
             response[dnsOffset + 3] = 0x83.toByte()
             response[dnsOffset + 6] = 0
             response[dnsOffset + 7] = 0
 
-            computeUdpChecksumIPv6(response)
+            computeUdpChecksumIPv6(response, udpOffset)
             return response
         } catch (e: Exception) {
             nxdomainCreationErrors.incrementAndGet()
@@ -345,10 +331,16 @@ object DnsPacketHelper {
 
     private fun wrapDnsResponseIPv6(requestPacket: ByteArray, dnsPayload: ByteArray, dnsLength: Int): ByteArray? {
         try {
-            val newTotalLength = 48 + dnsLength
+            val requestDnsOffset = getDnsPayloadOffset(requestPacket, requestPacket.size) ?: return null
+            val requestUdpOffset = requestDnsOffset - 8
+            
+            val newTotalLength = 40 + 8 + dnsLength
             val response = ByteArray(newTotalLength)
 
             System.arraycopy(requestPacket, 0, response, 0, 40)
+            
+            // We strip extension headers, so set Next Header to UDP (17)
+            response[6] = 17
             
             val payloadLength = 8 + dnsLength
             response[4] = (payloadLength shr 8).toByte()
@@ -360,7 +352,7 @@ object DnsPacketHelper {
                 response[24 + i] = tmp
             }
 
-            System.arraycopy(requestPacket, 40, response, 40, 8)
+            System.arraycopy(requestPacket, requestUdpOffset, response, 40, 8)
             
             response[44] = (payloadLength shr 8).toByte()
             response[45] = (payloadLength and 0xFF).toByte()
@@ -376,11 +368,11 @@ object DnsPacketHelper {
             response[47] = 0
 
             System.arraycopy(dnsPayload, 0, response, 48, dnsLength)
-            val requestDnsOffset = getDnsPayloadOffset(requestPacket, requestPacket.size) ?: return null
+            
             response[48] = requestPacket[requestDnsOffset]
             response[49] = requestPacket[requestDnsOffset + 1]
 
-            computeUdpChecksumIPv6(response)
+            computeUdpChecksumIPv6(response, 40)
             return response
         } catch (e: Exception) {
             responseWrapErrors.incrementAndGet()
@@ -393,8 +385,8 @@ object DnsPacketHelper {
         }
     }
 
-    private fun computeUdpChecksumIPv6(packet: ByteArray) {
-        val payloadLength = ((packet[44].toInt() and 0xFF) shl 8) or (packet[45].toInt() and 0xFF)
+    private fun computeUdpChecksumIPv6(packet: ByteArray, udpOffset: Int) {
+        val payloadLength = ((packet[udpOffset + 4].toInt() and 0xFF) shl 8) or (packet[udpOffset + 5].toInt() and 0xFF)
         
         var sum = 0L
         for (i in 8 until 40 step 2) {
@@ -403,8 +395,8 @@ object DnsPacketHelper {
         sum += payloadLength
         sum += 17
 
-        for (i in 40 until 40 + payloadLength step 2) {
-            if (i == 40 + payloadLength - 1) {
+        for (i in udpOffset until udpOffset + payloadLength step 2) {
+            if (i == udpOffset + payloadLength - 1) {
                 sum += (packet[i].toInt() and 0xFF) shl 8
             } else {
                 sum += ((packet[i].toInt() and 0xFF) shl 8) or (packet[i + 1].toInt() and 0xFF)
@@ -414,9 +406,10 @@ object DnsPacketHelper {
         while ((sum shr 16) > 0) {
             sum = (sum and 0xFFFF) + (sum shr 16)
         }
-        val checksum = (sum.inv() and 0xFFFF).toInt()
-        val finalChecksum = if (checksum == 0) 0xFFFF else checksum
-        packet[46] = (finalChecksum shr 8).toByte()
-        packet[47] = (finalChecksum and 0xFF).toByte()
+        sum = sum.inv() and 0xFFFF
+        if (sum == 0L) sum = 0xFFFF
+        
+        packet[udpOffset + 6] = (sum shr 8).toByte()
+        packet[udpOffset + 7] = (sum and 0xFF).toByte()
     }
 }

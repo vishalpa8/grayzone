@@ -16,7 +16,7 @@ class IntegrationTest {
         val adDomain = "ads.example.com"
         val testPacket = createMockDnsPacket(adDomain)
         
-        val response = DnsPacketHelper.createSinkholeResponse(testPacket, testPacket.size)
+        val response = DnsPacketHelper.createNxDomainResponse(testPacket, testPacket.size)
         assertNotNull("Sinkhole response should be created", response)
         assertTrue("Response should be non-empty", response!!.size > 0)
     }

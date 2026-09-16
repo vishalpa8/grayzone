@@ -27,6 +27,8 @@ class AdBlockVpnService : VpnService() {
         const val ACTION_HOLD_EXPIRED = "com.grayzone.app.VPN_HOLD_EXPIRED"
         /** Rebuild the foreground notification (e.g. after hold state changes). */
         const val ACTION_REFRESH_NOTIFICATION = "com.grayzone.app.REFRESH_VPN_NOTIFICATION"
+        /** Reload custom blocklist rules dynamically. */
+        const val ACTION_RELOAD_RULES = "com.grayzone.app.RELOAD_RULES"
         const val NOTIF_ID = 2
         const val CHANNEL_ID = "adblock_vpn_channel"
 
@@ -157,6 +159,12 @@ class AdBlockVpnService : VpnService() {
         if (intent?.action == ACTION_HOLD_EXPIRED) {
             stopVpnAfterHoldExpired()
             return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_RELOAD_RULES) {
+            BlocklistManager.load(this)
+            com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Reloaded blocklist rules")
+            return START_STICKY
         }
 
         if (intent?.action == ACTION_STOP) {
@@ -578,7 +586,7 @@ class AdBlockVpnService : VpnService() {
             // Ad or adult content domain → sinkhole / negative answer
             DnsQueryClassifier.Action.SINKHOLE_BLOCK -> {
                 DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_AD)
-                writeSinkhole(packet, length, outputStream)
+                writeNxDomain(packet, length, outputStream)
             }
 
             // Allowed — forward to real DNS with fallback and deduplication.
@@ -595,13 +603,6 @@ class AdBlockVpnService : VpnService() {
         val nxDomain = DnsPacketHelper.createNxDomainResponse(packet, length)
         if (nxDomain != null) {
             synchronized(outputStream) { outputStream.write(nxDomain) }
-        }
-    }
-
-    private fun writeSinkhole(packet: ByteArray, length: Int, outputStream: FileOutputStream) {
-        val sinkhole = DnsPacketHelper.createSinkholeResponse(packet, length)
-        if (sinkhole != null) {
-            synchronized(outputStream) { outputStream.write(sinkhole) }
         }
     }
 
@@ -658,7 +659,7 @@ class AdBlockVpnService : VpnService() {
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.DNS,
-                "DNS query failed for $domain",
+                "DNS query failed",
                 e
             )
             deferred.complete(null)

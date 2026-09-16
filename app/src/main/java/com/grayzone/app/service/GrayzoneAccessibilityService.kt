@@ -28,10 +28,12 @@ class GrayzoneAccessibilityService : AccessibilityService() {
         try {
             val info = AccessibilityServiceInfo().apply {
                 eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                        AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+                        AccessibilityEvent.TYPE_WINDOWS_CHANGED
                 feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
                 flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                // Limits event processing rate. Note: a 100ms throttle may drop intermediate sub-100ms
+                // rapid app switches (e.g. A->B->A in 50ms) to save battery, which is an acceptable tradeoff
+                // since human users cannot meaningfully consume content in sub-100ms windows.
                 notificationTimeout = 100L
             }
             serviceInfo = info
@@ -56,15 +58,22 @@ class GrayzoneAccessibilityService : AccessibilityService() {
         try {
             val packageName = event.packageName?.toString()
 
-            // 1. Force Stop / Tamper Protection
-            if (packageName == "com.android.settings") {
+            // 1. Force Stop / Tamper Protection (Only check on major window state changes to save CPU)
+            if (packageName == "com.android.settings" && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 val root = rootInActiveWindow
                 if (root != null) {
-                    val isAppInfo = root.findAccessibilityNodeInfosByText("Force stop").isNotEmpty() ||
-                                    root.findAccessibilityNodeInfosByText("Uninstall").isNotEmpty()
+                    val className = event.className?.toString() ?: ""
+                    val isAppDetailsActivity = className.contains("AppDetails", ignoreCase = true) || 
+                                             className.contains("ApplicationDetails", ignoreCase = true)
+                    
+                    var hasTamperControls = isAppDetailsActivity
+                    if (!hasTamperControls) {
+                        hasTamperControls = hasTamperControlsNode(root)
+                    }
+
                     val isGrayzone = root.findAccessibilityNodeInfosByText(getString(com.grayzone.app.R.string.app_name)).isNotEmpty()
                     
-                    if (isAppInfo && isGrayzone) {
+                    if (hasTamperControls && isGrayzone) {
                         Log.w(TAG, "User attempting to force stop/uninstall Grayzone. Injecting HOME action.")
                         performGlobalAction(GLOBAL_ACTION_HOME)
                         return
@@ -130,5 +139,17 @@ class GrayzoneAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         com.grayzone.app.GrayzoneLogger.w(com.grayzone.app.LogComponent.ACCESSIBILITY, "Accessibility service unbound by the system (force-stop, Settings revoke, or crash)")
         return super.onUnbind(intent)
+    }
+
+    private fun hasTamperControlsNode(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+        val id = node.viewIdResourceName
+        if (id != null && (id.contains("force_stop", ignoreCase = true) || id.contains("uninstall", ignoreCase = true))) {
+            return true
+        }
+        for (i in 0 until node.childCount) {
+            if (hasTamperControlsNode(node.getChild(i))) return true
+        }
+        return false
     }
 }

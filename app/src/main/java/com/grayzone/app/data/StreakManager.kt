@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.grayzone.app.PrefsKeys
-import java.text.SimpleDateFormat
+import com.grayzone.app.DateUtils
 import java.util.*
 
 /**
@@ -28,8 +28,8 @@ class StreakManager(private val context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-    private val gson = Gson()
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val gson = com.grayzone.app.globalGson
+
 
     fun getCurrentStreak(): Int = prefs.getInt(PrefsKeys.CURRENT_STREAK, 0)
     fun getLongestStreak(): Int = prefs.getInt(PrefsKeys.LONGEST_STREAK, 0)
@@ -54,7 +54,7 @@ class StreakManager(private val context: Context) {
      * Records a completed calendar day. The current in-progress day is never awarded.
      */
     fun checkDailyStreak(stayedUnderBudget: Boolean) {
-        checkDailyStreakForDate(previousDateKey(dateFormat.format(Date())), stayedUnderBudget)
+        checkDailyStreakForDate(previousDateKey(DateUtils.getCurrentDateKey()), stayedUnderBudget)
     }
 
     /**
@@ -118,9 +118,9 @@ class StreakManager(private val context: Context) {
 
     private fun previousDateKey(dateKey: String): String {
         val cal = Calendar.getInstance()
-        cal.time = dateFormat.parse(dateKey) ?: Date()
+        cal.time = DateUtils.parseDateKey(dateKey) ?: Date()
         cal.add(Calendar.DAY_OF_YEAR, -1)
-        return dateFormat.format(cal.time)
+        return DateUtils.formatDateKey(cal.time)
     }
 
     // ── Achievements ──────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ class StreakManager(private val context: Context) {
         } else mutableMapOf()
 
         if (id !in existing) {
-            existing[id] = dateFormat.format(Date())
+            existing[id] = DateUtils.formatDateKey(Date())
             prefs.edit().putString(PrefsKeys.ACHIEVEMENTS_JSON, gson.toJson(existing)).apply()
         }
     }
@@ -187,14 +187,13 @@ class StreakManager(private val context: Context) {
             throughDateKey: String,
             maxDays: Int = 90
         ): List<String> {
-            val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            val through = fmt.parse(throughDateKey) ?: return emptyList()
+            val through = DateUtils.parseDateKey(throughDateKey) ?: return emptyList()
 
             val startCal = Calendar.getInstance()
             if (lastRecorded == null) {
                 startCal.time = through
             } else {
-                val last = fmt.parse(lastRecorded) ?: return listOf(throughDateKey)
+                val last = DateUtils.parseDateKey(lastRecorded) ?: return listOf(throughDateKey)
                 startCal.time = last
                 startCal.add(Calendar.DAY_OF_YEAR, 1)
             }
@@ -208,7 +207,7 @@ class StreakManager(private val context: Context) {
             val cursor = Calendar.getInstance().apply { time = startCal.time }
             while (!cursor.time.after(through)) {
                 if (result.size == maxDays) result.removeFirst()
-                result.add(fmt.format(cursor.time))
+                result.add(DateUtils.formatDateKey(cursor.time))
                 cursor.add(Calendar.DAY_OF_YEAR, 1)
             }
             return result.toList()

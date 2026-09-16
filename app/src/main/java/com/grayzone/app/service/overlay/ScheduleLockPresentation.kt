@@ -3,7 +3,7 @@ package com.grayzone.app.service.overlay
 /** Schedule / focus-mode lock screen (no countdown; ends when the schedule window ends). */
 object ScheduleLockPresentation : OverlayPresentation {
     override val title = "Locked."
-    override val skipButtonLabel = "← Leave App"
+    override val skipButtonLabel = "Leave App"
     override val showsProgress = false
     override val countdownTextSizeSp = 24f // F-097: 72sp clipped lock "—" in landscape / large font
 

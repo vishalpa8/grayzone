@@ -5,7 +5,7 @@ import com.grayzone.app.formatDuration
 /** Hard-lock screen shown when a session has expired (lockout countdown). */
 object LockPresentation : OverlayPresentation {
     override val title = "Locked."
-    override val skipButtonLabel = "← Leave App"
+    override val skipButtonLabel = "Leave App"
     override val showsProgress = false
     override val countdownTextSizeSp = 42f
 

@@ -64,14 +64,18 @@ fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
         isAnyAppLocked(prefs, monitoredApps, currentTime)
     }
 
-    val filtered = remember(installedApps, searchQuery, monitoredApps) {
-        val baseList = if (searchQuery.isBlank()) installedApps
-        else installedApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
-        
-        baseList.sortedWith(
-            compareBy<AppInfo> { !monitoredApps.contains(it.packageName) }
-                .thenBy { it.name.lowercase() }
-        )
+    var filtered by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
+    
+    LaunchedEffect(installedApps, searchQuery, monitoredApps) {
+        filtered = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val baseList = if (searchQuery.isBlank()) installedApps
+            else installedApps.filter { it.name.contains(searchQuery, ignoreCase = true) }
+            
+            baseList.sortedWith(
+                compareBy<AppInfo> { !monitoredApps.contains(it.packageName) }
+                    .thenBy { it.name.lowercase() }
+            )
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {

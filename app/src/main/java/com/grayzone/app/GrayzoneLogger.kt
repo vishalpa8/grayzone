@@ -71,6 +71,11 @@ object GrayzoneLogger {
      * Error log for failures and exceptions.
      * In production builds, this can be extended to send to crash reporting services.
      */
+    /**
+     * Note: Currently errors are only logged to Logcat (even in release builds).
+     * There is no remote crash reporting (Crashlytics/Sentry) integrated, meaning
+     * background service crashes (VPN, Accessibility) will not be captured centrally.
+     */
     fun e(component: LogComponent, message: String, throwable: Throwable? = null) {
         if (!shouldLog(LogLevel.ERROR)) return
         Log.e(TAG, "[${component.name}] $message", throwable)

@@ -19,13 +19,10 @@ object DateUtils {
         SimpleDateFormat("yyyy-MM-dd", Locale.US)
     }
     
-    // Cache for current date key (valid for up to 1 minute, but never across midnight).
+    // Cache for current date key and its expiry, held in a single object for atomicity.
+    private data class DateCache(val key: String, val expiry: Long)
     @Volatile
-    private var cachedDateKey: String? = null
-
-    // Absolute wall-clock time at which the cached key becomes invalid.
-    @Volatile
-    private var cacheExpiry = 0L
+    private var cache: DateCache? = null
 
     private const val CACHE_VALIDITY_MS = 60_000L  // 1 minute
 
@@ -43,15 +40,14 @@ object DateUtils {
         val now = System.currentTimeMillis()
 
         // Return cached value if still valid (and not past midnight).
-        val cached = cachedDateKey
-        if (cached != null && now < cacheExpiry) {
-            return cached
+        val currentCache = cache
+        if (currentCache != null && now < currentCache.expiry) {
+            return currentCache.key
         }
 
         // Format new date key
         val newKey = dateKeyFormatter.get()!!.format(Date(now))
-        cachedDateKey = newKey
-        cacheExpiry = minOf(now + CACHE_VALIDITY_MS, startOfNextDayMillis(now))
+        cache = DateCache(newKey, minOf(now + CACHE_VALIDITY_MS, startOfNextDayMillis(now)))
 
         return newKey
     }
@@ -74,6 +70,18 @@ object DateUtils {
      */
     fun formatDateKey(timestamp: Long): String {
         return dateKeyFormatter.get()!!.format(Date(timestamp))
+    }
+    
+    fun formatDateKey(date: Date): String {
+        return dateKeyFormatter.get()!!.format(date)
+    }
+
+    fun parseDateKey(dateKey: String): Date? {
+        return try {
+            dateKeyFormatter.get()!!.parse(dateKey)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun getYesterdayDateKey(): String {

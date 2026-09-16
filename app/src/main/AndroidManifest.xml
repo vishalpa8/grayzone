@@ -100,6 +100,15 @@
             android:exported="false" />
 
         <!--
+            MidnightResetReceiver: fired by AlarmManager at midnight to reset daily sessions and lockouts
+            reliably across Doze and process death.
+        -->
+        <receiver
+            android:name=".service.MidnightResetReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!--
             VpnHoldExpiryReceiver: fired by AlarmManager when the 24h VPN hold ends so the
             AdBlock VPN auto-disables across Doze/process death. Internal only.
         -->

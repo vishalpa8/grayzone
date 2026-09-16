@@ -35,7 +35,7 @@ class ScheduleManager(private val context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-    private val gson = Gson()
+    private val gson = com.grayzone.app.globalGson
 
     /**
      * Parse result that distinguishes "no rules" from "corrupt JSON" so writers never
@@ -190,12 +190,17 @@ class ScheduleManager(private val context: Context) {
         prefs.getString(PrefsKeys.BREAK_USED_DATE, "") != com.grayzone.app.DateUtils.getCurrentDateKey()
 
     /**
-     * Starts the daily break. Returns false if it was already used today.
+     * Starts the daily break. Returns false if it was already used today or if an app is currently locked.
      * Ending the break early does not restore today's allowance.
      */
     fun startDailyBreak(): Boolean {
         if (!canStartBreakToday()) return false
         val nowWall = System.currentTimeMillis()
+        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
+        if (com.grayzone.app.isAnyAppLocked(prefs, monitoredApps, nowWall)) {
+            com.grayzone.app.GrayzoneLogger.w(com.grayzone.app.LogComponent.SCHEDULE, "Cannot start break while an app is locked.")
+            return false
+        }
         val nowElapsed = android.os.SystemClock.elapsedRealtime()
         prefs.edit()
             .putLong(PrefsKeys.BREAK_UNTIL, nowWall + BREAK_DURATION_MILLIS)

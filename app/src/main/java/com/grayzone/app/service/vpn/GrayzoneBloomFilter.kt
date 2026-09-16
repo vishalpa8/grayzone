@@ -20,7 +20,7 @@ class GrayzoneBloomFilter private constructor(
         if (domain.isEmpty()) return false
         val (h1, h2) = baseHashes(domain)
         for (i in 0 until numHashes) {
-            val bitIndex = (h1 + i.toLong() * h2) % bitCount
+            val bitIndex = Math.floorMod(h1 + i.toLong() * h2, bitCount)
             val byteIdx = (bitIndex / 8).toInt()
             val bitOff = (bitIndex % 8).toInt()
             if (bits[byteIdx].toInt() and (1 shl bitOff) == 0) return false

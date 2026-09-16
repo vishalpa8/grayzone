@@ -37,8 +37,11 @@ import com.grayzone.app.ui.SettingsScreen
 import com.grayzone.app.ui.VpnScreen
 import com.grayzone.app.ui.theme.*
 
+import dagger.hilt.android.AndroidEntryPoint
+
 // ─── Activity ──────────────────────────────────────────────────────────────
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onResume() {
         // Automatic restore: Application may have deferred (no all-files yet). Retry every resume

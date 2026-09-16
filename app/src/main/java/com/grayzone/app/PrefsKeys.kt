@@ -116,8 +116,9 @@ object PrefsKeys {
 
 /** Overlay display modes sent via broadcast intent extra "overlay_mode". */
 object OverlayMode {
-    const val FRICTION     = 1  // Friction/pause screen before session starts
-    const val LOCK         = 2  // Hard-lock screen (session expired)
-    const val BUDGET_LOCK  = 5  // Daily budget exhausted lock
+    const val FRICTION      = 1 // Friction/pause screen before session starts
+    const val LOCK          = 2 // Hard-lock screen (session expired)
+    // Note: 3 and 4 were legacy lock modes that have been deprecated and removed.
+    const val BUDGET_LOCK   = 5 // Daily budget exhausted lock
     const val SCHEDULE_LOCK = 6 // Schedule-based lock
 }

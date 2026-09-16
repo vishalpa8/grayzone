@@ -70,7 +70,7 @@ class DnsResolverPool(
                 reusable = false
                 com.grayzone.app.GrayzoneLogger.w(
                     com.grayzone.app.LogComponent.DNS,
-                    "DNS query failed: ${e.message}"
+                    "DNS query failed (e.message sanitized)"
                 )
                 null
             } finally {

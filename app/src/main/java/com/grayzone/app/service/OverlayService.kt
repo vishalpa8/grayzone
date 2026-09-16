@@ -73,7 +73,8 @@ class OverlayService : Service() {
         const val ACTION_START_COUNTDOWN = "com.grayzone.app.ACTION_START_COUNTDOWN"
         const val ACTION_STOP_COUNTDOWN = "com.grayzone.app.ACTION_STOP_COUNTDOWN"
         const val ACTION_SESSION_EXPIRED = "com.grayzone.app.ACTION_SESSION_EXPIRED"
-        const val ACTION_APP_CHANGED_WATCHDOG = "com.grayzone.app.ACTION_APP_CHANGED_WATCHDOG"
+        const val ACTION_APP_CHANGED_WATCHDOG = "com.grayzone.app.APP_CHANGED_WATCHDOG"
+        const val ACTION_MIDNIGHT_RESET = "com.grayzone.app.MIDNIGHT_RESET"
         /** Re-read a11y/overlay permissions and refresh the ongoing notification (F-080). */
         const val ACTION_REFRESH_PROTECTION_STATUS = "com.grayzone.app.ACTION_REFRESH_PROTECTION_STATUS"
         private const val DEFAULT_WAIT = 5
@@ -211,7 +212,7 @@ class OverlayService : Service() {
             "OverlayService started - listening for AccessibilityService events"
         )
 
-        scheduleMidnightReset()
+        MidnightResetScheduler.arm(this)
     }
 
     private fun registerAppChangeReceiver() {
@@ -669,11 +670,8 @@ class OverlayService : Service() {
                 cmd.newSessionRemainingMs?.let { editor.putLong(PrefsKeys.REMAINING_MILLIS + cmd.packageName, it) }
                 if (cmd.clearActiveSession) {
                     editor.remove(PrefsKeys.ACTIVE_UNTIL + cmd.packageName)
-                        .remove(PrefsKeys.LOCKED_UNTIL + cmd.packageName)
                         .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + cmd.packageName)
                         .remove(PrefsKeys.ACTIVE_DURATION_MS + cmd.packageName)
-                        .remove(PrefsKeys.LOCKED_STARTED_ELAPSED + cmd.packageName)
-                        .remove(PrefsKeys.LOCKED_DURATION_MS + cmd.packageName)
                     // Session paused/cleared — a pending expiry alarm must not fire.
                     SessionExpiryScheduler.cancel(this@OverlayService, cmd.packageName)
                 }
@@ -850,6 +848,16 @@ class OverlayService : Service() {
             if (pkg.isNotEmpty()) handleForegroundAppChanged(pkg)
         } else if (intent?.action == ACTION_REFRESH_PROTECTION_STATUS) {
             refreshProtectionNotification()
+        } else if (intent?.action == ACTION_MIDNIGHT_RESET) {
+            serviceScope.launch {
+                try {
+                    performMidnightReset()
+                    refreshProtectionNotification()
+                } catch (e: Exception) {
+                    GrayzoneLogger.e(LogComponent.OVERLAY, "Failed to perform midnight reset from broadcast", e)
+                }
+            }
+            MidnightResetScheduler.arm(this)
         }
         return START_STICKY
     }
@@ -1047,12 +1055,31 @@ class OverlayService : Service() {
 
         val ctx = this
         val chrome = overlayChrome()
-        val root = FrameLayout(ctx).apply {
+        val root = object : FrameLayout(ctx) {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.action == android.view.KeyEvent.ACTION_UP && event.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    // Send to home on BACK press
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    try {
+                        ctx.startActivity(homeIntent)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
             setBackgroundColor(chrome.bg)
-            // F-233: announce the protection pane to TalkBack; keep FLAG_NOT_FOCUSABLE for now.
+            // F-233: announce the protection pane to TalkBack.
             contentDescription = "Grayzone protection"
             accessibilityPaneTitle = "Grayzone protection"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isFocusable = true
+            isFocusableInTouchMode = true
         }
 
         val card = LinearLayout(ctx).apply {
@@ -1148,7 +1175,7 @@ class OverlayService : Service() {
             } catch (e: Exception) {
                 com.grayzone.app.GrayzoneLogger.e(
                     com.grayzone.app.LogComponent.OVERLAY,
-                    "Failed to return to home screen",
+                    "Failed to launch Home after skip",
                     e
                 )
             }
@@ -1187,7 +1214,7 @@ class OverlayService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_SECURE,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
@@ -1273,6 +1300,12 @@ class OverlayService : Service() {
                 lastOverlayLockedUntil = 0L
             } catch (e: Exception) {
                 GrayzoneLogger.w(LogComponent.OVERLAY, "Failed to remove overlay: ${e.message}")
+                // F-019: ensure references are cleared even if removeView throws
+                overlayView = null
+                lastOverlayPackageName = null
+                lastOverlayAppName = null
+                lastOverlayMode = 0
+                lastOverlayLockedUntil = 0L
             }
         }
     }
@@ -1282,8 +1315,8 @@ class OverlayService : Service() {
         val now = System.currentTimeMillis()
         
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
-        val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-        val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
+        val sessionMins = com.grayzone.app.data.PerAppLimits.sessionMinutes(hasCustom, prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + packageName, 10), prefs.getInt(PrefsKeys.SESSION_MINUTES, 10))
+        val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(hasCustom, prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60), prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60))
 
         // Validate session duration: must be between 1 minute and 24 hours
         val validSessionMins = sessionMins.coerceIn(1, 24 * 60)
@@ -1331,7 +1364,7 @@ class OverlayService : Service() {
             .putLong(PrefsKeys.LOCKED_UNTIL + packageName, lockedUntil)
             .putLong(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName, nowElapsed)
             .putLong(PrefsKeys.LOCKED_DURATION_MS + packageName, grantedSessionMs + lockoutMs)
-            .apply()
+            .commit()
 
         startCountdownNotification(packageName, activeUntil)
         SessionExpiryScheduler.arm(this, packageName, activeUntil)
@@ -1341,11 +1374,11 @@ class OverlayService : Service() {
     private fun recordFrictionSkip(packageName: String, waitedMs: Long) {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + packageName, false)
-        val lockoutMins = if (hasCustom) {
-            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60)
-        } else {
+        val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(
+            hasCustom,
+            prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + packageName, 60),
             prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-        }
+        )
 
         StreakManager(this).recordBlockedSession(lockoutMins)
 
