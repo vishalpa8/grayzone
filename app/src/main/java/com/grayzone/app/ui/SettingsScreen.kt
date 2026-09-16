@@ -22,24 +22,32 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.grayzone.app.GZCard
+
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.isAnyAppLocked
 import com.grayzone.app.rememberResumedTicker
 import com.grayzone.app.shareApk
 import com.grayzone.app.ui.theme.*
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.grayzone.app.ui.components.*
 
 @Composable
-fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
+fun SettingsScreen(
+    onThemeModeChanged: (String) -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
-    var themeMode by remember {
-        mutableStateOf(prefs.getString(PrefsKeys.THEME_MODE, ThemeMode.SYSTEM) ?: ThemeMode.SYSTEM)
-    }
-    var waitSeconds by remember { mutableStateOf(prefs.getInt(PrefsKeys.WAIT_SECONDS, 5)) }
-    var sessionMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)) }
-    var lockoutMinutes by remember { mutableStateOf(prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)) }
+    val vmThemeMode by viewModel.themeMode.collectAsState()
+    val vmWaitSeconds by viewModel.waitSeconds.collectAsState()
+    val vmSessionMinutes by viewModel.sessionMinutes.collectAsState()
+    val vmLockoutMinutes by viewModel.lockoutMinutes.collectAsState()
+
+    var themeMode by remember(vmThemeMode) { mutableStateOf(vmThemeMode) }
+    var waitSeconds by remember(vmWaitSeconds) { mutableStateOf(vmWaitSeconds) }
+    var sessionMinutes by remember(vmSessionMinutes) { mutableStateOf(vmSessionMinutes) }
+    var lockoutMinutes by remember(vmLockoutMinutes) { mutableStateOf(vmLockoutMinutes) }
 
     var showCustomPrompts by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }
@@ -132,8 +140,7 @@ fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (selected) GZPrimary else GZSurfaceHigh)
                                 .clickable {
-                                    themeMode = mode
-                                    prefs.edit().putString(PrefsKeys.THEME_MODE, mode).apply()
+                                    viewModel.setThemeMode(mode)
                                     onThemeModeChanged(mode)
                                 }
                                 .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -163,7 +170,7 @@ fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
             valueRange = 3f..30f,
             steps = 26,
             enabled = !anyAppLockedOrActive,
-            onValueChangeFinished = { prefs.edit().putInt(PrefsKeys.WAIT_SECONDS, waitSeconds).apply() }
+            onValueChangeFinished = { viewModel.setWaitSeconds(waitSeconds) }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -173,15 +180,19 @@ fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
             color = if (anyAppLockedOrActive) GZTextTertiary else GZTextPrimary,
             fontWeight = FontWeight.Medium
         )
-        Text("How long you can use an app after unlocking.", color = GZTextSecondary, fontSize = 12.sp)
+        Text("Maximum time you can spend in an app per session.", color = GZTextSecondary, fontSize = 12.sp)
         Slider(
             value = sessionMinutes.toFloat(),
-            onValueChange = { sessionMinutes = it.toInt().coerceAtMost(lockoutMinutes) },
-            valueRange = 1f..60f,
-            steps = 58,
+            onValueChange = {
+                sessionMinutes = it.toInt()
+                if (sessionMinutes > lockoutMinutes) lockoutMinutes = sessionMinutes
+            },
+            valueRange = 1f..120f,
+            steps = 118,
             enabled = !anyAppLockedOrActive,
             onValueChangeFinished = {
-                prefs.edit().putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes).apply()
+                viewModel.setSessionMinutes(sessionMinutes)
+                viewModel.setLockoutMinutes(lockoutMinutes)
             }
         )
 
@@ -206,46 +217,26 @@ fun SettingsScreen(onThemeModeChanged: (String) -> Unit = {}) {
             steps = 94,
             enabled = !anyAppLockedOrActive,
             onValueChangeFinished = {
-                prefs.edit()
-                    .putInt(PrefsKeys.SESSION_MINUTES, sessionMinutes)
-                    .putInt(PrefsKeys.LOCKOUT_MINUTES, lockoutMinutes)
-                    .apply()
+                viewModel.setSessionMinutes(sessionMinutes)
+                viewModel.setLockoutMinutes(lockoutMinutes)
             }
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Button(
+        GZButton(
+            text = "Manage Custom Prompts",
             onClick = { showCustomPrompts = true },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            enabled = !anyAppLockedOrActive,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = GZPrimaryContainer,
-                contentColor = GZTextPrimary,
-                disabledContainerColor = GZSurfaceHigh,
-                disabledContentColor = GZTextTertiary
-            )
-        ) {
-            Text("Manage Custom Prompts", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
+            enabled = !anyAppLockedOrActive
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
+        GZButton(
+            text = "Manage Schedule Focus Modes",
             onClick = { showSchedule = true },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            enabled = !anyAppLockedOrActive,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = GZPrimaryContainer,
-                contentColor = GZTextPrimary,
-                disabledContainerColor = GZSurfaceHigh,
-                disabledContentColor = GZTextTertiary
-            )
-        ) {
-            Text("Manage Schedule Focus Modes", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
+            enabled = !anyAppLockedOrActive
+        )
 
         Spacer(modifier = Modifier.height(64.dp))
     }

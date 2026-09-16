@@ -190,11 +190,19 @@ object StateBackupManager {
 
                 val json = readBackup(context)
                 if (json == null) {
+                    if (BackupTamperDetector.isTampered(context, backupExists = false)) {
+                        GrayzoneLogger.w(
+                            LogComponent.BOOT,
+                            "TAMPERING DETECTED: Keystore key exists but backup file is missing! User cleared data via USB wipe."
+                        )
+                        BackupTamperDetector.executeTamperLockdown(prefs)
+                    } else {
+                        GrayzoneLogger.i(
+                            LogComponent.BOOT,
+                            "No external backup file to restore (sandbox wiped or first install)"
+                        )
+                    }
                     prefs.edit().remove(PrefsKeys.RESTORE_PENDING).commit()
-                    GrayzoneLogger.i(
-                        LogComponent.BOOT,
-                        "No external backup file to restore (sandbox wiped or first install)"
-                    )
                     return false
                 }
 
@@ -338,15 +346,16 @@ object StateBackupManager {
     }
 
     private fun serialize(context: Context, all: Map<String, Any?>): String {
+        BackupTamperDetector.markBackupCreated()
         val nextGen = readHighWaterGeneration() + 1L
         writeHighWaterGeneration(nextGen)
-        val root = JsonObject().apply {
+        val root = com.google.gson.JsonObject().apply {
             addProperty("schema", SCHEMA_VERSION)
             addProperty("androidId", androidId(context).orEmpty())
             addProperty("savedAt", System.currentTimeMillis())
             addProperty("generation", nextGen)
         }
-        val entries = JsonObject()
+        val entries = com.google.gson.JsonObject()
         for ((key, value) in all) {
             // F-090: do not persist prompt-suppressor flags into the anti-tamper backup.
             if (key == PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS ||

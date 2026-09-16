@@ -30,6 +30,7 @@ object RuntimeSessionReset {
     fun resetIfNeeded(
         prefs: SharedPreferences,
         now: Long = System.currentTimeMillis(),
+        nowElapsed: Long = android.os.SystemClock.elapsedRealtime(),
         zoneId: String = TimeZone.getDefault().id
     ): Boolean {
         val lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, "") ?: ""
@@ -67,13 +68,40 @@ object RuntimeSessionReset {
         }
         packages.forEach { pkg ->
             if (pkg.isEmpty()) return@forEach
-            editor.remove(PrefsKeys.ACTIVE_UNTIL + pkg)
-                .remove(PrefsKeys.LOCKED_UNTIL + pkg)
-                .remove(PrefsKeys.REMAINING_MILLIS + pkg)
-                .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg)
-                .remove(PrefsKeys.ACTIVE_DURATION_MS + pkg)
-                .remove(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg)
-                .remove(PrefsKeys.LOCKED_DURATION_MS + pkg)
+            
+            // Do not clear locks that are still active based on elapsedRealtime
+            val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
+            val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg, 0L)
+            val activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + pkg, 0L)
+            
+            val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+            val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, 0L)
+            val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + pkg, 0L)
+            
+            val isSessionActive = if (activeStartedElapsedMs > 0L) {
+                com.grayzone.app.policy.MonotonicDeadline.isPending(activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed)
+            } else {
+                activeUntil > 0L && now < activeUntil
+            }
+            
+            val isLocked = if (lockedStartedElapsedMs > 0L) {
+                com.grayzone.app.policy.MonotonicDeadline.isPending(lockedUntil, lockedStartedElapsedMs, lockedDurationMs, now, nowElapsed)
+            } else {
+                lockedUntil > 0L && now < lockedUntil
+            }
+
+            if (!isSessionActive) {
+                editor.remove(PrefsKeys.ACTIVE_UNTIL + pkg)
+                    .remove(PrefsKeys.REMAINING_MILLIS + pkg)
+                    .remove(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg)
+                    .remove(PrefsKeys.ACTIVE_DURATION_MS + pkg)
+            }
+            
+            if (!isLocked) {
+                editor.remove(PrefsKeys.LOCKED_UNTIL + pkg)
+                    .remove(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg)
+                    .remove(PrefsKeys.LOCKED_DURATION_MS + pkg)
+            }
         }
         editor.putString(PrefsKeys.DAILY_RESET_DATE + RUNTIME_KEY_SUFFIX, currentDateKey)
             .putString(PrefsKeys.DAILY_RESET_ZONE_ID, zoneId)

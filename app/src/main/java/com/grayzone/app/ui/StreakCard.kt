@@ -18,9 +18,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.grayzone.app.GZCard
+
 import com.grayzone.app.data.StreakManager
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 
 @Composable
 fun StreakCard() {

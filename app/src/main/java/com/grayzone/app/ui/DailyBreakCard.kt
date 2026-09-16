@@ -1,5 +1,8 @@
 package com.grayzone.app.ui
 
+import com.grayzone.app.ui.components.*
+
+import com.grayzone.app.ui.components.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,7 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.grayzone.app.GZCard
+
 import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.ui.theme.*

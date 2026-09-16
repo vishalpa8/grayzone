@@ -36,13 +36,32 @@ object SessionExpiryDecision {
         lockedUntil: Long,
         isForegroundPackage: Boolean,
         isGrayzoneEnabled: Boolean,
-        isOnBreak: Boolean
+        isOnBreak: Boolean,
+        nowElapsed: Long = -1L,
+        activeStartedElapsedMs: Long = 0L,
+        activeDurationMs: Long = 0L,
+        lockedStartedElapsedMs: Long = 0L,
+        lockedDurationMs: Long = 0L
     ): SessionExpiryOutcome {
         if (!isGrayzoneEnabled || isOnBreak) return SessionExpiryOutcome.NoOp
+        
+        val isSessionActive = if (activeStartedElapsedMs > 0L) {
+            MonotonicDeadline.isPending(activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed)
+        } else {
+            activeUntil > 0L && now < activeUntil
+        }
+        
         // No session, or the session still has time left.
-        if (activeUntil <= 0L || now < activeUntil) return SessionExpiryOutcome.NoOp
+        if (activeUntil <= 0L || isSessionActive) return SessionExpiryOutcome.NoOp
+        
+        val isLocked = if (lockedStartedElapsedMs > 0L) {
+            MonotonicDeadline.isPending(lockedUntil, lockedStartedElapsedMs, lockedDurationMs, now, nowElapsed)
+        } else {
+            lockedUntil > 0L && now < lockedUntil
+        }
+        
         // Session has ended.
-        return if (isForegroundPackage && now < lockedUntil) {
+        return if (isForegroundPackage && isLocked) {
             SessionExpiryOutcome.ShowLock
         } else {
             SessionExpiryOutcome.ClampCountdown
@@ -50,6 +69,16 @@ object SessionExpiryDecision {
     }
 
     /** Remaining session time to display; clamped so it is never negative (fixes the negative counter). */
-    fun clampRemainingMs(now: Long, activeUntil: Long): Long =
-        (activeUntil - now).coerceAtLeast(0L)
+    fun clampRemainingMs(
+        now: Long, 
+        activeUntil: Long,
+        nowElapsed: Long = -1L,
+        activeStartedElapsedMs: Long = 0L,
+        activeDurationMs: Long = 0L
+    ): Long {
+        if (activeStartedElapsedMs > 0L) {
+            return MonotonicDeadline.remainingMs(activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed)
+        }
+        return (activeUntil - now).coerceAtLeast(0L)
+    }
 }

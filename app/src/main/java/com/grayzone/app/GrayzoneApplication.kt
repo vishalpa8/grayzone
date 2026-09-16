@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import dagger.hilt.android.HiltAndroidApp
 
 /**
  * Application class for global initialization.
@@ -30,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Future: Crash reporting initialization
  * - Future: Analytics initialization
  */
+@HiltAndroidApp
 class GrayzoneApplication : Application() {
 
     // App-scoped background work (DB-backed catch-up); SupervisorJob so one

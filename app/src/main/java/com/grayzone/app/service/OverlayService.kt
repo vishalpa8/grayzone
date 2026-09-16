@@ -217,17 +217,34 @@ class OverlayService : Service() {
     private fun registerAppChangeReceiver() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                val packageName = intent.getStringExtra(
-                    GrayzoneAccessibilityService.EXTRA_PACKAGE_NAME
-                ) ?: return
-                handleForegroundAppChanged(packageName)
+                if (intent.action == GrayzoneAccessibilityService.ACTION_ACTIVE_WINDOWS_CHANGED) {
+                    val activePackages = intent.getStringArrayListExtra(
+                        GrayzoneAccessibilityService.EXTRA_ACTIVE_PACKAGES
+                    ) ?: return
+                    visibleMonitoredPackages.clear()
+                    visibleMonitoredPackages.addAll(activePackages)
+                    return
+                }
+                
+                if (intent.action == GrayzoneAccessibilityService.ACTION_APP_CHANGED) {
+                    val packageName = intent.getStringExtra(
+                        GrayzoneAccessibilityService.EXTRA_PACKAGE_NAME
+                    )
+                    if (packageName != null) {
+                        handleForegroundAppChanged(packageName)
+                    }
+                }
             }
         }
         try {
+            val filter = IntentFilter().apply {
+                addAction(GrayzoneAccessibilityService.ACTION_APP_CHANGED)
+                addAction(GrayzoneAccessibilityService.ACTION_ACTIVE_WINDOWS_CHANGED)
+            }
             androidx.core.content.ContextCompat.registerReceiver(
                 this,
                 receiver,
-                IntentFilter(GrayzoneAccessibilityService.ACTION_APP_CHANGED),
+                filter,
                 androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
             )
             appChangeReceiver = receiver
@@ -541,6 +558,10 @@ class OverlayService : Service() {
         val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
         val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
         val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
+        val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg, 0L)
+        val activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + pkg, 0L)
+        val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, 0L)
+        val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + pkg, 0L)
         // Normalize so stale or oversized paused values (>24h) are treated as expired,
         // matching isAnyAppLocked() and the UI screens.
         val remainingMillis = getNormalizedRemainingMillis(prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L))
@@ -585,10 +606,10 @@ class OverlayService : Service() {
             waitSeconds = waitSeconds,
             isScheduleLocked = scheduleManager.isCurrentlyScheduled(),
             isOnBreak = scheduleManager.isBreakActive(),
-            activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg, 0L),
-            activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + pkg, 0L),
-            lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + pkg, 0L),
-            lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + pkg, 0L)
+            activeStartedElapsedMs = activeStartedElapsedMs,
+            activeDurationMs = activeDurationMs,
+            lockedStartedElapsedMs = lockedStartedElapsedMs,
+            lockedDurationMs = lockedDurationMs
         )
     }
     
@@ -765,8 +786,13 @@ class OverlayService : Service() {
         try {
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
+            val nowElapsed = android.os.SystemClock.elapsedRealtime()
             val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + packageName, 0L)
             val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + packageName, 0L)
+            val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + packageName, 0L)
+            val activeDurationMs = prefs.getLong(PrefsKeys.ACTIVE_DURATION_MS + packageName, 0L)
+            val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName, 0L)
+            val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + packageName, 0L)
 
             val stillVisible = isPackageStillVisible(packageName, now)
             val outcome = SessionExpiryDecision.decide(
@@ -775,7 +801,12 @@ class OverlayService : Service() {
                 lockedUntil = lockedUntil,
                 isForegroundPackage = stillVisible,
                 isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true),
-                isOnBreak = scheduleManager.isBreakActive()
+                isOnBreak = scheduleManager.isBreakActive(),
+                nowElapsed = nowElapsed,
+                activeStartedElapsedMs = activeStartedElapsedMs,
+                activeDurationMs = activeDurationMs,
+                lockedStartedElapsedMs = lockedStartedElapsedMs,
+                lockedDurationMs = lockedDurationMs
             )
 
             when (outcome) {

@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.*
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 import androidx.compose.animation.core.animateFloat
 
 @Composable

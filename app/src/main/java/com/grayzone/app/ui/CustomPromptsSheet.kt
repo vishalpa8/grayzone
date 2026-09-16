@@ -24,6 +24,7 @@ import com.grayzone.app.LogComponent
 import com.grayzone.app.Prompts
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

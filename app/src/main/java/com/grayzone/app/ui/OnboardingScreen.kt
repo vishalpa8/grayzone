@@ -33,6 +33,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 
 @Composable
 fun OnboardingScreen(onContinue: () -> Unit) {

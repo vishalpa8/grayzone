@@ -16,10 +16,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.grayzone.app.GZCard
+
 import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 
 @Composable
 fun QuickFocusCard() {

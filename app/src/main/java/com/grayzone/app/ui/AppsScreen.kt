@@ -32,20 +32,23 @@ import androidx.compose.ui.unit.sp
 import com.grayzone.app.*
 import com.grayzone.app.ui.theme.*
 
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.grayzone.app.ui.components.*
+
 @Composable
-fun AppsScreen() {
+fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     // Paint instantly from the in-memory cache on re-entry; spinner only on the
     // very first cold load. The LaunchedEffect still refreshes in the background.
     val cachedApps = remember { peekCachedApps() }
     var installedApps by remember { mutableStateOf(cachedApps ?: emptyList()) }
-    var monitoredApps by remember {
-        mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
-    }
+    
+    val monitoredApps by viewModel.monitoredApps.collectAsState()
+    val grayzoneEnabled by viewModel.grayzoneEnabled.collectAsState()
+
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(cachedApps == null) }
-    var grayzoneEnabled by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)) }
     var selectedAppForSettings by remember { mutableStateOf<AppInfo?>(null) }
 
     LaunchedEffect(Unit) {
@@ -124,23 +127,14 @@ fun AppsScreen() {
                             )
                         }
                     }
-                    Switch(
+                    com.grayzone.app.ui.components.GZSwitch(
                         checked = grayzoneEnabled,
                         onCheckedChange = {
                             if (!anyAppLockedOrActive || !grayzoneEnabled) {
-                                grayzoneEnabled = it
-                                prefs.edit().putBoolean(PrefsKeys.GRAYZONE_ENABLED, it).apply()
+                                viewModel.setGrayzoneEnabled(it)
                             }
                         },
-                        enabled = !anyAppLockedOrActive || !grayzoneEnabled,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = GZPrimary,
-                            uncheckedThumbColor = GZTextTertiary,
-                            uncheckedTrackColor = GZSurfaceHigh,
-                            disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                            disabledCheckedTrackColor = GZPrimary.copy(alpha = 0.4f)
-                        )
+                        enabled = !anyAppLockedOrActive || !grayzoneEnabled
                     )
                 }
             }
@@ -231,19 +225,7 @@ fun AppsScreen() {
                         statusText = statusText,
                         isGloballyDisabled = !grayzoneEnabled,
                         onToggle = { checked ->
-                            val updated = monitoredApps.toMutableSet()
-                            if (checked) {
-                                updated.add(app.packageName)
-                            } else {
-                                updated.remove(app.packageName)
-                                prefs.edit()
-                                    .remove(PrefsKeys.ACTIVE_UNTIL + app.packageName)
-                                    .remove(PrefsKeys.LOCKED_UNTIL + app.packageName)
-                                    .remove(PrefsKeys.REMAINING_MILLIS + app.packageName)
-                                    .apply()
-                            }
-                            monitoredApps = updated
-                            prefs.edit().putStringSet(PrefsKeys.MONITORED_APPS, updated).apply()
+                            viewModel.toggleAppMonitored(app.packageName, checked)
                         },
                         onLongPress = {
                             selectedAppForSettings = app
@@ -344,18 +326,11 @@ fun PremiumAppListItem(
                 )
             }
         }
-        Switch(
+        com.grayzone.app.ui.components.GZSwitch(
             checked = isMonitored,
             onCheckedChange = { if (isToggleEnabled) onToggle(it) },
             enabled = isToggleEnabled,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = if (isLocked) GZRed else if (isActiveOrPaused) GZGreen else GZPrimary,
-                uncheckedThumbColor = GZTextTertiary,
-                uncheckedTrackColor = GZSurfaceHigh,
-                disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                disabledCheckedTrackColor = if (isLocked) GZRed.copy(alpha = 0.5f) else if (isActiveOrPaused) GZGreen.copy(alpha = 0.5f) else GZPrimary.copy(alpha = 0.4f)
-            )
+            checkedTrackColor = if (isLocked) GZRed else if (isActiveOrPaused) GZGreen else GZPrimary
         )
     }
     Divider(color = GZBorderSubtle, thickness = 0.5.dp,

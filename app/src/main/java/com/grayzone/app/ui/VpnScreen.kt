@@ -1,5 +1,5 @@
 package com.grayzone.app.ui
-
+import com.grayzone.app.ui.components.*
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
@@ -43,6 +43,7 @@ import com.grayzone.app.service.vpn.DnsTrafficBus.DnsEvent.Status
 import com.grayzone.app.service.vpn.VpnHoldLock
 import com.grayzone.app.service.vpn.VpnHoldLockStore
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -189,7 +190,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         if (reconnectPending && !vpnRunning) {
-            com.grayzone.app.GZCard(
+            GZCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 background = GZAmberContainer,
                 border = GZAmber.copy(alpha = 0.35f)
@@ -204,7 +205,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         // ── Toggle card ───────────────────────────────────────────────────
-        com.grayzone.app.GZCard(
+        GZCard(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             background = if (vpnRunning) GZPrimaryContainer else GZSurface,
             border = if (vpnRunning) GZPrimary.copy(alpha = 0.25f) else GZBorder
@@ -257,7 +258,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         if (!vpnRunning) {
-            com.grayzone.app.GZCard(
+            GZCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 background = GZAmberContainer,
                 border = GZAmber.copy(alpha = 0.35f)
@@ -288,7 +289,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         if (vpnRunning && holdActive) {
-            com.grayzone.app.GZCard(
+            GZCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 background = GZPrimaryContainer,
                 border = GZPrimary.copy(alpha = 0.25f)
@@ -342,7 +343,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
             }
 
             // ── Bloom Filter Disclosure ───────────────────────────────────
-            com.grayzone.app.GZCard(
+            GZCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 background = GZSurfaceElevated,
                 border = GZBorder
@@ -371,7 +372,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         // ── Live traffic feed ─────────────────────────────────────────────
-        com.grayzone.app.SectionLabel(
+        SectionLabel(
             text = if (vpnRunning) "LIVE DNS TRAFFIC" else "DNS TRAFFIC",
             modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 8.dp)
         )

@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.sp
 import com.grayzone.app.AppInfo
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.ui.theme.*
+import com.grayzone.app.ui.components.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

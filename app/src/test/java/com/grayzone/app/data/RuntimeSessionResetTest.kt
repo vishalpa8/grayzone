@@ -77,4 +77,43 @@ class RuntimeSessionResetTest {
         assertEquals(0L, prefs.getLong(PrefsKeys.LOCKED_UNTIL + "com.unmonitored.app", 0L))
         assertEquals(0L, prefs.getLong(PrefsKeys.ACTIVE_UNTIL + "com.unmonitored.app", 0L))
     }
+
+    @Test
+    fun sameZoneMidnight_doesNotClearPendingLockouts_whenElapsedRealtimeIsActive() {
+        val prefs = FakeSharedPreferences(
+            mapOf(
+                PrefsKeys.MONITORED_APPS to emptySet<String>(),
+                // The wall-clock deadline is tomorrow
+                PrefsKeys.LOCKED_UNTIL + "com.pending.app" to 1_754_128_800_000L + 86400000L,
+                PrefsKeys.LOCKED_STARTED_ELAPSED + "com.pending.app" to 100_000L,
+                PrefsKeys.LOCKED_DURATION_MS + "com.pending.app" to 3_600_000L, // 1 hour
+                PrefsKeys.DAILY_RESET_DATE + "runtime" to "2026-08-01",
+                PrefsKeys.DAILY_RESET_ZONE_ID to "UTC"
+            )
+        )
+
+        // The user fast-forwards the clock to tomorrow (to trigger the daily reset)
+        // But the elapsed time has only advanced by 1000ms
+
+        val cleared = RuntimeSessionReset.resetIfNeeded(
+            prefs,
+            now = 1_754_128_800_000L, // Wall-clock jumps 1 day ahead to trigger midnight reset
+            nowElapsed = 101_000L, // Mocking elapsed time
+            zoneId = "UTC"
+        )
+
+        // The reset *did* run
+        assertTrue(cleared)
+        
+        // However, because the elapsedRealtime deadline is still pending, 
+        // the lockout must NOT have been cleared!
+        assertEquals(
+            1_754_128_800_000L + 86400000L, 
+            prefs.getLong(PrefsKeys.LOCKED_UNTIL + "com.pending.app", 0L)
+        )
+        assertEquals(
+            100_000L,
+            prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + "com.pending.app", 0L)
+        )
+    }
 }

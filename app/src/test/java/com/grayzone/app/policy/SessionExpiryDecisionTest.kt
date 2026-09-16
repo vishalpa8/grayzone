@@ -19,14 +19,20 @@ class SessionExpiryDecisionTest {
         lockedUntil: Long = lockout,
         isForegroundPackage: Boolean = true,
         isGrayzoneEnabled: Boolean = true,
-        isOnBreak: Boolean = false
+        isOnBreak: Boolean = false,
+        nowElapsed: Long = 10_000L,
+        lockedStartedElapsedMs: Long = 0L,
+        lockedDurationMs: Long = 0L
     ) = SessionExpiryDecision.decide(
         now = now,
         activeUntil = activeUntil,
         lockedUntil = lockedUntil,
         isForegroundPackage = isForegroundPackage,
         isGrayzoneEnabled = isGrayzoneEnabled,
-        isOnBreak = isOnBreak
+        isOnBreak = isOnBreak,
+        nowElapsed = nowElapsed,
+        lockedStartedElapsedMs = lockedStartedElapsedMs,
+        lockedDurationMs = lockedDurationMs
     )
 
     // ─── clamp invariant: remaining is never negative (SC-001) ───────────────
@@ -101,6 +107,30 @@ class SessionExpiryDecisionTest {
         assertSame(
             SessionExpiryOutcome.NoOp,
             decide(activeUntil = now, isOnBreak = true)
+        )
+    }
+
+    @Test
+    fun `QA Exploit - time jump bypass attempt is rejected by dual clock`() {
+        // User has an active lockout that has expired in wall-clock time
+        // but hasn't expired in elapsed realtime!
+        // This means the user fast-forwarded their clock to bypass the lock.
+        val pastWall = now - 10_000L // Wall clock says lockout is OVER
+        
+        // But elapsed clock says they still have 30 minutes left!
+        val startedElapsed = 5_000L
+        val durationElapsed = 60 * 60 * 1000L // 1 hour lockout
+        val currentElapsed = 5_000L + 30 * 60 * 1000L // 30 minutes in
+        
+        assertSame(
+            SessionExpiryOutcome.ShowLock, // It should STILL show the lock screen!
+            decide(
+                activeUntil = pastWall - 1000L, 
+                lockedUntil = pastWall,
+                nowElapsed = currentElapsed,
+                lockedStartedElapsedMs = startedElapsed,
+                lockedDurationMs = durationElapsed
+            )
         )
     }
 }
