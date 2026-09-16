@@ -19,6 +19,27 @@ object BlocklistManager {
     // see AbusedTldList — so they are kept as an exact-match set alongside it.
     private var abusedTlds: AbusedTldList = AbusedTldList.EMPTY
 
+    // Custom Rules
+    private var customAllowlist: Set<String> = emptySet()
+    private var customDenylist: Set<String> = emptySet()
+    @Volatile private var blockTelemetry: Boolean = false
+
+    private val telemetryDomains: Set<String> = hashSetOf(
+        "tracking.miui.com",
+        "api.ad.xiaomi.com",
+        "data.mistat.xiaomi.com",
+        "samsungqbe.com",
+        "samsungacr.com",
+        "metrics.icloud.com",
+        "app-measurement.com",
+        "crashlytics.com",
+        "device-metrics-us.amazon.com",
+        "graph.facebook.com",
+        "graph.instagram.com",
+        "telemetry.microsoft.com",
+        "vortex.data.microsoft.com"
+    )
+
     /**
      * Hardcoded set of known DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT)
      * resolver endpoints. Blocking these forces apps like Chrome / Samsung Browser
@@ -140,7 +161,18 @@ object BlocklistManager {
 
     // ─── public API ────────────────────────────────────────────────────────
 
+    fun reloadCustomRules(context: Context) {
+        val prefs = context.getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        synchronized(cacheLock) {
+            customAllowlist = prefs.getStringSet(com.grayzone.app.PrefsKeys.VPN_CUSTOM_ALLOWLIST, emptySet())?.mapNotNull { normalizeDomain(it) }?.toSet() ?: emptySet()
+            customDenylist = prefs.getStringSet(com.grayzone.app.PrefsKeys.VPN_CUSTOM_DENYLIST, emptySet())?.mapNotNull { normalizeDomain(it) }?.toSet() ?: emptySet()
+        }
+        blockTelemetry = prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_BLOCK_TELEMETRY, false)
+        Log.d(TAG, "Reloaded custom rules. Allow: ${customAllowlist.size}, Deny: ${customDenylist.size}, TelemetryBlock: $blockTelemetry")
+    }
+
     fun load(context: Context) {
+        reloadCustomRules(context)
         if (!loadStarted.compareAndSet(false, true)) return
         Thread {
             try {
@@ -172,7 +204,13 @@ object BlocklistManager {
                 if (normalizedDomainCache.containsKey(domain)) return normalizedDomainCache[domain]
             }
 
-            val trimmed = domain.trim().lowercase(Locale.US)
+            var trimmed = domain.trim().lowercase(Locale.US)
+            if (trimmed.startsWith("http://")) trimmed = trimmed.substring(7)
+            else if (trimmed.startsWith("https://")) trimmed = trimmed.substring(8)
+            
+            val pathIdx = trimmed.indexOf('/')
+            if (pathIdx != -1) trimmed = trimmed.substring(0, pathIdx)
+            
             val withoutTrailingDot = trimmed.removeSuffix(".")
 
             if (withoutTrailingDot.isEmpty() || withoutTrailingDot.contains(" ")) {
@@ -216,6 +254,14 @@ object BlocklistManager {
     fun isBlocked(domain: String): Boolean {
         if (isDoHBypass(domain)) return true
         val normalized = normalizeDomain(domain) ?: return false
+
+        synchronized(cacheLock) {
+            if (matchesHighConfidence(normalized, customAllowlist)) return false
+            if (matchesHighConfidence(normalized, customDenylist)) return true
+        }
+
+        if (blockTelemetry && matchesHighConfidence(normalized, telemetryDomains)) return true
+
         if (matchesHighConfidence(normalized, highConfidenceAdDomains) ||
             matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
         if (!isLoaded) return false

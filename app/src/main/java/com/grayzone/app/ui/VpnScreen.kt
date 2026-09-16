@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,6 +49,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+enum class VpnView { MAIN, SETTINGS, SPLIT_TUNNELING, CUSTOM_RULES }
+
 @Composable
 fun VpnScreen(onBack: (() -> Unit)? = null) {
     val context = LocalContext.current
@@ -62,6 +65,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
     var showEnableConfirm by remember { mutableStateOf(false) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var currentElapsed by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    var currentView by remember { mutableStateOf(VpnView.MAIN) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -133,6 +137,21 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         statusMessage = null
     }
 
+    if (currentView == VpnView.SETTINGS) {
+        VpnSettingsScreen(
+            onBack = { currentView = VpnView.MAIN },
+            onNavigateToSplitTunneling = { currentView = VpnView.SPLIT_TUNNELING },
+            onNavigateToCustomRules = { currentView = VpnView.CUSTOM_RULES }
+        )
+        return
+    } else if (currentView == VpnView.SPLIT_TUNNELING) {
+        SplitTunnelingScreen(onBack = { currentView = VpnView.SETTINGS })
+        return
+    } else if (currentView == VpnView.CUSTOM_RULES) {
+        CustomRulesScreen(onBack = { currentView = VpnView.SETTINGS })
+        return
+    }
+
     // F-161: scrollable chrome above a feed with min height so large fonts cannot collapse the list.
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
         Column(
@@ -164,7 +183,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                     modifier = Modifier.size(28.dp)
                 )
                 Spacer(Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "AdBlock VPN",
                         color = GZTextPrimary,
@@ -184,6 +203,13 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                             else -> GZTextSecondary
                         },
                         fontSize = 13.sp
+                    )
+                }
+                IconButton(onClick = { currentView = VpnView.SETTINGS }) {
+                    Icon(
+                        Icons.Filled.Settings,
+                        contentDescription = "Settings",
+                        tint = GZTextPrimary
                     )
                 }
             }

@@ -30,7 +30,7 @@ object BackupTamperDetector {
         }
     }
 
-    fun isTampered(context: Context, backupExists: Boolean): Boolean {
+    fun isTampered(backupExists: Boolean): Boolean {
         if (backupExists) return false
         try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)

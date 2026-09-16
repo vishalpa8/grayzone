@@ -107,6 +107,14 @@ class AdBlockVpnService : VpnService() {
     // DNS request deduplication: prevent multiple identical questions from hitting upstream at once.
     private val pendingQueries = java.util.concurrent.ConcurrentHashMap<DnsPacketHelper.DnsQuestionKey, CompletableDeferred<ByteArray?>>()
 
+    // Aggressive DNS Caching (10 minute TTL) to speed up resolution and save bandwidth
+    private data class CachedDnsResponse(val payload: ByteArray, val timestamp: Long)
+    private val DNS_CACHE_TTL_MS = 10 * 60 * 1000L
+    private val dnsCache = object : java.util.LinkedHashMap<DnsPacketHelper.DnsQuestionKey, CachedDnsResponse>(1000, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DnsPacketHelper.DnsQuestionKey, CachedDnsResponse>?): Boolean {
+            return size > 2000
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -377,6 +385,7 @@ class AdBlockVpnService : VpnService() {
             // F-038: complete in-flight followers before dropping map entries.
             pendingQueries.values.forEach { it.complete(null) }
             pendingQueries.clear()
+            synchronized(dnsCache) { dnsCache.clear() }
 
             DnsTrafficBus.clear()
 
@@ -619,6 +628,12 @@ class AdBlockVpnService : VpnService() {
             return
         }
 
+        val cached = synchronized(dnsCache) { dnsCache[key] }
+        if (cached != null && (System.currentTimeMillis() - cached.timestamp) < DNS_CACHE_TTL_MS) {
+            writeForwardedResponse(domain, packet, cached.payload, outputStream)
+            return
+        }
+
         val deferred = CompletableDeferred<ByteArray?>()
         val existingQuery = pendingQueries.putIfAbsent(key, deferred)
         if (existingQuery != null) {
@@ -633,6 +648,11 @@ class AdBlockVpnService : VpnService() {
 
         try {
             val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
+            if (dnsPayload != null) {
+                synchronized(dnsCache) {
+                    dnsCache[key] = CachedDnsResponse(dnsPayload, System.currentTimeMillis())
+                }
+            }
             deferred.complete(dnsPayload)
             writeForwardedResponse(domain, packet, dnsPayload, outputStream)
         } catch (e: Exception) {

@@ -190,7 +190,7 @@ object StateBackupManager {
 
                 val json = readBackup(context)
                 if (json == null) {
-                    if (BackupTamperDetector.isTampered(context, backupExists = false)) {
+                    if (BackupTamperDetector.isTampered(backupExists = false)) {
                         GrayzoneLogger.w(
                             LogComponent.BOOT,
                             "TAMPERING DETECTED: Keystore key exists but backup file is missing! User cleared data via USB wipe."

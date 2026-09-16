@@ -83,9 +83,15 @@ object PrefsKeys {
     /** Zone ID last used for daily date-key resets; TZ jump must not clear lockouts. */
     const val DAILY_RESET_ZONE_ID     = "daily_reset_zone_id"
 
-    // ── VPN app bypass ─────────────────────────────────────────────────────
+    // ── VPN app bypass & custom rules ──────────────────────────────────────
     /** Extra packages the user excluded from the VPN tunnel. */
     const val VPN_BYPASS_APPS         = "vpn_bypass_apps"
+    /** Domains explicitly allowed by the user. */
+    const val VPN_CUSTOM_ALLOWLIST    = "vpn_custom_allowlist"
+    /** Domains explicitly blocked by the user. */
+    const val VPN_CUSTOM_DENYLIST     = "vpn_custom_denylist"
+    /** Whether background telemetry domains should be blocked. */
+    const val VPN_BLOCK_TELEMETRY     = "vpn_block_telemetry"
 
     // ── Custom Reflection Prompts ──────────────────────────────────────────
     const val CUSTOM_PROMPTS_JSON     = "custom_prompts_json"
