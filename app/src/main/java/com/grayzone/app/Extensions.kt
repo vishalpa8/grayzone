@@ -74,7 +74,7 @@ fun isAnyAppLocked(
         val isLocked = if (lockedStartedElapsedMs > 0L) {
             com.grayzone.app.policy.MonotonicDeadline.isPending(lockedUntil, lockedStartedElapsedMs, lockedDurationMs, now, nowElapsed)
         } else {
-            lockedUntil > 0L && now < lockedUntil
+            lockedUntil > 0L && now <= lockedUntil
         }
         
         isSessionActive || isLocked || remaining > 0

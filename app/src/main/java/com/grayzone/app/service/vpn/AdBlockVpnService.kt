@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
@@ -276,7 +277,7 @@ class AdBlockVpnService : VpnService() {
                     .setSession("Grayzone AdBlock")
                     .setBlocking(true)
 
-                applyAppBypassList(builder)
+                applyAppBypassList(builder, prefs)
 
                 // establish() returns null when the app is no longer the prepared VPN
                 // (permission revoked or another VPN took over). Treat it as a failure
@@ -338,9 +339,8 @@ class AdBlockVpnService : VpnService() {
      * from the tunnel. addDisallowedApplication throws NameNotFoundException
      * for apps that aren't installed, so each package is applied individually.
      */
-    private fun applyAppBypassList(builder: Builder) {
-        val userBypass = getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
-            .getStringSet(com.grayzone.app.PrefsKeys.VPN_BYPASS_APPS, emptySet()) ?: emptySet()
+    private fun applyAppBypassList(builder: Builder, prefs: SharedPreferences) {
+        val userBypass = prefs.getStringSet(com.grayzone.app.PrefsKeys.VPN_BYPASS_APPS, emptySet<String>()) ?: emptySet<String>()
 
         var applied = 0
         (DEFAULT_BYPASS_APPS + userBypass).toSet().forEach { pkg ->

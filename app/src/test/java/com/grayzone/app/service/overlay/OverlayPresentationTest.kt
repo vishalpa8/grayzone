@@ -40,7 +40,7 @@ class OverlayPresentationTest {
     fun `friction presentation matches prior output`() {
         val p = FrictionPresentation
         assertEquals("Pause.", p.title)
-        assertEquals("$arrow I'll Skip This", p.skipButtonLabel)
+        assertEquals("I'll Skip This", p.skipButtonLabel)
         assertTrue(p.showsProgress)
         assertEquals(72f, p.countdownTextSizeSp)
         assertEquals("\u201Cfocus\u201D", p.bodyText("focus"))
@@ -53,7 +53,7 @@ class OverlayPresentationTest {
     fun `lock presentation matches prior output`() {
         val p = LockPresentation
         assertEquals("Locked.", p.title)
-        assertEquals("$arrow Leave App", p.skipButtonLabel)
+        assertEquals("Leave App", p.skipButtonLabel)
         assertFalse(p.showsProgress)
         assertEquals(42f, p.countdownTextSizeSp)
         assertEquals("You have reached your session limit.", p.bodyText("ignored"))
@@ -68,7 +68,7 @@ class OverlayPresentationTest {
     fun `budget lock presentation matches prior output`() {
         val p = BudgetLockPresentation
         assertEquals("Locked.", p.title)
-        assertEquals("$arrow Leave App", p.skipButtonLabel)
+        assertEquals("Leave App", p.skipButtonLabel)
         assertFalse(p.showsProgress)
         assertEquals(24f, p.countdownTextSizeSp) // F-097: was 72f (clipped)
         assertEquals("Daily usage limit reached.", p.bodyText("ignored"))
@@ -81,7 +81,7 @@ class OverlayPresentationTest {
     fun `schedule lock presentation matches prior output`() {
         val p = ScheduleLockPresentation
         assertEquals("Locked.", p.title)
-        assertEquals("$arrow Leave App", p.skipButtonLabel)
+        assertEquals("Leave App", p.skipButtonLabel)
         assertFalse(p.showsProgress)
         assertEquals(24f, p.countdownTextSizeSp) // F-097: was 72f (clipped)
         assertEquals("Focus mode / schedule is active.", p.bodyText("ignored"))
