@@ -65,12 +65,11 @@ class SetupRequirementsTest {
             accessibilityEnabled = true,
             overlayEnabled = true,
             notificationsEnabled = false,
-            allFilesGranted = false,
-            batteryExempt = true,
+            batteryExempt = false,
         )
 
         assertEquals(
-            listOf(SetupRequirement.NOTIFICATIONS, SetupRequirement.ALL_FILES),
+            listOf(SetupRequirement.NOTIFICATIONS, SetupRequirement.BATTERY),
             missing
         )
         assertNotEquals("Protection ready", SetupRequirements.headline(missing))
@@ -78,21 +77,16 @@ class SetupRequirementsTest {
     }
 
     @Test
-    fun `battery and all-files follow core permissions in ordering`() {
+    fun `battery follows core permissions in ordering`() {
         val missing = SetupRequirements.missing(
             accessibilityEnabled = false,
             overlayEnabled = true,
             notificationsEnabled = true,
-            allFilesGranted = false,
             batteryExempt = false,
         )
 
         assertEquals(
-            listOf(
-                SetupRequirement.ACCESSIBILITY,
-                SetupRequirement.ALL_FILES,
-                SetupRequirement.BATTERY,
-            ),
+            listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.BATTERY),
             missing
         )
     }

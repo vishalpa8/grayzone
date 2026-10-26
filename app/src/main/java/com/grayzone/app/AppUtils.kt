@@ -123,8 +123,19 @@ fun isAccessibilityServiceEnabled(context: Context): Boolean {
 
 /** Settings page that grants [requirement], so a "fix this" affordance never lands on the wrong screen. */
 fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent = when (requirement) {
-    SetupRequirement.ACCESSIBILITY ->
-        Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+    SetupRequirement.ACCESSIBILITY -> {
+        // The extras make most Settings apps scroll to and highlight Grayzone in the list.
+        val service = android.content.ComponentName(
+            context, com.grayzone.app.service.GrayzoneAccessibilityService::class.java
+        ).flattenToString()
+        Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            putExtra(":settings:fragment_args_key", service)
+            putExtra(
+                ":settings:show_fragment_args",
+                android.os.Bundle().apply { putString(":settings:fragment_args_key", service) }
+            )
+        }
+    }
     SetupRequirement.OVERLAY ->
         Intent(
             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -134,24 +145,17 @@ fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent =
         Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
             putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
         }
-    SetupRequirement.ALL_FILES ->
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Intent(
-                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                android.net.Uri.parse("package:${context.packageName}")
-            )
-        } else {
-            Intent(
-                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                android.net.Uri.parse("package:${context.packageName}")
-            )
-        }
     SetupRequirement.BATTERY ->
         Intent(
             android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             android.net.Uri.parse("package:${context.packageName}")
         )
 }
+
+/** The master "Monitoring" switch. Off by default: nothing runs until the user turns it on. */
+fun isMonitoringEnabled(context: Context): Boolean =
+    context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+        .getBoolean(PrefsKeys.GRAYZONE_ENABLED, false)
 
 fun isBatteryOptimized(context: Context): Boolean =
     !context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)

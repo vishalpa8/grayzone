@@ -1,4 +1,4 @@
-package com.grayzone.app.ui
+﻿package com.grayzone.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,6 +42,7 @@ fun QuickFocusCard() {
     }
 
     var selectedMinutes by remember { mutableStateOf(30) }
+    val gate = LocalPermissionGate.current
 
     GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
         Row(
@@ -100,9 +101,11 @@ fun QuickFocusCard() {
             } else {
                 Button(
                     onClick = {
-                        scheduleManager.startFocusMode(selectedMinutes)
-                        isFocusMode = true
-                        focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+                        gate.requireSetup {
+                            scheduleManager.startFocusMode(selectedMinutes)
+                            isFocusMode = true
+                            focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GZPrimary, contentColor = Color.White),
                     shape = RoundedCornerShape(8.dp),

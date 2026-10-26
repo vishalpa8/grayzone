@@ -8,8 +8,6 @@ enum class SetupRequirement {
     OVERLAY,
     /** Degrading: ongoing / countdown notifications (API 33+). */
     NOTIFICATIONS,
-    /** Degrading: anti-tamper state backup. */
-    ALL_FILES,
     /** Degrading: background survival. */
     BATTERY,
 }
@@ -25,25 +23,34 @@ object SetupRequirements {
 
     private val CORE = setOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY)
 
+    /** The order the first-run popup walks through the permissions, one at a time. */
+    val SETUP_ORDER = listOf(
+        SetupRequirement.NOTIFICATIONS,
+        SetupRequirement.ACCESSIBILITY,
+        SetupRequirement.OVERLAY,
+        SetupRequirement.BATTERY,
+    )
+
+    /** Recommended-only grants: the user may decline these without losing core protection. */
+    fun isOptional(requirement: SetupRequirement): Boolean = requirement !in CORE
+
     /**
      * Ordered so the first entry is the one to fix next: detection before drawing,
-     * then degrading grants (notifications, backup, battery).
+     * then degrading grants (notifications, battery).
      *
      * Newer parameters default to granted so existing two-arg call sites stay valid
-     * (onboarding still gates on accessibility + overlay only).
+     * (core gating is accessibility + overlay only).
      */
     fun missing(
         accessibilityEnabled: Boolean,
         overlayEnabled: Boolean,
         notificationsEnabled: Boolean = true,
-        allFilesGranted: Boolean = true,
         batteryExempt: Boolean = true,
     ): List<SetupRequirement> =
         buildList {
             if (!accessibilityEnabled) add(SetupRequirement.ACCESSIBILITY)
             if (!overlayEnabled) add(SetupRequirement.OVERLAY)
             if (!notificationsEnabled) add(SetupRequirement.NOTIFICATIONS)
-            if (!allFilesGranted) add(SetupRequirement.ALL_FILES)
             if (!batteryExempt) add(SetupRequirement.BATTERY)
         }
 
@@ -51,7 +58,6 @@ object SetupRequirements {
         SetupRequirement.ACCESSIBILITY -> "Accessibility"
         SetupRequirement.OVERLAY -> "Display over other apps"
         SetupRequirement.NOTIFICATIONS -> "Notifications"
-        SetupRequirement.ALL_FILES -> "All files access"
         SetupRequirement.BATTERY -> "Battery exemption"
     }
 
@@ -73,7 +79,6 @@ object SetupRequirements {
             SetupRequirement.ACCESSIBILITY -> "Tap below to enable."
             SetupRequirement.OVERLAY -> "Tap below to allow."
             SetupRequirement.NOTIFICATIONS -> "Tap below to allow."
-            SetupRequirement.ALL_FILES -> "Tap below to allow."
             SetupRequirement.BATTERY -> "Tap below to exempt."
         }
         else -> "Enable the missing items below."

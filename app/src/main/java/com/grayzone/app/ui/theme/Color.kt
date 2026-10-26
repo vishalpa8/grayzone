@@ -1,4 +1,4 @@
-package com.grayzone.app.ui.theme
+﻿package com.grayzone.app.ui.theme
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
@@ -92,7 +92,7 @@ val DarkGzPalette = GzPalette(
     primary = Color(0xFF2DD4BF),
     primaryLight = Color(0xFF5EEAD4),
     primaryDark = Color(0xFF14B8A6),
-    primaryContainer = Color(0xFF134E4A),
+    primaryContainer = Color(0xFF12332F),
     accent = Color(0xFF2DD4BF),
     accentDim = Color(0x332DD4BF),
     background = Color(0xFF121416),
@@ -105,11 +105,11 @@ val DarkGzPalette = GzPalette(
     textSecondary = Color(0xFFA1A1AA),
     textTertiary = Color(0xFF71717A),
     green = Color(0xFF4ADE80),
-    greenContainer = Color(0xFF14532D),
+    greenContainer = Color(0xFF16291F),
     red = Color(0xFFF87171),
-    redContainer = Color(0xFF7F1D1D),
+    redContainer = Color(0xFF2E1A1A),
     amber = Color(0xFFFBBF24),
-    amberContainer = Color(0xFF78350F),
+    amberContainer = Color(0xFF2E2514),
     chartBlue = Color(0xFF60A5FA),
     chartCyan = Color(0xFF22D3EE),
     chartPink = Color(0xFFF472B6),
@@ -118,8 +118,8 @@ val DarkGzPalette = GzPalette(
     chartTeal = Color(0xFF2DD4BF),
     streakFire = Color(0xFFFB923C),
     streakGold = Color(0xFFFACC15),
-    achievementBg = Color(0xFF78350F),
-    achievementBorder = Color(0xFF92400E),
+    achievementBg = Color(0xFF2E2514),
+    achievementBorder = Color(0xFF4A3A1C),
     focusBlue = Color(0xFF60A5FA),
     focusBlueDim = Color(0xFF1E3A5F),
     onPrimary = Color(0xFF042F2E),

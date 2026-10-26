@@ -23,15 +23,8 @@ object PrefsKeys {
      */
     const val ONBOARDING_COMPLETED = "onboarding_completed"
 
-    /** True once we've sent the user to the All-files-access screen for the hidden state backup. */
-    const val ALL_FILES_PROMPTED = "all_files_prompted"
-
-    /**
-     * True when a wipe/reinstall was detected but restore could not run yet (usually missing
-     * all-files access). Cleared after a successful restore or when no backup file exists.
-     * Allows restore to overwrite a raced [ONBOARDING_COMPLETED] from early setup.
-     */
-    const val RESTORE_PENDING = "restore_pending"
+    /** Names of optional [SetupRequirement]s the user chose "Not now" for, so they are not re-asked. */
+    const val SETUP_SKIPPED = "setup_skipped"
 
     // Timing settings (global defaults)
     const val WAIT_SECONDS       = "wait_seconds"
@@ -53,9 +46,6 @@ object PrefsKeys {
 
     // App list
     const val MONITORED_APPS     = "monitored_apps"
-    /** True after one-shot Instagram/YouTube default seed has run (even if none were installed). */
-    const val DEFAULT_APPS_SEEDED = "default_apps_seeded"
-
     // ── Per-App Custom Limits (append packageName) ─────────────────────────
     const val PER_APP_WAIT_SECONDS    = "per_app_wait_"
     const val PER_APP_SESSION_MINUTES = "per_app_session_"

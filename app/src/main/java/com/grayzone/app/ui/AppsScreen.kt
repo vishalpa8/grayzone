@@ -1,4 +1,4 @@
-package com.grayzone.app.ui
+﻿package com.grayzone.app.ui
 
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -38,6 +38,7 @@ import com.grayzone.app.ui.components.*
 @Composable
 fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
     val context = LocalContext.current
+    val gate = LocalPermissionGate.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     // Paint instantly from the in-memory cache on re-entry; spinner only on the
     // very first cold load. The LaunchedEffect still refreshes in the background.
@@ -135,7 +136,24 @@ fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
                         checked = grayzoneEnabled,
                         onCheckedChange = {
                             if (!anyAppLockedOrActive || !grayzoneEnabled) {
-                                viewModel.setGrayzoneEnabled(it)
+                                if (it) {
+                                    // Turning monitoring on needs every permission, then starts the service.
+                                    gate.requireSetup {
+                                        viewModel.setGrayzoneEnabled(true)
+                                        try {
+                                            context.startForegroundService(
+                                                android.content.Intent(context, com.grayzone.app.service.OverlayService::class.java)
+                                            )
+                                        } catch (e: Exception) {
+                                            GrayzoneLogger.w(LogComponent.OVERLAY, "Could not start monitoring: ${e.message}")
+                                        }
+                                    }
+                                } else {
+                                    viewModel.setGrayzoneEnabled(false)
+                                    context.stopService(
+                                        android.content.Intent(context, com.grayzone.app.service.OverlayService::class.java)
+                                    )
+                                }
                             }
                         },
                         enabled = !anyAppLockedOrActive || !grayzoneEnabled
@@ -218,7 +236,9 @@ fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
                         statusText = statusText,
                         isGloballyDisabled = !grayzoneEnabled,
                         onToggle = { checked ->
-                            viewModel.toggleAppMonitored(app.packageName, checked)
+                            // Monitoring only works with Accessibility + Overlay, so ask when turning on.
+                            if (checked) gate.requireSetup { viewModel.toggleAppMonitored(app.packageName, true) }
+                            else viewModel.toggleAppMonitored(app.packageName, false)
                         },
                         onLongPress = {
                             selectedAppForSettings = app

@@ -36,11 +36,14 @@ class BootReceiver : BroadcastReceiver() {
         // Always restart OverlayService; it is the core monitoring service. Its onCreate re-arms the
         // session-expiry alarms for any in-flight session, so a session that spans the reboot still
         // stops its countdown at 00:00 and locks at expiry.
-        try {
-            context.startForegroundService(Intent(context, OverlayService::class.java))
-            Log.d(TAG, "OverlayService restart requested")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start OverlayService: ${e.message}")
+        // Only when the user switched monitoring on; it is off by default.
+        if (com.grayzone.app.isMonitoringEnabled(context)) {
+            try {
+                context.startForegroundService(Intent(context, OverlayService::class.java))
+                Log.d(TAG, "OverlayService restart requested")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start OverlayService: ${e.message}")
+            }
         }
 
         // F-010: BootReceiver cannot restart the :a11y process — surface the gap in health state.

@@ -1,4 +1,4 @@
-package com.grayzone.app.ui
+﻿package com.grayzone.app.ui
 
 import com.grayzone.app.ui.components.*
 
@@ -29,7 +29,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grayzone.app.*
 import com.grayzone.app.R
 import com.grayzone.app.data.ProtectionHealthRepository
-import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -40,13 +39,13 @@ data class HomeData(
 @Composable
 fun HomeScreen() {
     val context = LocalContext.current
+    val gate = LocalPermissionGate.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var notificationsOn by remember { mutableStateOf(areAppNotificationsEnabled(context)) }
-    var allFilesOn by remember { mutableStateOf(StateBackupManager.hasAllFilesAccess(context)) }
     var batteryExempt by remember { mutableStateOf(!isBatteryOptimized(context)) }
+    var monitoringOn by remember { mutableStateOf(isMonitoringEnabled(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
     val streakScope = rememberCoroutineScope()
@@ -56,9 +55,8 @@ fun HomeScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityOn = isAccessibilityServiceEnabled(context)
                 overlayOn = Settings.canDrawOverlays(context)
-                notificationsOn = areAppNotificationsEnabled(context)
-                allFilesOn = StateBackupManager.hasAllFilesAccess(context)
                 batteryExempt = !isBatteryOptimized(context)
+                monitoringOn = isMonitoringEnabled(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
                 streakScope.launch {
                     try {
@@ -77,20 +75,11 @@ fun HomeScreen() {
     }
 
     val data = HomeData(monitoredCount = monitoredCount)
-    val missingSetup = SetupRequirements.missing(
-        accessibilityEnabled = accessibilityOn,
-        overlayEnabled = overlayOn,
-        notificationsEnabled = notificationsOn,
-        allFilesGranted = allFilesOn,
-        batteryExempt = batteryExempt,
-    )
-    val needsSetup = missingSetup.isNotEmpty()
-    val onlyBatteryMissing = missingSetup == listOf(SetupRequirement.BATTERY)
     // F-155: permissions alone are not "active" — OverlayService must also be running.
     val health by ProtectionHealthRepository.status.collectAsStateWithLifecycle()
     val coreReady = accessibilityOn && overlayOn
     // F-087: battery exemption is part of "active" — do not show green while optimized.
-    val isActive = coreReady && batteryExempt && health.overlayActive && health.accessibilityActive
+    val isActive = monitoringOn && coreReady && batteryExempt && health.overlayActive && health.accessibilityActive
 
     LazyColumn(
         modifier = Modifier
@@ -139,110 +128,47 @@ fun HomeScreen() {
             }
         }
 
-        // Primary status affordance — dominates when setup is incomplete
+        // Status only. Permissions are asked for in the popup, never with buttons here;
+        // tapping the card while something core is off simply reopens that popup.
         item {
-            val statusBg = when {
-                needsSetup -> GZAmberContainer
-                else -> GZGreenContainer
-            }
-            val statusBorder = when {
-                needsSetup -> GZAmber.copy(alpha = 0.35f)
-                else -> GZGreen.copy(alpha = 0.25f)
-            }
-            val statusTint = when {
-                needsSetup -> GZAmber
-                else -> GZGreen
-            }
-            val headline = if (needsSetup) {
-                SetupRequirements.headline(missingSetup)
-            } else {
-                "Protection ready"
-            }
-            val body = if (needsSetup) {
-                SetupRequirements.body(missingSetup)
-            } else {
-                "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored"
-            }
-
+            val off = !monitoringOn
+            val paused = monitoringOn && !coreReady
             GZCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                background = statusBg,
-                border = statusBorder
+                background = when { off -> GZSurface; paused -> GZAmberContainer; else -> GZGreenContainer },
+                border = when { off -> GZBorder; paused -> GZAmber.copy(alpha = 0.3f); else -> GZGreen.copy(alpha = 0.3f) },
+                onClick = if (paused) ({ gate.requireSetup { } }) else null
             ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (onlyBatteryMissing) Icons.Filled.BatteryAlert else Icons.Filled.Shield,
-                            contentDescription = null,
-                            tint = statusTint,
-                            modifier = Modifier.size(28.dp)
+                Row(
+                    modifier = Modifier.padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = when { off -> GZTextTertiary; paused -> GZAmber; else -> GZGreen },
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            when { off -> "Monitoring is off"; paused -> "Protection paused"; else -> "Protection ready" },
+                            color = GZTextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
                         )
-                        Spacer(Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                headline,
-                                color = GZTextPrimary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 16.sp
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(body, color = GZTextSecondary, fontSize = 13.sp)
-                        }
-                    }
-
-                    // One button per missing permission so it is always clear which is
-                    // still pending and which settings page each one opens.
-                    missingSetup.forEach { requirement ->
-                        Spacer(Modifier.height(10.dp))
-                        Button(
-                            onClick = {
-                                startActivitySafely(
-                                    context,
-                                    settingsIntentFor(context, requirement),
-                                    "settingsIntentFor(${requirement.name})"
-                                )
-                                // F-061: OEM autostart screens are separate from the generic opt-out.
-                                if (requirement == SetupRequirement.BATTERY &&
-                                    OemBatteryHelper.needsOemOptimization()
-                                ) {
-                                    OemBatteryHelper.openBatterySettings(context)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = GZPrimary,
-                                contentColor = androidx.compose.ui.graphics.Color.White
-                            )
-                        ) {
-                            Text(
-                                SetupRequirements.actionLabel(listOf(requirement)),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        // F-092: sideloaded installs on Android 13+ may need Allow restricted settings.
-                        if (SetupRequirements.needsRestrictedSettingsHint(
-                                Build.VERSION.SDK_INT,
-                                requirement
-                            )
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    startActivitySafely(
-                                        context,
-                                        appInfoSettingsIntent(context),
-                                        "appInfoSettings"
-                                    )
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Toggle locked? Open app info")
-                            }
-                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            if (off) "Turn it on in the Apps tab to start."
+                            else if (paused) "A permission is needed. Tap to review."
+                            else "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored",
+                            color = GZTextSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                 }
             }
         }
-
         item { QuickFocusCard() }
         item { DailyBreakCard() }
         item { StreakCard() }
@@ -253,9 +179,9 @@ fun HomeScreen() {
                 Spacer(Modifier.height(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     HowItWorksStep("1", "Open a monitored app", GZPrimary)
-                    HowItWorksStep("2", "Grayzone overlays a pause screen", GZPrimaryLight)
-                    HowItWorksStep("3", "A reflection question prompts mindfulness", GZAccent)
-                    HowItWorksStep("4", "Wait the timer or skip — your choice", GZGreen)
+                    HowItWorksStep("2", "Grayzone overlays a pause screen", GZPrimary)
+                    HowItWorksStep("3", "A reflection question prompts mindfulness", GZPrimary)
+                    HowItWorksStep("4", "Wait the timer or skip — your choice", GZPrimary)
                 }
             }
         }

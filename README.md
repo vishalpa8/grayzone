@@ -38,7 +38,7 @@ Grayzone leverages Android's Accessibility Services, System Alert Windows, and V
 
 ## Privacy and Persistence
 
-Grayzone keeps usage history, monitored app settings, schedules, custom prompts, and VPN restore intent locally on the device. Android cloud backup and device-transfer extraction are disabled for the app, and backup rules explicitly exclude Grayzone SharedPreferences and the Room usage database.
+Grayzone keeps usage history, monitored app settings, schedules, custom prompts, and VPN intent locally on the device. Android backup is disabled (`allowBackup="false"`) and the app requests no storage permissions; clearing app data or reinstalling starts fresh.
 
 If the DNS blocker was successfully enabled, Grayzone persists that restore intent so the VPN can be restarted after reboot. Explicitly turning the VPN off clears that intent; ordinary service teardown does not.
 

@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Grayzone" parent="android:Theme.Material.Light.NoActionBar" />
+    <color name="gz_window_bg">#F7F6F3</color>
+    <style name="Theme.Grayzone" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Matches the in-app background so cold start does not flash a different color. -->
+        <item name="android:windowBackground">@color/gz_window_bg</item>
+    </style>
 </resources>

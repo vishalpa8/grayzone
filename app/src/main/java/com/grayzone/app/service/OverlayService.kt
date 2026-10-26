@@ -1,4 +1,4 @@
-package com.grayzone.app.service
+﻿package com.grayzone.app.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -88,6 +88,8 @@ class OverlayService : Service() {
         const val ACTION_REFRESH_PROTECTION_STATUS = "com.grayzone.app.ACTION_REFRESH_PROTECTION_STATUS"
         private const val DEFAULT_WAIT = 5
         private const val AMBER_WARNING = 0xFFD97706.toInt()
+        /** Fixed brand teal for notifications: the shade follows the system theme, not the in-app one. */
+        private const val NOTIFICATION_ACCENT = 0xFF0F766E.toInt()
         /** Upper bound on how long a lock screen lingers after its app was evicted. */
         private const val LOCK_OVERLAY_MAX_VISIBLE_MS = 30_000L
         /** How often a running session re-confirms the user is still in the app. */
@@ -384,7 +386,7 @@ class OverlayService : Service() {
             // through the friction wait screen instead of granting silent access
             // (unless Grayzone is disabled or a break is running).
             if (currentPkg != null && monitoredApps.contains(currentPkg) &&
-                prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true) &&
+                prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, false) &&
                 !scheduleManager.isBreakActive()
             ) {
                 sessionStartTime = 0L
@@ -690,7 +692,7 @@ class OverlayService : Service() {
     private fun buildSessionState(pkg: String, prefs: android.content.SharedPreferences): com.grayzone.app.policy.SessionState {
         val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
         val isMonitored = monitoredApps.contains(pkg)
-        val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
+        val isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, false)
         val activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L)
         val lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L)
         val activeStartedElapsedMs = prefs.getLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + pkg, 0L)
@@ -989,7 +991,7 @@ class OverlayService : Service() {
                 activeUntil = activeUntil,
                 lockedUntil = lockedUntil,
                 isForegroundPackage = stillVisible,
-                isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true),
+                isGrayzoneEnabled = prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, false),
                 isOnBreak = scheduleManager.isBreakActive(),
                 nowElapsed = nowElapsed,
                 activeStartedElapsedMs = activeStartedElapsedMs,
@@ -1120,7 +1122,7 @@ class OverlayService : Service() {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setColor(overlayChrome().accent)
+                .setColor(NOTIFICATION_ACCENT)
                 .setContentIntent(
                     PendingIntent.getActivity(
                         this, 0,
@@ -1806,7 +1808,7 @@ class OverlayService : Service() {
             .setContentTitle(copy.title)
             .setContentText(copy.text)
             .setSmallIcon(R.drawable.ic_notification)
-            .setColor(if (copy.isWarning) AMBER_WARNING else overlayChrome().accent)
+            .setColor(if (copy.isWarning) AMBER_WARNING else NOTIFICATION_ACCENT)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(contentIntent)

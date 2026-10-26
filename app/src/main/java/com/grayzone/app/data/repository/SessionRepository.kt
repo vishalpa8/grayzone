@@ -1,4 +1,4 @@
-package com.grayzone.app.data.repository
+﻿package com.grayzone.app.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -16,7 +16,7 @@ class SessionRepository @Inject constructor(
     private val prefs: SharedPreferences
 ) {
     private val _grayzoneEnabled = MutableStateFlow(
-        prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, true)
+        prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, false)
     )
     val grayzoneEnabled: StateFlow<Boolean> = _grayzoneEnabled.asStateFlow()
 

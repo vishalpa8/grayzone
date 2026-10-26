@@ -51,11 +51,10 @@ This is the fraud-protection block. To install they must briefly turn off Play P
 
 ### Step 3: Grant the permissions inside the app
 After install, open Grayzone and follow its setup to grant:
+- **Notifications** (protection status + session countdown)
 - **Accessibility** (detect app switches)
-- **Display over other apps** (the blocking overlay)
-- **Usage access** (time/limits)
-- **All files access** (persistent anti-tamper backup)
-- **Notifications** (foreground service + countdowns)
+- **Display over other apps** (the pause overlay)
+- **Unrestricted battery** (keeps protection running with the screen off)
 
 ---
 

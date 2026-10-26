@@ -1,4 +1,4 @@
-package com.grayzone.app
+﻿package com.grayzone.app
 
 import android.content.Context
 import android.content.Intent
@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.grayzone.app.data.ProtectionHealthRepository
-import com.grayzone.app.data.StateBackupManager
 import com.grayzone.app.data.VpnRestoreGate
 import com.grayzone.app.service.OverlayService
 import com.grayzone.app.service.vpn.AdBlockVpnService
@@ -32,7 +31,9 @@ import com.grayzone.app.service.vpn.VpnHoldLockStore
 import com.grayzone.app.ui.AppsScreen
 import com.grayzone.app.ui.HomeScreen
 import com.grayzone.app.ui.LimitsScreen
-import com.grayzone.app.ui.OnboardingScreen
+import com.grayzone.app.ui.LocalPermissionGate
+import com.grayzone.app.ui.PermissionGate
+import com.grayzone.app.ui.PermissionPrompt
 import com.grayzone.app.ui.SettingsScreen
 import com.grayzone.app.ui.VpnScreen
 import com.grayzone.app.ui.theme.*
@@ -43,33 +44,6 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    override fun onResume() {
-        // Automatic restore: Application may have deferred (no all-files yet). Retry every resume
-        // until applied once this process. If restore lands after UI already drew, recreate so
-        // Compose / services pick up the restored prefs without a half-old race.
-        var justRestored = false
-        if (!StateBackupManager.restoredThisProcess) {
-            val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-            val needsRestore = !prefs.contains(PrefsKeys.ONBOARDING_COMPLETED) ||
-                prefs.getBoolean(PrefsKeys.RESTORE_PENDING, false)
-            if (needsRestore) {
-                if (StateBackupManager.hasAllFilesAccess(this)) {
-                    // F-088: clearing the prompt flag on grant lets a later revoke re-prompt.
-                    prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, false).apply()
-                    justRestored = StateBackupManager.restoreIfWiped(this)
-                } else {
-                    // Mark pending + send user to grant (once); restore runs on the next resume.
-                    StateBackupManager.restoreIfWiped(this)
-                    requestAllFilesAccessOnce(this)
-                }
-            }
-        }
-        super.onResume()
-        if (justRestored) {
-            window.decorView.post { recreate() }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -98,68 +72,16 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * Sends the user, once, to the system "All files access" screen so the anti-tamper state backup can
- * live in a hidden folder that survives a data/cache wipe. If declined, the backup silently falls
- * back to a visible location, so this is best-effort and never blocks the app.
- */
-/**
- * Prompts for storage access used by the anti-tamper backup.
- * - API 30+: all-files manager settings
- * - API 29 (F-131): runtime [WRITE_EXTERNAL_STORAGE] via [onRequestWriteStorage]
- */
-private fun requestAllFilesAccessOnce(
-    context: Context,
-    onRequestWriteStorage: (() -> Unit)? = null
-) {
-    val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
-        // F-131: on API 29 the backup needs the legacy write permission.
-        if (androidx.core.content.ContextCompat.checkSelfPermission(
-                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
-        onRequestWriteStorage?.invoke()
-        return
-    }
-    if (android.os.Environment.isExternalStorageManager()) return
-    if (prefs.getBoolean(PrefsKeys.ALL_FILES_PROMPTED, false)) return
-    // F-209: only suppress future prompts after a successful settings launch.
-    val primary = Intent(
-        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-        android.net.Uri.parse("package:${context.packageName}")
-    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (startActivitySafely(context, primary, "allFilesAccess", showToast = false)) {
-        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
-        return
-    }
-    val fallback = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (startActivitySafely(context, fallback, "allFilesAccessFallback", showToast = false)) {
-        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
-    } else {
-        GrayzoneLogger.w(
-            LogComponent.BOOT,
-            "All-files settings unavailable; will retry later"
-        )
-    }
-}
-
-/**
- * Reconciles VPN with persisted intent (including after full backup restore).
+ * Reconciles VPN with persisted intent (e.g. after the system revoked VPN consent).
  *
  * @param offerConsent when non-null, may open the system VPN dialog **once** per process
  *   ([VpnRestoreGate]). ON_RESUME passes null so returning from the dialog cannot re-stack prompts.
- *   VPN_ENABLED / hold are never cleared here — backup restore must stick.
+ *   VPN_ENABLED is only cleared here when the 24h hold has ended.
  */
 private fun reconcileVpnState(
     context: Context,
     offerConsent: ((Intent) -> Unit)? = null,
 ) {
-    if (StateBackupManager.restoreInProgress) return
-
     val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
     if (!prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) return
 
@@ -184,7 +106,7 @@ private fun reconcileVpnState(
     }
 
     if (consentIntent != null) {
-        // Keep restored VPN intent; Android requires a fresh consent after reinstall.
+        // Keep VPN intent; Android requires a fresh consent after reinstall.
         VpnHoldExpiryScheduler.rearmFromPrefs(context)
         ProtectionHealthRepository.markVpnReconnectPending(true)
         if (offerConsent != null && VpnRestoreGate.tryClaimConsentPrompt()) {
@@ -199,7 +121,7 @@ private fun reconcileVpnState(
         }
         return
     }
-    startRestoredVpn(context)
+    resumeVpn(context)
 }
 
 /**
@@ -207,7 +129,7 @@ private fun reconcileVpnState(
  * prefs from the restore, and [AdBlockVpnService] preserves an in-flight hold via markEnabledIfAbsent,
  * so the resumed tunnel picks up exactly where it left off instead of starting a fresh 24h.
  */
-private fun startRestoredVpn(context: Context) {
+private fun resumeVpn(context: Context) {
     try {
         context.startForegroundService(
             Intent(context, AdBlockVpnService::class.java).apply {
@@ -224,94 +146,139 @@ private fun startRestoredVpn(context: Context) {
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
-enum class Screen { ONBOARDING, MAIN }
 enum class Tab { HOME, APPS, VPN, LIMITS, SETTINGS }
 
+/**
+ * Always shows the app; permissions are asked for in a small popup, one at a time, never as a
+ * full-screen page. Every popup can be declined.
+ *  - First run: walks through each permission once; a declined one is not asked again.
+ *  - Later: a lost Accessibility/Overlay grant re-prompts once per loss ([AccessibilityPromptPolicy]).
+ *  - On demand: features call [PermissionGate.requireSetup]; the popup walks through every missing
+ *    permission right then, and the feature runs only if the user grants all of them.
+ */
 @Composable
 fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
-    // Decide the screen using the prompt-once-per-loss policy so a revoked Accessibility permission
-    // is surfaced at most once per loss instead of trapping the user in a re-prompt loop.
-    // Overlay is required to enter MAIN as "ready", but must not drive the accessibility prompt
-    // flag — conflating the two incorrectly reset/re-triggered prompts.
-    fun evaluateScreen(): Screen {
-        val accessibilityOn = isAccessibilityServiceEnabled(context)
-        val overlayOn = Settings.canDrawOverlays(context)
+    fun skipped(): Set<String> = prefs.getStringSet(PrefsKeys.SETUP_SKIPPED, emptySet()) ?: emptySet()
+
+    fun missing(): List<SetupRequirement> = SetupRequirements.missing(
+        accessibilityEnabled = isAccessibilityServiceEnabled(context),
+        overlayEnabled = Settings.canDrawOverlays(context),
+        notificationsEnabled = areAppNotificationsEnabled(context),
+        batteryExempt = !isBatteryOptimized(context),
+    )
+
+    val coreOrder = listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY)
+
+    // The action a feature is waiting on; non-null means the popup was opened by that feature.
+    var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var step by remember { mutableStateOf<SetupRequirement?>(null) }
+
+    fun computeSetupStep(current: SetupRequirement?): SetupRequirement? {
+        val missing = missing()
+        if (!prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)) {
+            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing && it.name !in skipped() }
+            if (next == null) prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
+            return next
+        }
+        // Already asked about this one and it is still pending: keep showing it until answered.
+        if (current != null && current in missing) return current
         val decision = AccessibilityPromptPolicy.onObserved(
             previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false),
-            isEnabled = accessibilityOn
+            isEnabled = isAccessibilityServiceEnabled(context)
         )
         prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
-        val ready = accessibilityOn && overlayOn
-        if (ready) {
-            prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
-            return Screen.MAIN
-        }
-        // First run must finish every required grant before MAIN. Otherwise granting only
-        // Accessibility satisfied the prompt policy and dropped the user into MAIN with the
-        // overlay still off — protection silently inactive with no indication of what was missing.
-        if (!prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)) return Screen.ONBOARDING
-        return if (decision.shouldPrompt) Screen.ONBOARDING else Screen.MAIN
+        if (!decision.shouldPrompt) return null
+        return coreOrder.firstOrNull { it in missing }
     }
 
-    var currentScreen by remember { mutableStateOf(evaluateScreen()) }
+    fun refresh() {
+        val waiting = pending
+        if (waiting != null) {
+            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing() }
+            if (next == null) {
+                pending = null
+                step = null
+                waiting()
+            } else {
+                step = next
+            }
+            return
+        }
+        step = computeSetupStep(step)
+    }
+
+    var initialised by remember { mutableStateOf(false) }
+    if (!initialised) {
+        step = computeSetupStep(null)
+        initialised = true
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) currentScreen = evaluateScreen()
+            if (event == Lifecycle.Event.ON_RESUME) refresh()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    when (currentScreen) {
-        Screen.ONBOARDING -> OnboardingScreen(onContinue = {
-            prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
-            currentScreen = Screen.MAIN
-        })
-        Screen.MAIN -> MainScreen(onThemeModeChanged = onThemeModeChanged)
+    val gate = remember {
+        PermissionGate { action ->
+            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing() }
+            if (next == null) {
+                action()
+            } else {
+                pending = action
+                step = next
+            }
+        }
+    }
+
+    CompositionLocalProvider(LocalPermissionGate provides gate) {
+        MainScreen(onThemeModeChanged = onThemeModeChanged)
+    }
+
+    step?.let { requirement ->
+        val firstRun = pending == null && !prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)
+        PermissionPrompt(
+            requirement = requirement,
+            position = if (firstRun || pending != null) {
+                SetupRequirements.SETUP_ORDER.indexOf(requirement) + 1 to SetupRequirements.SETUP_ORDER.size
+            } else null,
+            onDecline = {
+                if (pending != null) {
+                    // The feature that asked simply does not run.
+                    pending = null
+                    step = null
+                } else {
+                    prefs.edit().putStringSet(PrefsKeys.SETUP_SKIPPED, skipped() + requirement.name).apply()
+                    if (requirement in coreOrder) {
+                        // Do not re-prompt on the next launch for something the user just declined.
+                        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, true).apply()
+                    }
+                    step = if (firstRun) computeSetupStep(null) else null
+                }
+            },
+            onChanged = { refresh() },
+        )
     }
 }
-
 @Composable
 fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(Tab.HOME) }
 
-    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        // F-086: do not silently discard the result — surface denial in logs / health.
-        if (!granted) {
-            GrayzoneLogger.w(
-                LogComponent.BOOT,
-                "POST_NOTIFICATIONS denied — ongoing protection notification may be hidden"
-            )
-        }
-    }
-
-    val writeStorageLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-        // F-131/F-209: only suppress re-prompt after the system dialog was shown.
-        prefs.edit().putBoolean(PrefsKeys.ALL_FILES_PROMPTED, true).apply()
-        if (!granted) {
-            GrayzoneLogger.w(LogComponent.BOOT, "WRITE_EXTERNAL_STORAGE denied — anti-tamper backup inert on API 29")
-        }
-    }
-
     val vpnConsentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            startRestoredVpn(context)
+            resumeVpn(context)
             ProtectionHealthRepository.markVpnReconnectPending(false)
         } else {
-            // Keep restored VPN_ENABLED + hold; user can retry from the VPN tab.
+            // Keep VPN_ENABLED + hold; user can retry from the VPN tab.
             ProtectionHealthRepository.markVpnReconnectPending(true)
         }
     }
@@ -324,7 +291,7 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 // opens Grayzone again — re-sync health and restart OverlayService when grants return.
                 val a11yOn = isAccessibilityServiceEnabled(context)
                 ProtectionHealthRepository.updateAccessibilityStatus(a11yOn)
-                if (a11yOn && Settings.canDrawOverlays(context)) {
+                if (a11yOn && Settings.canDrawOverlays(context) && isMonitoringEnabled(context)) {
                     try {
                         context.startForegroundService(Intent(context, OverlayService::class.java))
                     } catch (e: Exception) {
@@ -353,16 +320,13 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     }
 
     LaunchedEffect(Unit) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (androidx.core.content.ContextCompat.checkSelfPermission(
-                    context, android.Manifest.permission.POST_NOTIFICATIONS
-                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-        requestAllFilesAccessOnce(context) {
-            writeStorageLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        // Monitoring is off until the user turns it on (and grants permissions), so nothing runs yet.
+        if (!isMonitoringEnabled(context) ||
+            !isAccessibilityServiceEnabled(context) ||
+            !Settings.canDrawOverlays(context)
+        ) {
+            reconcileVpnState(context) { consentIntent -> vpnConsentLauncher.launch(consentIntent) }
+            return@LaunchedEffect
         }
         try {
             context.startForegroundService(Intent(context, OverlayService::class.java))
@@ -373,7 +337,7 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 e
             )
         }
-        // Single place that may open VPN consent after restore (at most once per process).
+        // Single place that may re-open VPN consent (at most once per process).
         reconcileVpnState(context) { consentIntent ->
             vpnConsentLauncher.launch(consentIntent)
         }

@@ -1,4 +1,4 @@
-package com.grayzone.app.ui
+﻿package com.grayzone.app.ui
 
 import com.grayzone.app.ui.components.*
 
@@ -32,6 +32,7 @@ fun ScheduleSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val gate = LocalPermissionGate.current
     val scheduleManager = remember { ScheduleManager(context) }
     
     var rules by remember { mutableStateOf(scheduleManager.getScheduleRules()) }
@@ -140,9 +141,11 @@ fun ScheduleSheet(
                 )
                 Button(
                     onClick = {
-                        scheduleManager.startFocusMode(focusDuration)
-                        isFocusMode = true
-                        focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+                        gate.requireSetup {
+                            scheduleManager.startFocusMode(focusDuration)
+                            isFocusMode = true
+                            focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GZAccent, contentColor = Color.White)
                 ) {
@@ -174,9 +177,12 @@ fun ScheduleSheet(
                         }
                         Switch(
                             checked = rule.isEffectivelyEnabled(),
-                            onCheckedChange = {
-                                scheduleManager.toggleRule(rule.id, it)
-                                reloadRules()
+                            onCheckedChange = { enabled ->
+                                val apply = {
+                                    scheduleManager.toggleRule(rule.id, enabled)
+                                    reloadRules()
+                                }
+                                if (enabled) gate.requireSetup(apply) else apply()
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
