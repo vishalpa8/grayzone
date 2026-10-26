@@ -3,12 +3,15 @@ package com.grayzone.app.ui
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,18 +21,31 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-
+import com.grayzone.app.BuildConfig
 import com.grayzone.app.PrefsKeys
-import com.grayzone.app.isAnyAppLocked
+import com.grayzone.app.data.ConfigValidator
+import com.grayzone.app.isRestrictionActive
+import kotlin.math.roundToInt
 import com.grayzone.app.rememberResumedTicker
-import com.grayzone.app.shareApk
-import com.grayzone.app.ui.theme.*
-import androidx.hilt.navigation.compose.hiltViewModel
+import com.grayzone.app.shareApp
 import com.grayzone.app.ui.components.*
+import com.grayzone.app.ui.theme.*
+
+private fun formatMinutes(total: Int): String {
+    val h = total / 60
+    val m = total % 60
+    return when {
+        h > 0 && m > 0 -> "${h}h ${m}m"
+        h > 0 -> "${h}h"
+        else -> "${m}m"
+    }
+}
 
 @Composable
 fun SettingsScreen(
@@ -44,10 +60,9 @@ fun SettingsScreen(
     val vmSessionMinutes by viewModel.sessionMinutes.collectAsState()
     val vmLockoutMinutes by viewModel.lockoutMinutes.collectAsState()
 
-    var themeMode by remember(vmThemeMode) { mutableStateOf(vmThemeMode) }
-    var waitSeconds by remember(vmWaitSeconds) { mutableStateOf(vmWaitSeconds) }
-    var sessionMinutes by remember(vmSessionMinutes) { mutableStateOf(vmSessionMinutes) }
-    var lockoutMinutes by remember(vmLockoutMinutes) { mutableStateOf(vmLockoutMinutes) }
+    var waitSeconds by remember(vmWaitSeconds) { mutableIntStateOf(vmWaitSeconds.coerceIn(ConfigValidator.WAIT_SECONDS_RANGE)) }
+    var sessionMinutes by remember(vmSessionMinutes) { mutableIntStateOf(vmSessionMinutes.coerceIn(ConfigValidator.SESSION_MINUTES_RANGE)) }
+    var lockoutMinutes by remember(vmLockoutMinutes) { mutableIntStateOf(vmLockoutMinutes.coerceIn(ConfigValidator.LOCKOUT_MINUTES_RANGE)) }
 
     var showCustomPrompts by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }
@@ -66,179 +81,145 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val currentTime by rememberResumedTicker(2000L)
-    val anyAppLockedOrActive = remember(monitoredApps, currentTime) {
-        isAnyAppLocked(prefs, monitoredApps, currentTime)
+    val locked = remember(monitoredApps, currentTime) {
+        isRestrictionActive(context, prefs, monitoredApps, currentTime)
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(GZBackground)
-            .padding(24.dp)
             .verticalScroll(rememberScrollState())
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Settings", fontSize = 28.sp, color = GZTextPrimary, fontWeight = FontWeight.Bold)
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(GZPrimary.copy(alpha = 0.15f))
-                    .clickable { shareApk(context) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
+        ScreenHeader(title = "Settings")
+
+        if (locked) {
+            GZCard(
+                modifier = Modifier.padding(horizontal = GZGutter),
+                background = GZAmberContainer,
+                border = GZAmber.copy(alpha = 0.25f)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.Share,
-                        contentDescription = "Share App",
-                        tint = GZPrimary,
-                        modifier = Modifier.size(16.dp)
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(Icons.Filled.Lock, tint = GZAmber, size = 36)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Limits are frozen while an app is in a session, timeout, daily limit or schedule.",
+                        color = GZTextPrimary,
+                        fontSize = 13.sp
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Share", color = GZPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
 
-        if (anyAppLockedOrActive) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(GZRedContainer)
-                    .border(1.dp, GZRed.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Settings are locked while an app is active, paused, or in timeout.", color = GZRed, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Text("Appearance", color = GZTextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(modifier = Modifier.height(10.dp))
-        GZCard {
-            Column(modifier = Modifier.padding(18.dp)) {
+        SectionLabel("Appearance", Modifier.padding(start = GZGutter + 4.dp, top = 4.dp))
+        GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
                 Text("Theme", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                Text("Light, dark, or follow the system", color = GZTextSecondary, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        ThemeMode.SYSTEM to "System",
-                        ThemeMode.LIGHT to "Light",
-                        ThemeMode.DARK to "Dark",
-                    ).forEach { (mode, label) ->
-                        val selected = themeMode == mode
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (selected) GZPrimary else GZSurfaceHigh)
-                                .clickable {
-                                    viewModel.setThemeMode(mode)
-                                    onThemeModeChanged(mode)
-                                }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                label,
-                                color = if (selected) GZOnPrimary else GZTextSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                Spacer(Modifier.height(12.dp))
+                ThemeSegmentedControl(
+                    selected = vmThemeMode,
+                    onSelect = { mode ->
+                        viewModel.setThemeMode(mode)
+                        onThemeModeChanged(mode)
                     }
-                }
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            "Wait Duration: $waitSeconds seconds",
-            color = if (anyAppLockedOrActive) GZTextTertiary else GZTextPrimary,
-            fontWeight = FontWeight.Medium
-        )
-        Slider(
-            value = waitSeconds.toFloat(),
-            onValueChange = { waitSeconds = it.toInt() },
-            valueRange = 3f..30f,
-            steps = 26,
-            enabled = !anyAppLockedOrActive,
-            onValueChangeFinished = { viewModel.setWaitSeconds(waitSeconds) }
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            "Session Limit: $sessionMinutes minutes",
-            color = if (anyAppLockedOrActive) GZTextTertiary else GZTextPrimary,
-            fontWeight = FontWeight.Medium
-        )
-        Text("Maximum time you can spend in an app per session.", color = GZTextSecondary, fontSize = 12.sp)
-        Slider(
-            value = sessionMinutes.toFloat(),
-            onValueChange = {
-                sessionMinutes = it.toInt()
-                if (sessionMinutes > lockoutMinutes) lockoutMinutes = sessionMinutes
-            },
-            valueRange = 1f..120f,
-            steps = 118,
-            enabled = !anyAppLockedOrActive,
-            onValueChangeFinished = {
-                viewModel.setSessionMinutes(sessionMinutes)
-                viewModel.setLockoutMinutes(lockoutMinutes)
+        SectionLabel("Default limits", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp))
+        GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
+            Column {
+                LabeledSlider(
+                    label = "Wait",
+                    valueText = "${waitSeconds}s",
+                    help = "Pause before you can continue into an app",
+                    value = waitSeconds.toFloat(),
+                    onValueChange = { waitSeconds = it.roundToInt() },
+                    valueRange = 3f..30f,
+                    steps = 26,
+                    enabled = !locked,
+                    onValueChangeFinished = { viewModel.setWaitSeconds(waitSeconds) }
+                )
+                RowDivider()
+                LabeledSlider(
+                    label = "Session",
+                    valueText = formatMinutes(sessionMinutes),
+                    help = "Longest time per visit before the app locks",
+                    value = sessionMinutes.toFloat(),
+                    onValueChange = {
+                        sessionMinutes = it.roundToInt()
+                        if (sessionMinutes > lockoutMinutes) lockoutMinutes = sessionMinutes
+                    },
+                    valueRange = 1f..60f,
+                    steps = 58,
+                    enabled = !locked,
+                    onValueChangeFinished = {
+                        viewModel.setSessionMinutes(sessionMinutes)
+                        viewModel.setLockoutMinutes(lockoutMinutes)
+                    }
+                )
+                RowDivider()
+                LabeledSlider(
+                    label = "Lockout",
+                    valueText = formatMinutes(lockoutMinutes),
+                    help = "How long the app stays locked after a session",
+                    value = lockoutMinutes.toFloat(),
+                    onValueChange = {
+                        lockoutMinutes = it.roundToInt()
+                        if (sessionMinutes > lockoutMinutes) sessionMinutes = lockoutMinutes
+                    },
+                    // 15-minute steps up to the 5h the startup repair accepts for the global lockout.
+                    valueRange = 15f..300f,
+                    steps = 18,
+                    enabled = !locked,
+                    onValueChangeFinished = {
+                        viewModel.setSessionMinutes(sessionMinutes)
+                        viewModel.setLockoutMinutes(lockoutMinutes)
+                    }
+                )
             }
-        )
+        }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        val lockoutHours = lockoutMinutes / 60
-        val lockoutMins = lockoutMinutes % 60
-        val lockoutText = if (lockoutHours > 0) "${lockoutHours}h ${lockoutMins}m" else "${lockoutMins}m"
-        Text(
-            "Lockout Duration: $lockoutText",
-            color = if (anyAppLockedOrActive) GZTextTertiary else GZTextPrimary,
-            fontWeight = FontWeight.Medium
-        )
-        Text("How long the app remains locked after your session expires.", color = GZTextSecondary, fontSize = 12.sp)
-        Slider(
-            value = lockoutMinutes.toFloat(),
-            onValueChange = {
-                lockoutMinutes = it.toInt()
-                if (sessionMinutes > lockoutMinutes) sessionMinutes = lockoutMinutes
-            },
-            valueRange = 15f..1440f,
-            steps = 94,
-            enabled = !anyAppLockedOrActive,
-            onValueChangeFinished = {
-                viewModel.setSessionMinutes(sessionMinutes)
-                viewModel.setLockoutMinutes(lockoutMinutes)
+        SectionLabel("Customize", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp))
+        GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
+            Column {
+                SettingsRow(
+                    title = "Reflection prompts",
+                    subtitle = "Questions shown on the pause screen",
+                    icon = Icons.Filled.FormatQuote,
+                    enabled = !locked,
+                    onClick = { showCustomPrompts = true }
+                )
+                RowDivider(startIndent = 68)
+                SettingsRow(
+                    title = "Schedules & focus",
+                    subtitle = "Lock apps automatically at set times",
+                    icon = Icons.Filled.Event,
+                    enabled = !locked,
+                    onClick = { showSchedule = true }
+                )
             }
+        }
+
+        SectionLabel("About", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp))
+        GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
+            SettingsRow(
+                title = "Share Grayzone",
+                subtitle = "Send the Play Store link to a friend",
+                icon = Icons.Filled.Share,
+                onClick = { shareApp(context) }
+            )
+        }
+
+        Text(
+            "Grayzone ${BuildConfig.VERSION_NAME}",
+            color = GZTextTertiary,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
         )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        GZButton(
-            text = "Manage Custom Prompts",
-            onClick = { showCustomPrompts = true },
-            enabled = !anyAppLockedOrActive
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        GZButton(
-            text = "Manage Schedule Focus Modes",
-            onClick = { showSchedule = true },
-            enabled = !anyAppLockedOrActive
-        )
-
-        Spacer(modifier = Modifier.height(64.dp))
     }
 
     if (showCustomPrompts) {
@@ -246,5 +227,49 @@ fun SettingsScreen(
     }
     if (showSchedule) {
         ScheduleSheet(onDismiss = { showSchedule = false })
+    }
+}
+
+@Composable
+private fun ThemeSegmentedControl(selected: String, onSelect: (String) -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(GZSurfaceElevated)
+            .border(1.dp, GZBorderSubtle, shape)
+            .padding(4.dp)
+    ) {
+        listOf(
+            ThemeMode.SYSTEM to "System",
+            ThemeMode.LIGHT to "Light",
+            ThemeMode.DARK to "Dark",
+        ).forEach { (mode, label) ->
+            val isSelected = selected == mode
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (isSelected) GZSurface else androidx.compose.ui.graphics.Color.Transparent)
+                    .then(
+                        if (isSelected) Modifier.border(1.dp, GZBorder, RoundedCornerShape(9.dp)) else Modifier
+                    )
+                    .selectable(
+                        selected = isSelected,
+                        role = androidx.compose.ui.semantics.Role.Tab,
+                        onClick = { onSelect(mode) }
+                    )
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    color = if (isSelected) GZTextPrimary else GZTextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                )
+            }
+        }
     }
 }

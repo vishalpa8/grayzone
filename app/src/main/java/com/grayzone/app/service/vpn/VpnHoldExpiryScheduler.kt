@@ -6,8 +6,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import com.grayzone.app.GrayzoneLogger
 import com.grayzone.app.LogComponent
+import com.grayzone.app.PrefsKeys
 
 /**
  * Arms a Doze-safe alarm for automatic VPN disable when the 24h hold expires.
@@ -30,16 +32,22 @@ object VpnHoldExpiryScheduler {
     }
 
     fun arm(context: Context, expiresAtWallMs: Long) {
-        if (expiresAtWallMs <= System.currentTimeMillis()) return
+        armIn(context, expiresAtWallMs - System.currentTimeMillis())
+    }
+
+    // Elapsed-realtime alarm so a wall-clock change cannot fire it early or push it past the hold.
+    private fun armIn(context: Context, delayMs: Long) {
+        if (delayMs <= 0L) return
+        val triggerAtElapsed = SystemClock.elapsedRealtime() + delayMs
         val am = alarmManager(context)
         val pi = pendingIntent(context)
         try {
             val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
             if (canExact) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
             } else {
                 // F-035: inexact path — Doze may defer automatic VPN disable.
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
                 GrayzoneLogger.w(
                     LogComponent.VPN,
                     "Exact alarms unavailable; VPN hold expiry may be delayed under Doze"
@@ -47,7 +55,7 @@ object VpnHoldExpiryScheduler {
             }
         } catch (e: SecurityException) {
             try {
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, expiresAtWallMs, pi)
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, pi)
                 GrayzoneLogger.w(
                     LogComponent.VPN,
                     "Exact alarms unavailable; VPN hold expiry may be delayed under Doze"
@@ -76,12 +84,15 @@ object VpnHoldExpiryScheduler {
             return
         }
         val nowWall = System.currentTimeMillis()
-        val nowElapsed = android.os.SystemClock.elapsedRealtime()
-        if (!VpnHoldLock.isHoldActive(state, nowWall, nowElapsed)) {
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val remaining = VpnHoldLock.remainingMs(state, nowWall, nowElapsed)
+        if (remaining <= 0L) {
             // Already expired — let the service/receiver stop path handle it.
             return
         }
-        arm(context, VpnHoldLock.expiresAtWallMs(state))
+        // Not expiresAtWallMs: after a forward clock jump it is already in the past while the
+        // elapsed-based hold is still active, and the expiry alarm would never be re-armed.
+        armIn(context, remaining)
     }
 }
 
@@ -98,7 +109,17 @@ class VpnHoldExpiryReceiver : BroadcastReceiver() {
         try {
             context.startService(stop)
         } catch (e: Exception) {
+            // Background start refused, so the service (and tunnel) is not running: settle the
+            // expired hold here, otherwise VPN_ENABLED stays true and the UI keeps a stale hold.
             GrayzoneLogger.e(LogComponent.VPN, "Failed to deliver VPN hold expiry stop", e)
+            val prefs = VpnHoldLockStore.prefs(context)
+            val state = VpnHoldLockStore.read(prefs)
+            if (VpnHoldLock.isHoldActive(state, System.currentTimeMillis(), SystemClock.elapsedRealtime())) {
+                VpnHoldExpiryScheduler.rearmFromPrefs(context)
+            } else {
+                prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
+                VpnHoldLockStore.clear(prefs)
+            }
         }
     }
 

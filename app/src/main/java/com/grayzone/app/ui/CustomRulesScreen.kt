@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.vpn.BlocklistManager
-import com.grayzone.app.ui.components.GZCard
+import com.grayzone.app.ui.components.*
 import com.grayzone.app.ui.theme.*
 
 @Composable
@@ -38,6 +38,9 @@ fun CustomRulesScreen(onBack: () -> Unit) {
     
     var currentTab by remember { mutableStateOf(0) } // 0 = Deny, 1 = Allow
     var newDomain by remember { mutableStateOf("") }
+    var inputError by remember { mutableStateOf<String?>(null) }
+
+    androidx.activity.compose.BackHandler(onBack = onBack)
     
     fun saveRules() {
         prefs.edit()
@@ -52,30 +55,7 @@ fun CustomRulesScreen(onBack: () -> Unit) {
             .fillMaxSize()
             .background(GZBackground)
     ) {
-        // Header
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = GZTextPrimary
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Custom Rules",
-                    color = GZTextPrimary,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.3).sp
-                )
-            }
-        }
+        ScreenHeader(title = "Custom rules", onBack = onBack)
 
         TabRow(
             selectedTabIndex = currentTab,
@@ -106,15 +86,15 @@ fun CustomRulesScreen(onBack: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp),
+                .padding(horizontal = GZGutter),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(GZSurfaceElevated)
-                    .border(1.dp, GZBorder, RoundedCornerShape(12.dp))
+                    .clip(GZControlShape)
+                    .background(GZSurface)
+                    .border(1.dp, if (inputError != null) GZRed else if (GZIsDark) GZBorder else GZBorderSubtle, GZControlShape)
                     .padding(horizontal = 14.dp, vertical = 14.dp)
             ) {
                 if (newDomain.isEmpty()) {
@@ -122,7 +102,7 @@ fun CustomRulesScreen(onBack: () -> Unit) {
                 }
                 BasicTextField(
                     value = newDomain,
-                    onValueChange = { newDomain = it },
+                    onValueChange = { newDomain = it; inputError = null },
                     textStyle = LocalTextStyle.current.copy(color = GZTextPrimary, fontSize = 15.sp),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
@@ -132,7 +112,14 @@ fun CustomRulesScreen(onBack: () -> Unit) {
             Button(
                 onClick = {
                     val normalized = BlocklistManager.normalizeDomain(newDomain)
-                    if (normalized != null) {
+                    val held = currentTab == 1 &&
+                        com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)
+                    inputError = when {
+                        normalized == null -> "That doesn't look like a domain, e.g. example.com"
+                        held -> "Domains can't be allowed while the VPN's 24-hour lock is on"
+                        else -> null
+                    }
+                    if (normalized != null && !held) {
                         if (currentTab == 0 && !denylist.contains(normalized)) {
                             denylist = denylist + normalized
                             saveRules()
@@ -144,12 +131,16 @@ fun CustomRulesScreen(onBack: () -> Unit) {
                     }
                 },
                 enabled = newDomain.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = GZPrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = GZPrimary, contentColor = GZOnPrimary),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.height(48.dp)
             ) {
                 Icon(Icons.Filled.Add, contentDescription = "Add")
             }
+        }
+
+        inputError?.let {
+            Text(it, color = GZRed, fontSize = 12.sp, modifier = Modifier.padding(start = GZGutter + 4.dp, top = 6.dp))
         }
 
         Spacer(Modifier.height(16.dp))
@@ -164,13 +155,11 @@ fun CustomRulesScreen(onBack: () -> Unit) {
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                contentPadding = PaddingValues(horizontal = GZGutter, vertical = 8.dp)
             ) {
                 items(currentList.sorted()) { domain ->
                     GZCard(
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        background = GZSurface,
-                        border = GZBorder
+                        modifier = Modifier.padding(vertical = 4.dp)
                     ) {
                         Row(
                             modifier = Modifier
@@ -187,15 +176,19 @@ fun CustomRulesScreen(onBack: () -> Unit) {
                             IconButton(
                                 onClick = {
                                     if (currentTab == 0) {
+                                        // Un-blocking a domain loosens filtering, so the hold refuses it.
+                                        if (com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)) {
+                                            inputError = "Blocked domains can't be removed while the VPN's 24-hour lock is on"
+                                            return@IconButton
+                                        }
                                         denylist = denylist - domain
                                     } else {
                                         allowlist = allowlist - domain
                                     }
                                     saveRules()
-                                },
-                                modifier = Modifier.size(24.dp)
+                                }
                             ) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = GZTextTertiary)
+                                Icon(Icons.Filled.Delete, contentDescription = "Remove $domain", tint = GZTextSecondary)
                             }
                         }
                     }

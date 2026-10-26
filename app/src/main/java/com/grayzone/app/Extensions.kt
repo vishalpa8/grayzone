@@ -81,6 +81,33 @@ fun isAnyAppLocked(
     }
 }
 
+/** True when [pkg] has a daily budget and it is already used up today. */
+fun isBudgetExhausted(prefs: SharedPreferences, pkg: String): Boolean {
+    val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+    if (budgetMins <= 0) return false
+    return com.grayzone.app.data.DailyBudget.remainingMs(
+        budgetMins = budgetMins,
+        dateKey = DateUtils.getCurrentDateKey(),
+        lastResetDateKey = prefs.getString(PrefsKeys.DAILY_RESET_DATE + pkg, ""),
+        usedMs = prefs.getLong(PrefsKeys.DAILY_USED_MILLIS + pkg, 0L)
+    ) <= 0L
+}
+
+/**
+ * True while any restriction is in force that the user must not be able to loosen from the UI:
+ * a per-app session, pause or lockout ([isAnyAppLocked]), a used-up daily budget, or an active
+ * schedule / Deep Work window. Settings, limits and the Monitoring switch are frozen while true.
+ */
+fun isRestrictionActive(
+    context: Context,
+    prefs: SharedPreferences,
+    monitoredApps: Set<String>,
+    now: Long
+): Boolean =
+    isAnyAppLocked(prefs, monitoredApps, now) ||
+        monitoredApps.any { isBudgetExhausted(prefs, it) } ||
+        (monitoredApps.isNotEmpty() && com.grayzone.app.data.ScheduleManager(context).isCurrentlyScheduled())
+
 /**
  * Returns true when every monitored app with a daily budget is still under its limit today.
  * Apps with budget 0 (unlimited) are ignored.

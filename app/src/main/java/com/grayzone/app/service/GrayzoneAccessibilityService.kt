@@ -27,12 +27,22 @@ class GrayzoneAccessibilityService : AccessibilityService() {
         const val ACTION_PERFORM_HOME = "com.grayzone.app.PERFORM_HOME"
         /** Asks for an immediate, freshly read window list (see [broadcastWindowSnapshot]). */
         const val ACTION_REQUEST_WINDOW_SNAPSHOT = "com.grayzone.app.REQUEST_WINDOW_SNAPSHOT"
+        /**
+         * Sent by OverlayService with [EXTRA_MONITORING_ENABLED]. This process must not read prefs,
+         * so it learns the Monitoring switch this way and stops restarting the service while off.
+         */
+        const val ACTION_MONITORING_STATE = "com.grayzone.app.MONITORING_STATE"
+        const val EXTRA_MONITORING_ENABLED = "monitoring_enabled"
         /** Avoid hammering startForegroundService after OEM kills / FGS denials (can trigger a11y disable). */
         private const val WATCHDOG_MIN_INTERVAL_MS = 5_000L
     }
 
     @Volatile
     private var lastWatchdogElapsedMs: Long = 0L
+
+    /** False only after OverlayService reported Monitoring off; a fresh process starts permissive. */
+    @Volatile
+    private var monitoringEnabled = true
 
     private var homeActionReceiver: BroadcastReceiver? = null
 
@@ -72,6 +82,8 @@ class GrayzoneAccessibilityService : AccessibilityService() {
                         )
                     }
                     ACTION_REQUEST_WINDOW_SNAPSHOT -> broadcastWindowSnapshot()
+                    ACTION_MONITORING_STATE ->
+                        monitoringEnabled = intent.getBooleanExtra(EXTRA_MONITORING_ENABLED, true)
                 }
             }
         }
@@ -79,6 +91,7 @@ class GrayzoneAccessibilityService : AccessibilityService() {
             val filter = IntentFilter().apply {
                 addAction(ACTION_PERFORM_HOME)
                 addAction(ACTION_REQUEST_WINDOW_SNAPSHOT)
+                addAction(ACTION_MONITORING_STATE)
             }
             androidx.core.content.ContextCompat.registerReceiver(
                 this,
@@ -118,14 +131,13 @@ class GrayzoneAccessibilityService : AccessibilityService() {
                     val isAppDetailsActivity = className.contains("AppDetails", ignoreCase = true) || 
                                              className.contains("ApplicationDetails", ignoreCase = true)
                     
-                    var hasTamperControls = isAppDetailsActivity
-                    if (!hasTamperControls) {
-                        hasTamperControls = hasTamperControlsNode(root)
-                    }
-
+                    // Name check first: the recursive walk costs one IPC per node, and would
+                    // otherwise run over every screen of every app the user opens.
                     val isGrayzone = root.findAccessibilityNodeInfosByText(getString(com.grayzone.app.R.string.app_name)).isNotEmpty()
+                    val hasTamperControls = isGrayzone &&
+                        (isAppDetailsActivity || hasTamperControlsNode(root))
                     
-                    if (hasTamperControls && isGrayzone) {
+                    if (hasTamperControls) {
                         Log.w(TAG, "User attempting to force stop/uninstall Grayzone. Injecting HOME action.")
                         performGlobalAction(GLOBAL_ACTION_HOME)
                         return
@@ -134,14 +146,16 @@ class GrayzoneAccessibilityService : AccessibilityService() {
             }
 
             // 2. Active Windows Tracking (Split Screen / Overlays)
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                val activePackages = onScreenApplicationPackages()
-                if (activePackages.isNotEmpty()) {
-                    sendBroadcast(Intent(ACTION_ACTIVE_WINDOWS_CHANGED).apply {
-                        putStringArrayListExtra(EXTRA_ACTIVE_PACKAGES, activePackages)
-                        setPackage(this@GrayzoneAccessibilityService.packageName)
-                    })
-                }
+            val activePackages = if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                onScreenApplicationPackages()
+            } else {
+                null
+            }
+            if (!activePackages.isNullOrEmpty()) {
+                sendBroadcast(Intent(ACTION_ACTIVE_WINDOWS_CHANGED).apply {
+                    putStringArrayListExtra(EXTRA_ACTIVE_PACKAGES, activePackages)
+                    setPackage(this@GrayzoneAccessibilityService.packageName)
+                })
             }
 
             // 3. Legacy Foreground Transition Tracking
@@ -155,13 +169,13 @@ class GrayzoneAccessibilityService : AccessibilityService() {
                 
                 // Piggyback real-time active window state so OverlayService isn't vulnerable to 
                 // broadcast race conditions when making backgrounding decisions.
-                putStringArrayListExtra(EXTRA_ACTIVE_PACKAGES, onScreenApplicationPackages())
+                putStringArrayListExtra(EXTRA_ACTIVE_PACKAGES, activePackages ?: onScreenApplicationPackages())
 
                 setPackage(this@GrayzoneAccessibilityService.packageName)
             })
 
             val nowElapsed = SystemClock.elapsedRealtime()
-            if (nowElapsed - lastWatchdogElapsedMs >= WATCHDOG_MIN_INTERVAL_MS) {
+            if (monitoringEnabled && nowElapsed - lastWatchdogElapsedMs >= WATCHDOG_MIN_INTERVAL_MS) {
                 lastWatchdogElapsedMs = nowElapsed
                 try {
                     androidx.core.content.ContextCompat.startForegroundService(

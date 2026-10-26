@@ -23,7 +23,7 @@ object PrefsKeys {
      */
     const val ONBOARDING_COMPLETED = "onboarding_completed"
 
-    /** Names of optional [SetupRequirement]s the user chose "Not now" for, so they are not re-asked. */
+    /** Names of [SetupRequirement]s declined during first-run setup, so that setup does not re-ask them. */
     const val SETUP_SKIPPED = "setup_skipped"
 
     // Timing settings (global defaults)

@@ -1,16 +1,17 @@
 package com.grayzone.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -18,10 +19,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-
 import com.grayzone.app.data.StreakManager
-import com.grayzone.app.ui.theme.*
 import com.grayzone.app.ui.components.*
+import com.grayzone.app.ui.theme.*
 
 @Composable
 fun StreakCard() {
@@ -45,51 +45,55 @@ fun StreakCard() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+    GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
         Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Filled.Star, contentDescription = null, tint = GZAmber, modifier = Modifier.size(32.dp))
-                Spacer(Modifier.width(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(Icons.Filled.LocalFireDepartment, tint = GZStreakFire)
+                Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Current Streak", color = GZTextSecondary, fontSize = 13.sp)
-                    Text("$currentStreak Days", color = GZTextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("Current streak", color = GZTextSecondary, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            "$currentStreak",
+                            color = GZTextPrimary,
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.5).sp
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (currentStreak == 1) "day" else "days",
+                            color = GZTextSecondary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("Best", color = GZTextSecondary, fontSize = 13.sp)
-                    Text("$bestStreak Days", color = GZTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Best", color = GZTextTertiary, fontSize = 12.sp)
+                    Text(
+                        "$bestStreak ${if (bestStreak == 1) "day" else "days"}",
+                        color = GZTextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
 
             if (achievements.isNotEmpty()) {
-                Spacer(Modifier.height(16.dp))
-                Divider(color = GZBorder, thickness = 0.5.dp)
-                Spacer(Modifier.height(16.dp))
-                Text("Achievements", color = GZTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(12.dp))
-                
-                // Horizontal list of badges
-                androidx.compose.foundation.lazy.LazyRow(
-                    modifier = Modifier.fillMaxWidth(), 
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(achievements.size) { index ->
-                        val achievement = achievements[index]
-                        Box(
+                Spacer(Modifier.height(14.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(achievements) { achievement ->
+                        Text(
+                            achievement.title,
+                            color = GZStreakGold,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(50))
                                 .background(GZAchievementBg)
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                achievement.title,
-                                color = GZStreakGold,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        )
                     }
                 }
             }

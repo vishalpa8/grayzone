@@ -15,12 +15,19 @@ import java.util.*
 object DateUtils {
     
     // ThreadLocal formatters are thread-safe and reusable
-    private val dateKeyFormatter = ThreadLocal.withInitial {
+    private val dateKeyFormatterCache = ThreadLocal.withInitial {
         SimpleDateFormat("yyyy-MM-dd", Locale.US)
     }
+
+    /**
+     * A SimpleDateFormat pins the zone it was created in, so a cached instance would keep
+     * stamping date keys in the old zone after the user travels or changes the time zone.
+     */
+    private fun dateKeyFormatter(): SimpleDateFormat =
+        dateKeyFormatterCache.get()!!.apply { timeZone = TimeZone.getDefault() }
     
     // Cache for current date key and its expiry, held in a single object for atomicity.
-    private data class DateCache(val key: String, val expiry: Long)
+    private data class DateCache(val key: String, val expiry: Long, val zoneId: String)
     @Volatile
     private var cache: DateCache? = null
 
@@ -38,16 +45,17 @@ object DateUtils {
      */
     fun getCurrentDateKey(): String {
         val now = System.currentTimeMillis()
+        val zoneId = TimeZone.getDefault().id
 
-        // Return cached value if still valid (and not past midnight).
+        // Return cached value if still valid (not past midnight, same time zone).
         val currentCache = cache
-        if (currentCache != null && now < currentCache.expiry) {
+        if (currentCache != null && now < currentCache.expiry && currentCache.zoneId == zoneId) {
             return currentCache.key
         }
 
         // Format new date key
-        val newKey = dateKeyFormatter.get()!!.format(Date(now))
-        cache = DateCache(newKey, minOf(now + CACHE_VALIDITY_MS, startOfNextDayMillis(now)))
+        val newKey = dateKeyFormatter().format(Date(now))
+        cache = DateCache(newKey, minOf(now + CACHE_VALIDITY_MS, startOfNextDayMillis(now)), zoneId)
 
         return newKey
     }
@@ -69,16 +77,16 @@ object DateUtils {
      * Uses ThreadLocal cached formatter.
      */
     fun formatDateKey(timestamp: Long): String {
-        return dateKeyFormatter.get()!!.format(Date(timestamp))
+        return dateKeyFormatter().format(Date(timestamp))
     }
     
     fun formatDateKey(date: Date): String {
-        return dateKeyFormatter.get()!!.format(date)
+        return dateKeyFormatter().format(date)
     }
 
     fun parseDateKey(dateKey: String): Date? {
         return try {
-            dateKeyFormatter.get()!!.parse(dateKey)
+            dateKeyFormatter().parse(dateKey)
         } catch (e: Exception) {
             null
         }
@@ -87,7 +95,7 @@ object DateUtils {
     fun getYesterdayDateKey(): String {
         val calendar = Calendar.getInstance()
         calendar.add(Calendar.DAY_OF_YEAR, -1)
-        return dateKeyFormatter.get()!!.format(calendar.time)
+        return dateKeyFormatter().format(calendar.time)
     }
     
     /**
@@ -115,7 +123,7 @@ object DateUtils {
      * Reset occurs once per day at midnight local time, keeping stats intact.
      */
     fun shouldResetDailyRuntimeState(now: Long, lastResetDateKey: String): Boolean {
-        val currentDateKey = dateKeyFormatter.get()!!.format(Date(now))
+        val currentDateKey = dateKeyFormatter().format(Date(now))
         return lastResetDateKey != currentDateKey
     }
 }

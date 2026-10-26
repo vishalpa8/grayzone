@@ -52,16 +52,29 @@ class DnsResolverPool(
 
                         val receiveBuffer = ByteArray(32767)
                         val inPacket = DatagramPacket(receiveBuffer, receiveBuffer.size)
-                        
-                        // Set the SO_TIMEOUT on the socket itself as an additional safeguard
-                        socket.soTimeout = timeoutMs.toInt()
-                        
+                        // Monotonic: a wall-clock change mid-query must not stretch or break the deadline.
+                        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+                        var response: ByteArray? = null
+
                         try {
-                            socket.receive(inPacket)
-                            receiveBuffer.copyOf(inPacket.length)
-                        } catch (e: SocketTimeoutException) {
-                            null
+                            while (response == null) {
+                                val remaining = deadline - android.os.SystemClock.elapsedRealtime()
+                                if (remaining <= 0L) break
+                                // SO_TIMEOUT is the real bound: withTimeoutOrNull cannot interrupt a blocking receive.
+                                socket.soTimeout = remaining.coerceAtMost(timeoutMs).toInt().coerceAtLeast(1)
+                                inPacket.length = receiveBuffer.size
+                                socket.receive(inPacket)
+                                // A pooled socket can still receive the late reply to an earlier timed-out query,
+                                // and only the server we asked may answer.
+                                if (inPacket.address == server && inPacket.port == 53 &&
+                                    isReplyTo(packet, offset, length, inPacket)
+                                ) {
+                                    response = receiveBuffer.copyOf(inPacket.length)
+                                }
+                            }
+                        } catch (_: SocketTimeoutException) {
                         }
+                        response
                     }
                 }
             } catch (e: Exception) {
@@ -90,7 +103,12 @@ class DnsResolverPool(
         // Create a new socket if the pool is empty
         return try {
             val socket = DatagramSocket()
-            protectSocket(socket)
+            try {
+                protectSocket(socket)
+            } catch (e: Exception) {
+                closeQuietly(socket, "protect failed")
+                throw e
+            }
             socket
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
@@ -100,6 +118,14 @@ class DnsResolverPool(
             )
             null
         }
+    }
+
+    private fun isReplyTo(query: ByteArray, offset: Int, length: Int, reply: DatagramPacket): Boolean {
+        if (length < 2 || reply.length < 12) return false
+        val data = reply.data
+        val base = reply.offset
+        val isResponse = (data[base + 2].toInt() and 0x80) != 0
+        return isResponse && data[base] == query[offset] && data[base + 1] == query[offset + 1]
     }
 
     private fun releaseSocket(socket: DatagramSocket, reusable: Boolean) {

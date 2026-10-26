@@ -1,4 +1,4 @@
-﻿package com.grayzone.app
+package com.grayzone.app
 
 import android.content.Context
 import android.content.Intent
@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -150,11 +151,14 @@ enum class Tab { HOME, APPS, VPN, LIMITS, SETTINGS }
 
 /**
  * Always shows the app; permissions are asked for in a small popup, one at a time, never as a
- * full-screen page. Every popup can be declined.
- *  - First run: walks through each permission once; a declined one is not asked again.
- *  - Later: a lost Accessibility/Overlay grant re-prompts once per loss ([AccessibilityPromptPolicy]).
- *  - On demand: features call [PermissionGate.requireSetup]; the popup walks through every missing
- *    permission right then, and the feature runs only if the user grants all of them.
+ * full-screen page. Every popup can be declined, and declining moves on to the next one.
+ *
+ * All flows run the same [PermissionWalk]:
+ *  - [WalkReason.FIRST_RUN]: first launch asks everything once; declined ones are not re-asked.
+ *  - [WalkReason.FEATURE]: [PermissionGate.requireSetup] asks every missing permission; the feature
+ *    runs only if all of them end up granted.
+ *  - [WalkReason.RECOVERY]: Monitoring is on but a core permission was turned off outside the app;
+ *    asked once per loss ([AccessibilityPromptPolicy]).
  */
 @Composable
 fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
@@ -162,61 +166,93 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
-    fun skipped(): Set<String> = prefs.getStringSet(PrefsKeys.SETUP_SKIPPED, emptySet()) ?: emptySet()
-
-    fun missing(): List<SetupRequirement> = SetupRequirements.missing(
+    fun readMissing(): List<SetupRequirement> = SetupRequirements.missing(
         accessibilityEnabled = isAccessibilityServiceEnabled(context),
         overlayEnabled = Settings.canDrawOverlays(context),
         notificationsEnabled = areAppNotificationsEnabled(context),
         batteryExempt = !isBatteryOptimized(context),
     )
 
-    val coreOrder = listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY)
+    fun skipped(): Set<SetupRequirement> =
+        (prefs.getStringSet(PrefsKeys.SETUP_SKIPPED, emptySet()) ?: emptySet())
+            .mapNotNull { name -> SetupRequirement.values().firstOrNull { it.name == name } }
+            .toSet()
 
-    // The action a feature is waiting on; non-null means the popup was opened by that feature.
-    var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var step by remember { mutableStateOf<SetupRequirement?>(null) }
+    var missingNow by remember { mutableStateOf(readMissing()) }
+    var walk by remember { mutableStateOf<PermissionWalk?>(null) }
+    var reason by remember { mutableStateOf(WalkReason.FIRST_RUN) }
+    var onGranted by remember { mutableStateOf<(() -> Unit)?>(null) }
 
-    fun computeSetupStep(current: SetupRequirement?): SetupRequirement? {
-        val missing = missing()
-        if (!prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)) {
-            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing && it.name !in skipped() }
-            if (next == null) prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
-            return next
-        }
-        // Already asked about this one and it is still pending: keep showing it until answered.
-        if (current != null && current in missing) return current
-        val decision = AccessibilityPromptPolicy.onObserved(
-            previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false),
-            isEnabled = isAccessibilityServiceEnabled(context)
-        )
-        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
-        if (!decision.shouldPrompt) return null
-        return coreOrder.firstOrNull { it in missing }
+    fun begin(newReason: WalkReason, exclude: Set<SetupRequirement> = emptySet(), action: (() -> Unit)?): Boolean {
+        val next = PermissionWalk.start(missingNow, exclude) ?: return false
+        reason = newReason
+        onGranted = action
+        walk = next
+        return true
     }
 
+    fun finish(finished: PermissionWalk) {
+        val action = onGranted
+        walk = null
+        onGranted = null
+        when (reason) {
+            WalkReason.FIRST_RUN ->
+                prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
+            WalkReason.FEATURE, WalkReason.RECOVERY -> {
+                if (finished.succeeded(missingNow)) {
+                    action?.invoke()
+                    startMonitoringIfReady(context)
+                } else {
+                    // Counts as "asked for this loss", so the recovery popup does not pop straight back.
+                    prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, true).apply()
+                    android.widget.Toast.makeText(
+                        context,
+                        if (reason == WalkReason.RECOVERY) "Protection stays paused until permissions are allowed"
+                        else "Not turned on — all permissions are needed",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    /** Re-reads every permission; ends the current pass or starts a recovery pass when needed. */
     fun refresh() {
-        val waiting = pending
-        if (waiting != null) {
-            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing() }
-            if (next == null) {
-                pending = null
-                step = null
-                waiting()
-            } else {
-                step = next
+        missingNow = readMissing()
+        val active = walk
+        if (active != null) {
+            if (active.isFinished(missingNow)) finish(active)
+            return
+        }
+        if (!prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)) {
+            if (!begin(WalkReason.FIRST_RUN, exclude = skipped(), action = null)) {
+                prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
             }
             return
         }
-        step = computeSetupStep(step)
+        val coreReady = SetupRequirement.ACCESSIBILITY !in missingNow && SetupRequirement.OVERLAY !in missingNow
+        if (coreReady) {
+            prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false).apply()
+            return
+        }
+        // Nothing to protect while Monitoring is off; the feature walk asks when it is turned on.
+        if (!isMonitoringEnabled(context)) return
+        val decision = AccessibilityPromptPolicy.onObserved(
+            previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false),
+            isEnabled = false
+        )
+        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
+        // Protection only depends on the two core grants, so recovery asks just for those.
+        if (decision.shouldPrompt) {
+            begin(
+                WalkReason.RECOVERY,
+                exclude = setOf(SetupRequirement.NOTIFICATIONS, SetupRequirement.BATTERY),
+                action = null
+            )
+        }
     }
 
-    var initialised by remember { mutableStateOf(false) }
-    if (!initialised) {
-        step = computeSetupStep(null)
-        initialised = true
-    }
-
+    // ON_RESUME is replayed right after the observer is added, so this also covers the first launch.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) refresh()
@@ -227,12 +263,12 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
 
     val gate = remember {
         PermissionGate { action ->
-            val next = SetupRequirements.SETUP_ORDER.firstOrNull { it in missing() }
-            if (next == null) {
+            missingNow = readMissing()
+            if (missingNow.isEmpty()) {
                 action()
             } else {
-                pending = action
-                step = next
+                // A feature request replaces any pass in progress (e.g. first-run leftovers).
+                begin(WalkReason.FEATURE, action = action)
             }
         }
     }
@@ -241,26 +277,20 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
         MainScreen(onThemeModeChanged = onThemeModeChanged)
     }
 
-    step?.let { requirement ->
-        val firstRun = pending == null && !prefs.getBoolean(PrefsKeys.ONBOARDING_COMPLETED, false)
+    val active = walk
+    val requirement = active?.current(missingNow)
+    if (active != null && requirement != null) {
         PermissionPrompt(
             requirement = requirement,
-            position = if (firstRun || pending != null) {
-                SetupRequirements.SETUP_ORDER.indexOf(requirement) + 1 to SetupRequirements.SETUP_ORDER.size
-            } else null,
+            position = active.position(requirement),
             onDecline = {
-                if (pending != null) {
-                    // The feature that asked simply does not run.
-                    pending = null
-                    step = null
-                } else {
-                    prefs.edit().putStringSet(PrefsKeys.SETUP_SKIPPED, skipped() + requirement.name).apply()
-                    if (requirement in coreOrder) {
-                        // Do not re-prompt on the next launch for something the user just declined.
-                        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, true).apply()
-                    }
-                    step = if (firstRun) computeSetupStep(null) else null
+                if (reason == WalkReason.FIRST_RUN) {
+                    prefs.edit()
+                        .putStringSet(PrefsKeys.SETUP_SKIPPED, skipped().map { it.name }.toSet() + requirement.name)
+                        .apply()
                 }
+                walk = active.decline(requirement)
+                refresh()
             },
             onChanged = { refresh() },
         )
@@ -269,7 +299,7 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
 @Composable
 fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableStateOf(Tab.HOME) }
+    var selectedTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Tab.HOME) }
 
     val vpnConsentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -346,14 +376,11 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     Scaffold(
         containerColor = GZBackground,
         bottomBar = {
+            Column {
+            Divider(color = GZBorderSubtle, thickness = 1.dp)
             NavigationBar(
                 containerColor = GZSurface,
                 tonalElevation = 0.dp,
-                modifier = Modifier.border(
-                    width = 1.dp,
-                    color = GZBorder,
-                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-                )
             ) {
                 listOf(
                     Triple(Tab.HOME,     Icons.Filled.Home,                  "Home"),
@@ -364,18 +391,26 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 ).forEach { (tab, icon, label) ->
                     NavigationBarItem(
                         icon = { Icon(icon, contentDescription = label) },
-                        label = { Text(label, fontSize = 10.sp, maxLines = 1) },
+                        label = {
+                            Text(
+                                label,
+                                fontSize = 11.sp,
+                                fontWeight = if (selectedTab == tab) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        },
                         selected = selectedTab == tab,
                         onClick = { selectedTab = tab },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = GZPrimary,
-                            selectedTextColor = GZPrimary,
+                            selectedTextColor = GZTextPrimary,
                             unselectedIconColor = GZTextTertiary,
                             unselectedTextColor = GZTextTertiary,
                             indicatorColor = GZPrimaryContainer
                         )
                     )
                 }
+            }
             }
         }
     ) { innerPadding ->

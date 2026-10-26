@@ -160,64 +160,22 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                 .weight(1f, fill = false)
                 .verticalScroll(rememberScrollState())
         ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
+        ScreenHeader(
+            title = "AdBlock VPN",
+            subtitle = when {
+                vpnRunning -> "Filtering DNS on this device"
+                reconnectPending -> "Interrupted · reconnecting"
+                else -> "Off · ads and trackers not blocked"
+            },
+            onBack = onBack
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (onBack != null) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = GZTextPrimary
-                        )
-                    }
-                    Spacer(Modifier.width(4.dp))
-                }
-                Icon(
-                    Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = if (vpnRunning) GZAccent else GZTextTertiary,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "AdBlock VPN",
-                        color = GZTextPrimary,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = (-0.3).sp
-                    )
-                    Text(
-                        when {
-                            vpnRunning -> "Filtering DNS traffic"
-                            reconnectPending -> "Protection interrupted — reconnecting"
-                            else -> "Off — ads not blocked"
-                        },
-                        color = when {
-                            vpnRunning -> GZAccent
-                            reconnectPending -> GZAmber
-                            else -> GZTextSecondary
-                        },
-                        fontSize = 13.sp
-                    )
-                }
-                IconButton(onClick = { currentView = VpnView.SETTINGS }) {
-                    Icon(
-                        Icons.Filled.Settings,
-                        contentDescription = "Settings",
-                        tint = GZTextPrimary
-                    )
-                }
+            IconButton(onClick = { currentView = VpnView.SETTINGS }) {
+                Icon(Icons.Filled.Settings, contentDescription = "VPN settings", tint = GZTextSecondary)
             }
         }
-
         if (reconnectPending && !vpnRunning) {
             GZCard(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = GZGutter, vertical = 6.dp),
                 background = GZAmberContainer,
                 border = GZAmber.copy(alpha = 0.35f)
             ) {
@@ -231,77 +189,41 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         }
 
         // ── Toggle card ───────────────────────────────────────────────────
-        GZCard(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            background = if (vpnRunning) GZPrimaryContainer else GZSurface,
-            border = if (vpnRunning) GZPrimary.copy(alpha = 0.25f) else GZBorder
-        ) {
+        GZCard(modifier = Modifier.padding(horizontal = GZGutter, vertical = 6.dp)) {
             Row(
                 modifier = Modifier.padding(18.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconBadge(Icons.Filled.Security, tint = if (vpnRunning) GZPrimary else GZTextTertiary)
+                Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "System-Wide Blocker",
+                        "System-wide blocker",
                         color = GZTextPrimary,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 15.sp
+                        fontSize = 16.sp
                     )
                     Text(
                         when {
                             vpnRunning && holdActive ->
-                                "Stays on for ${VpnHoldLock.formatRemaining(holdRemaining)}, then turns off automatically."
+                                "Locked on · ${VpnHoldLock.formatRemaining(holdRemaining)} left, then turns off by itself"
                             vpnRunning ->
-                                "Blocks ~800k ad/tracker and ~160k adult domains via local VPN DNS filter."
+                                "Blocking ads, trackers and adult sites"
                             else ->
-                                "Once on, it stays locked for 24 hours — you can’t turn it off early."
+                                "Stays on for 24 hours once enabled, with no early off"
                         },
                         color = GZTextSecondary,
-                        fontSize = 12.sp
+                        fontSize = 13.sp
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Switch(
+                GZSwitch(
                     checked = vpnRunning,
                     onCheckedChange = { enable ->
-                        if (enable) {
-                            showEnableConfirm = true
-                        } else {
-                            tryDisableVpn()
-                        }
+                        if (enable) showEnableConfirm = true else tryDisableVpn()
                     },
-                    enabled = !vpnRunning || !holdActive,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = GZAccent,
-                        uncheckedThumbColor = GZTextTertiary,
-                        uncheckedTrackColor = GZSurfaceHigh,
-                        disabledCheckedThumbColor = Color.White,
-                        disabledCheckedTrackColor = GZAccent.copy(alpha = 0.5f)
-                    )
+                    enabled = !vpnRunning || !holdActive
                 )
-            }
-        }
-
-        if (!vpnRunning) {
-            GZCard(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                background = GZAmberContainer,
-                border = GZAmber.copy(alpha = 0.35f)
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        "24-hour lock",
-                        color = GZTextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        "Enabling AdBlock VPN locks it on for 24 hours. After that it turns off by itself — there is no early disable.",
-                        color = GZTextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
             }
         }
 
@@ -310,30 +232,8 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                 msg,
                 color = GZAmber,
                 fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = GZGutter + 4.dp, vertical = 4.dp)
             )
-        }
-
-        if (vpnRunning && holdActive) {
-            GZCard(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                background = GZPrimaryContainer,
-                border = GZPrimary.copy(alpha = 0.25f)
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        "Locked on — ${VpnHoldLock.formatRemaining(holdRemaining)} left",
-                        color = GZTextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        "Cannot turn off until the timer ends. It will disable itself automatically.",
-                        color = GZTextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
-            }
         }
 
         // ── Stats row (shown when running) ────────────────────────────────
@@ -345,7 +245,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                    .padding(horizontal = GZGutter, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 StatChip(
@@ -370,9 +270,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
 
             // ── Bloom Filter Disclosure ───────────────────────────────────
             GZCard(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                background = GZSurfaceElevated,
-                border = GZBorder
+                modifier = Modifier.padding(horizontal = GZGutter, vertical = 6.dp),
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
@@ -400,17 +298,17 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         // ── Live traffic feed ─────────────────────────────────────────────
         SectionLabel(
             text = if (vpnRunning) "LIVE DNS TRAFFIC" else "DNS TRAFFIC",
-            modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 8.dp)
+            modifier = Modifier.padding(start = GZGutter + 4.dp, top = 16.dp, bottom = 8.dp)
         )
 
         if (!vpnRunning) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .padding(horizontal = GZGutter)
+                    .clip(GZCardShape)
                     .background(GZSurface)
-                    .border(1.dp, GZBorder, RoundedCornerShape(24.dp))
+                    .border(1.dp, if (GZIsDark) GZBorder else GZBorderSubtle, GZCardShape)
                     .padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -426,7 +324,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         if (vpnRunning) {
             LiveTrafficFeed(
                 modifier = Modifier
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = GZGutter)
                     .weight(1f)
                     .heightIn(min = 120.dp)
             )
@@ -451,11 +349,12 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                         showEnableConfirm = false
                         beginEnableVpn()
                     }
-                ) { Text("Enable for 24 hours", fontWeight = FontWeight.Bold) }
+                ) { Text("Enable for 24 hours", color = GZPrimary, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
-                TextButton(onClick = { showEnableConfirm = false }) { Text("Cancel") }
+                TextButton(onClick = { showEnableConfirm = false }) { Text("Cancel", color = GZTextSecondary) }
             },
+            shape = RoundedCornerShape(24.dp),
             containerColor = GZSurface,
             titleContentColor = GZTextPrimary,
             textContentColor = GZTextSecondary
@@ -477,9 +376,9 @@ private fun LiveTrafficFeed(modifier: Modifier = Modifier) {
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(24.dp))
+            .clip(GZCardShape)
             .background(GZSurface)
-            .border(1.dp, GZBorder, RoundedCornerShape(24.dp))
+            .border(1.dp, if (GZIsDark) GZBorder else GZBorderSubtle, GZCardShape)
     ) {
         if (events.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -567,16 +466,14 @@ private fun VpnTrafficRow(event: DnsTrafficBus.DnsEvent) {
 
 @Composable
 private fun StatChip(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(color.copy(alpha = 0.08f))
-            .border(1.dp, color.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
-            .padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(value, color = color, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
-        Text(label, color = GZTextTertiary, fontSize = 11.sp)
+    GZCard(modifier = modifier) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(value, color = color, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text(label, color = GZTextTertiary, fontSize = 12.sp)
+        }
     }
 }
 

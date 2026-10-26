@@ -48,6 +48,16 @@ data class SessionState(
         )
     }
 
+    /** Session time left, measured on the same clock [hasActiveSession] uses. */
+    fun activeRemainingMs(now: Long, nowElapsed: Long = -1L): Long {
+        if (activeStartedElapsedMs <= 0L || activeDurationMs <= 0L || nowElapsed < 0L) {
+            return activeUntil - now
+        }
+        return MonotonicDeadline.remainingMs(
+            activeUntil, activeStartedElapsedMs, activeDurationMs, now, nowElapsed
+        )
+    }
+
     fun isLockedOut(now: Long, nowElapsed: Long = -1L): Boolean {
         if (lockedStartedElapsedMs <= 0L || lockedDurationMs <= 0L || nowElapsed < 0L) {
             return lockedUntil > 0L && now < lockedUntil

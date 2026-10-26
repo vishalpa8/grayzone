@@ -74,42 +74,17 @@ fun ResumedInterval(
 
 
 
-fun shareApk(context: Context) {
+/** Shares the Play Store listing (not the raw APK, which store installs must not redistribute). */
+fun shareApp(context: Context) {
+    val link = "https://play.google.com/store/apps/details?id=${context.packageName}"
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Grayzone")
+        putExtra(Intent.EXTRA_TEXT, "Grayzone adds a mindful pause before distracting apps: $link")
+    }
     try {
-        val source = java.io.File(context.applicationInfo.sourceDir)
-        if (!source.exists() || !source.canRead()) {
-            android.widget.Toast.makeText(
-                context,
-                "Could not find app package to share",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-        // FileProvider cannot expose /data/app base.apk directly — copy into cache path
-        // declared in res/xml/file_paths.xml (cache-path shared/).
-        val shareDir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
-        val outFile = java.io.File(shareDir, "Grayzone.apk")
-        source.inputStream().use { input ->
-            outFile.outputStream().use { output -> input.copyTo(output) }
-        }
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.provider",
-            outFile
-        )
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/vnd.android.package-archive"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            clipData = android.content.ClipData.newUri(context.contentResolver, "Grayzone", uri)
-        }
         context.startActivity(Intent.createChooser(intent, "Share Grayzone"))
     } catch (e: Exception) {
-        android.util.Log.e("ShareApk", "Could not share APK", e)
-        android.widget.Toast.makeText(
-            context,
-            "Share failed: ${e.message ?: "unknown error"}",
-            android.widget.Toast.LENGTH_LONG
-        ).show()
+        android.widget.Toast.makeText(context, "Couldn't open share", android.widget.Toast.LENGTH_SHORT).show()
     }
 }

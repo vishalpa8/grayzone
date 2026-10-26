@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.data.repository
+package com.grayzone.app.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences

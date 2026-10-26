@@ -1,4 +1,4 @@
-﻿package com.grayzone.app
+package com.grayzone.app
 
 import android.app.Application
 import android.content.Context

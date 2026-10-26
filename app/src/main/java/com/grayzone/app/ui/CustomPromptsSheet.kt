@@ -94,19 +94,13 @@ fun CustomPromptsSheet(
                     Text("Use Custom Only", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                     Text("Hide default reflection prompts", color = GZTextSecondary, fontSize = 13.sp)
                 }
-                Switch(
+                GZSwitch(
                     checked = useCustomOnly,
                     onCheckedChange = {
                         useCustomOnly = it
                         prefs.edit().putBoolean(PrefsKeys.USE_CUSTOM_PROMPTS_ONLY, it).apply()
                     },
-                    enabled = !promptsCorrupt,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = GZPrimary,
-                        uncheckedThumbColor = GZTextTertiary,
-                        uncheckedTrackColor = GZSurfaceHigh
-                    )
+                    enabled = !promptsCorrupt
                 )
             }
 

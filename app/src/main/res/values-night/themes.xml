@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="gz_window_bg">#121416</color>
+    <color name="gz_window_bg">#0E1113</color>
     <style name="Theme.Grayzone" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/gz_window_bg</item>
     </style>

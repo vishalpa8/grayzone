@@ -18,6 +18,7 @@ class SessionExpiryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_SESSION_EXPIRED) return
         val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: return
+        if (!com.grayzone.app.isMonitoringEnabled(context)) return
         try {
             val serviceIntent = Intent(context, OverlayService::class.java).apply {
                 action = OverlayService.ACTION_SESSION_EXPIRED

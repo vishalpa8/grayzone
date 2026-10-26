@@ -50,7 +50,9 @@ object DnsPacketHelper {
         return when ((packet[0].toInt() and 0xF0) shr 4) {
             4 -> {
                 val ihl = (packet[0].toInt() and 0x0F) * 4
-                if (ihl < 20 || length < ihl + 8) null else ihl + 8
+                // Only UDP, and only the first fragment, has a UDP header right after the IP header.
+                val fragmentOffset = ((packet[6].toInt() and 0x1F) shl 8) or (packet[7].toInt() and 0xFF)
+                if (ihl < 20 || length < ihl + 8 || packet[9].toInt() != 17 || fragmentOffset != 0) null else ihl + 8
             }
             6 -> {
                 if (length < 48) return null
@@ -59,9 +61,18 @@ object DnsPacketHelper {
                 
                 while (offset < length && nextHeader != 17 && nextHeader != 59) {
                     if (nextHeader == 0 || nextHeader == 43 || nextHeader == 60 || nextHeader == 44 || nextHeader == 51) {
-                        if (offset + 2 > length) return null
+                        if (offset + 4 > length) return null
                         val extLen = packet[offset + 1].toInt() and 0xFF
-                        val headerLen = if (nextHeader == 44) 8 else (extLen + 1) * 8
+                        if (nextHeader == 44) {
+                            val fragmentOffset = (((packet[offset + 2].toInt() and 0xFF) shl 8) or
+                                (packet[offset + 3].toInt() and 0xFF)) shr 3
+                            if (fragmentOffset != 0) return null
+                        }
+                        val headerLen = when (nextHeader) {
+                            44 -> 8
+                            51 -> (extLen + 2) * 4 // AH length is in 4-octet units
+                            else -> (extLen + 1) * 8
+                        }
                         nextHeader = packet[offset].toInt() and 0xFF
                         offset += headerLen
                     } else {

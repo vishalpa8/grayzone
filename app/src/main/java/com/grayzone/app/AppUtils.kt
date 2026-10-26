@@ -144,6 +144,9 @@ fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent =
     SetupRequirement.NOTIFICATIONS ->
         Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
             putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+            // Older OEM skins read these legacy extras instead.
+            putExtra("app_package", context.packageName)
+            putExtra("app_uid", context.applicationInfo.uid)
         }
     SetupRequirement.BATTERY ->
         Intent(
@@ -152,10 +155,49 @@ fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent =
         )
 }
 
+/** Starts the monitoring service only when Monitoring is on and the core permissions are granted. */
+fun startMonitoringIfReady(context: Context) {
+    if (!isMonitoringEnabled(context)) return
+    if (!isAccessibilityServiceEnabled(context) || !android.provider.Settings.canDrawOverlays(context)) return
+    try {
+        context.startForegroundService(Intent(context, com.grayzone.app.service.OverlayService::class.java))
+    } catch (e: Exception) {
+        GrayzoneLogger.w(LogComponent.OVERLAY, "Could not start monitoring: ${e.message}")
+    }
+}
+
 /** The master "Monitoring" switch. Off by default: nothing runs until the user turns it on. */
 fun isMonitoringEnabled(context: Context): Boolean =
     context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
         .getBoolean(PrefsKeys.GRAYZONE_ENABLED, false)
+
+/**
+ * Opens the exact system page for [requirement] (e.g. Grayzone's own Accessibility page, not the
+ * generic list). Falls back to a broader page, then App info, on phones that lack the exact one.
+ */
+fun openSettingsFor(context: Context, requirement: SetupRequirement, logTag: String): Boolean {
+    val candidates = buildList {
+        if (requirement == SetupRequirement.ACCESSIBILITY && Build.VERSION.SDK_INT >= 34) {
+            // Android 14+: the details page of this one service (toggle + description).
+            add(
+                Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+                    putExtra(
+                        Intent.EXTRA_COMPONENT_NAME,
+                        android.content.ComponentName(
+                            context, com.grayzone.app.service.GrayzoneAccessibilityService::class.java
+                        ).flattenToString()
+                    )
+                }
+            )
+        }
+        add(settingsIntentFor(context, requirement))
+        if (requirement == SetupRequirement.BATTERY) {
+            add(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+        add(appInfoSettingsIntent(context))
+    }
+    return candidates.any { startActivitySafely(context, it, logTag, showToast = false) }
+}
 
 fun isBatteryOptimized(context: Context): Boolean =
     !context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)

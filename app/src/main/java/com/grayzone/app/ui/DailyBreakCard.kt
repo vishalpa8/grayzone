@@ -1,26 +1,19 @@
 package com.grayzone.app.ui
 
-import com.grayzone.app.ui.components.*
-
-import com.grayzone.app.ui.components.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FreeBreakfast
-import androidx.compose.material3.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
 import com.grayzone.app.ResumedInterval
 import com.grayzone.app.data.ScheduleManager
+import com.grayzone.app.ui.components.*
 import com.grayzone.app.ui.theme.*
 
 /**
@@ -37,7 +30,7 @@ fun DailyBreakCard() {
     var remainingMillis by remember { mutableStateOf(scheduleManager.getBreakRemainingMillis()) }
 
     // Countdown only ticks while the break is active AND the screen is visible.
-    ResumedInterval(enabled = isBreakActive, intervalMs = 2000L) {
+    ResumedInterval(enabled = isBreakActive, intervalMs = 1000L) {
         remainingMillis = scheduleManager.getBreakRemainingMillis()
         if (remainingMillis <= 0) {
             isBreakActive = false
@@ -48,70 +41,56 @@ fun DailyBreakCard() {
         }
     }
 
-    GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+    // startDailyBreak() refuses while any app is locked or mid-session, so say so instead of a dead button.
+    val prefs = remember { context.getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, android.content.Context.MODE_PRIVATE) }
+    val now by com.grayzone.app.rememberResumedTicker(5_000L)
+    val blockedByLock = remember(now, isBreakActive) {
+        !isBreakActive && com.grayzone.app.isAnyAppLocked(
+            prefs,
+            prefs.getStringSet(com.grayzone.app.PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet(),
+            now
+        )
+    }
+
+    GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
         Row(
             modifier = Modifier.padding(18.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(GZGreen.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.FreeBreakfast,
-                    contentDescription = null,
-                    tint = GZGreen,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Spacer(Modifier.width(16.dp))
-
+            IconBadge(Icons.Filled.FreeBreakfast, tint = if (canStartToday || isBreakActive) GZGreen else GZTextTertiary)
+            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
+                Text("Daily Break", color = GZTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 when {
                     isBreakActive -> {
-                        val remainingMins = remainingMillis / 1000 / 60
-                        val remainingSecs = (remainingMillis / 1000) % 60
-                        Text("Break Active", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        val mins = remainingMillis / 60_000
+                        val secs = (remainingMillis / 1000) % 60
                         Text(
-                            "Everything unlocked · $remainingMins m $remainingSecs s left",
-                            color = GZGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                            "Everything unlocked · ${mins}m ${secs.toString().padStart(2, '0')}s left",
+                            color = GZGreen,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
-                    canStartToday -> {
-                        Text("Daily Break", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text(
-                            "Unlock everything for 1 hour · once per day",
-                            color = GZTextSecondary, fontSize = 13.sp
-                        )
-                    }
-                    else -> {
-                        Text("Daily Break", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text(
-                            "Used for today · resets at midnight",
-                            color = GZTextTertiary, fontSize = 13.sp
-                        )
-                    }
+                    canStartToday && blockedByLock ->
+                        Text("Available once no app is locked or in a session", color = GZTextSecondary, fontSize = 13.sp)
+                    canStartToday -> Text("Unlock everything for 1 hour, once a day", color = GZTextSecondary, fontSize = 13.sp)
+                    else -> Text("Used today · resets at midnight", color = GZTextSecondary, fontSize = 13.sp)
                 }
             }
-
-            if (isBreakActive) {
-                Button(
+            when {
+                isBreakActive -> GZSmallButton(
+                    text = "End",
                     onClick = {
                         scheduleManager.stopBreak()
                         isBreakActive = false
                         canStartToday = scheduleManager.canStartBreakToday()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZRed.copy(alpha = 0.1f), contentColor = GZRed),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                ) {
-                    Text("End", fontWeight = FontWeight.Bold)
-                }
-            } else if (canStartToday) {
-                Button(
+                    containerColor = GZRedContainer,
+                    contentColor = GZRed
+                )
+                canStartToday && !blockedByLock -> GZSmallButton(
+                    text = "Start",
                     onClick = {
                         if (scheduleManager.startDailyBreak()) {
                             isBreakActive = true
@@ -119,12 +98,9 @@ fun DailyBreakCard() {
                             remainingMillis = scheduleManager.getBreakRemainingMillis()
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZGreen, contentColor = Color.White),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                ) {
-                    Text("Start", fontWeight = FontWeight.Bold)
-                }
+                    containerColor = GZGreenContainer,
+                    contentColor = GZGreen
+                )
             }
         }
     }

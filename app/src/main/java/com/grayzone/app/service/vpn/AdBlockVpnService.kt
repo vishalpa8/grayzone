@@ -153,6 +153,9 @@ class AdBlockVpnService : VpnService() {
             if (vpnInterface != null || isRunning) {
                 val nm = getSystemService(NotificationManager::class.java)
                 nm.notify(NOTIF_ID, buildNotification())
+            } else if (!isVpnEnabled()) {
+                stopSelf(startId)
+                return START_NOT_STICKY
             }
             return START_STICKY
         }
@@ -168,6 +171,9 @@ class AdBlockVpnService : VpnService() {
                 // Bounce the tunnel to apply new Split Tunnel bypass routes real-time without releasing the 24h hold
                 shutdownVpn(clearPersistedFlag = false, stopService = false)
                 startVpn(allowWhenDisabled = true)
+            } else if (!isVpnEnabled()) {
+                stopSelf(startId)
+                return START_NOT_STICKY
             }
             com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Reloaded blocklist rules and tunnel")
             return START_STICKY
@@ -199,16 +205,45 @@ class AdBlockVpnService : VpnService() {
         val hold = VpnHoldLockStore.read(prefs)
         val nowWall = System.currentTimeMillis()
         val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        // UI, boot and Always-on VPN all use startForegroundService(); stopping before
+        // startForeground() crashes the process with ForegroundServiceDidNotStartInTimeException.
+        val foregroundStart = intent?.action == ACTION_START || intent?.action == SERVICE_INTERFACE
         if (hold.isTracked && !VpnHoldLock.isHoldActive(hold, nowWall, nowElapsed)) {
+            if (foregroundStart) enterForegroundBeforeStop()
             stopVpnAfterHoldExpired()
             return START_NOT_STICKY
         }
 
         if (vpnInterface == null) {
+            if (intent?.action == SERVICE_INTERFACE && !isVpnEnabled()) {
+                com.grayzone.app.GrayzoneLogger.i(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Always-on VPN start ignored — protection is switched off in Grayzone"
+                )
+                enterForegroundBeforeStop()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
             // Explicit START may not have persisted VPN_ENABLED yet; sticky/boot already has it.
             startVpn(allowWhenDisabled = intent?.action == ACTION_START)
         }
         return START_STICKY
+    }
+
+    private fun isVpnEnabled(): Boolean =
+        getSharedPreferences(com.grayzone.app.PrefsKeys.PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(com.grayzone.app.PrefsKeys.VPN_ENABLED, false)
+
+    private fun enterForegroundBeforeStop() {
+        try {
+            startForeground(NOTIF_ID, buildNotification())
+        } catch (e: Exception) {
+            com.grayzone.app.GrayzoneLogger.w(
+                com.grayzone.app.LogComponent.VPN,
+                "startForeground before stop failed: ${e.message}"
+            )
+        }
     }
 
     private fun stopVpnAfterHoldExpired() {
@@ -251,6 +286,8 @@ class AdBlockVpnService : VpnService() {
                     com.grayzone.app.LogComponent.VPN,
                     "startVpn aborted — VPN_ENABLED cleared before establish"
                 )
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
                 return
             }
 
@@ -448,7 +485,9 @@ class AdBlockVpnService : VpnService() {
             "VPN consent revoked by the user or another VPN app — protection stopping"
         )
         com.grayzone.app.data.ProtectionHealthRepository.markVpnReconnectPending(true)
-        com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(false)
+        // The system has already deactivated the tunnel; close our fd and stop the loop now so it
+        // does not spin on I/O errors and schedule a reconnect against a VPN slot we no longer own.
+        shutdownVpn(clearPersistedFlag = false, stopService = true)
         super.onRevoke()
     }
 
@@ -482,14 +521,16 @@ class AdBlockVpnService : VpnService() {
                     "Uncaught exception on VPN thread",
                     e
                 )
-                if (isRunning) restartVpnAfterDelay(3000)
+                if (isRunning && vpnInterface === pfd) restartVpnAfterDelay(3000)
             }
 
             // Closing the tun fd (shutdownVpn) unblocks a parked FileInputStream.read.
+            // The identity check stops a loop that outlived a tunnel bounce from driving the new tunnel.
             val packet = ByteArray(32767) // reuse large buffer to avoid per-iteration GC pressure
-            while (isRunning) {
+            while (isRunning && vpnInterface === pfd) {
                 try {
                     val length = inputStream.read(packet)
+                    if (length < 0) throw java.io.EOFException("tun interface returned EOF")
 
                     if (length > 0) {
                         if (DnsPacketHelper.isDnsQuery(packet, length)) {
@@ -528,7 +569,7 @@ class AdBlockVpnService : VpnService() {
                             e
                         )
 
-                        restartVpnAfterDelay(2000)
+                        if (isRunning && vpnInterface === pfd) restartVpnAfterDelay(2000)
                         break
                     }
 
@@ -550,12 +591,12 @@ class AdBlockVpnService : VpnService() {
                         "VPN loop non-I/O error (${e.javaClass.simpleName}); restarting",
                         e
                     )
-                    restartVpnAfterDelay(2000)
+                    if (isRunning && vpnInterface === pfd) restartVpnAfterDelay(2000)
                     break
                 }
             }
         } catch (e: Exception) {
-            if (isRunning) {
+            if (isRunning && vpnInterface === pfd) {
                 com.grayzone.app.GrayzoneLogger.e(
                     com.grayzone.app.LogComponent.VPN,
                     "Fatal VPN error",
@@ -654,7 +695,7 @@ class AdBlockVpnService : VpnService() {
 
         try {
             val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
-            if (dnsPayload != null) {
+            if (dnsPayload != null && isCacheable(dnsPayload)) {
                 synchronized(dnsCache) {
                     dnsCache[key] = CachedDnsResponse(dnsPayload, System.currentTimeMillis())
                 }
@@ -672,6 +713,14 @@ class AdBlockVpnService : VpnService() {
         } finally {
             pendingQueries.remove(key, deferred)
         }
+    }
+
+    /** SERVFAIL/REFUSED and truncated (TC) replies are transient; caching them breaks the domain for the full TTL. */
+    private fun isCacheable(payload: ByteArray): Boolean {
+        if (payload.size < 12) return false
+        val truncated = (payload[2].toInt() and 0x02) != 0
+        val rcode = payload[3].toInt() and 0x0F
+        return !truncated && (rcode == 0 || rcode == 3)
     }
 
     private fun writeForwardedResponse(

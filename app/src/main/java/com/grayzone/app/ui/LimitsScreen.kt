@@ -1,24 +1,39 @@
 package com.grayzone.app.ui
 
 import android.content.Context
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.grayzone.app.*
-import com.grayzone.app.ui.theme.*
 import com.grayzone.app.ui.components.*
-import androidx.compose.animation.core.animateFloat
+import com.grayzone.app.ui.theme.*
+
+private fun formatMinutes(total: Int): String {
+    val h = total / 60
+    val m = total % 60
+    return when {
+        h > 0 && m > 0 -> "${h}h ${m}m"
+        h > 0 -> "${h}h"
+        else -> "${m}m"
+    }
+}
 
 @Composable
 fun LimitsScreen() {
@@ -26,8 +41,8 @@ fun LimitsScreen() {
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     // Paint instantly from the in-memory cache on re-entry; refresh in background.
     var installedApps by remember { mutableStateOf(peekCachedApps() ?: emptyList()) }
-    var monitoredApps by remember {
-        mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet())
+    val monitoredApps = remember {
+        prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
     }
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
@@ -35,6 +50,8 @@ fun LimitsScreen() {
 
     // Ticker for live lock detection; only fires while the screen is visible.
     val currentTime by rememberResumedTicker(2000L)
+    val scheduleManager = remember { com.grayzone.app.data.ScheduleManager(context) }
+    val scheduleActive = remember(currentTime) { scheduleManager.isCurrentlyScheduled() }
 
     val monitoredList = remember(installedApps, monitoredApps) {
         installedApps.filter { monitoredApps.contains(it.packageName) }
@@ -42,115 +59,114 @@ fun LimitsScreen() {
     }
 
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
-        ) {
-            Text("Limits Dashboard", color = GZTextPrimary, fontSize = 28.sp,
-                fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
-            Text(
-                if (monitoredList.isEmpty()) "No apps are being monitored."
-                else "Active limits and timers for your monitored apps.",
-                color = GZTextSecondary,
-                fontSize = 14.sp
-            )
-        }
+        ScreenHeader(
+            title = "Limits",
+            subtitle = if (monitoredList.isEmpty()) null else "Live timers for your monitored apps"
+        )
 
         if (monitoredList.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("No monitored apps", color = GZTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Enable apps on the Apps tab to see limits here.", color = GZTextTertiary, fontSize = 14.sp)
-                }
-            }
-        } else {
-            val lockStateMap = remember(monitoredApps, currentTime) {
-                monitoredApps.associateWith { pkg ->
-                    AppLockState(
-                        activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
-                        lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
-                        remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+                    IconBadge(Icons.Filled.HourglassEmpty, tint = GZTextTertiary, size = 56)
+                    Spacer(Modifier.height(16.dp))
+                    Text("No monitored apps yet", color = GZTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Turn apps on in the Apps tab to see their limits here.",
+                        color = GZTextSecondary,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
+        } else {
+            LimitsList(monitoredList, prefs, currentTime, scheduleActive)
+        }
+    }
+}
 
-            // Single shared pulse animation drives every row's status badge, instead of
-            // creating one infinite animation per list item.
-            val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "limitsPulse")
-            val pulseAlpha by infiniteTransition.animateFloat(
-                initialValue = 0.4f,
-                targetValue = 1f,
-                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                    animation = androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing),
-                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-                ),
-                label = "limitsPulseAlpha"
-            )
+@Composable
+private fun LimitsList(
+    monitoredList: List<AppInfo>,
+    prefs: android.content.SharedPreferences,
+    currentTime: Long,
+    scheduleActive: Boolean,
+) {
+        LazyColumn(
+            contentPadding = PaddingValues(start = GZGutter, end = GZGutter, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(monitoredList, key = { it.packageName }) { app ->
+                val pkg = app.packageName
+                val snapshot = AppLockState(
+                    activeUntil = prefs.getLong(PrefsKeys.ACTIVE_UNTIL + pkg, 0L),
+                    lockedUntil = prefs.getLong(PrefsKeys.LOCKED_UNTIL + pkg, 0L),
+                    remainingMillis = prefs.getLong(PrefsKeys.REMAINING_MILLIS + pkg, 0L)
+                ).statusAt(currentTime)
 
-            LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
-                items(monitoredList, key = { it.packageName }) { app ->
-                    val state = lockStateMap[app.packageName] ?: AppLockState(0L, 0L, 0L)
-                    val snapshot = state.statusAt(currentTime)
+                val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
+                val globalSession = prefs.getInt(PrefsKeys.SESSION_MINUTES, com.grayzone.app.data.ConfigValidator.DEFAULT_SESSION_MINUTES)
+                val globalLockout = prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, com.grayzone.app.data.ConfigValidator.DEFAULT_LOCKOUT_MINUTES)
+                // Same resolution and clamping as the engine, so the numbers shown are the ones enforced.
+                val sessionMins = com.grayzone.app.data.PerAppLimits.sessionMinutes(
+                    hasCustom, prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + pkg, globalSession), globalSession
+                )
+                val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(
+                    hasCustom, prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + pkg, globalLockout), globalLockout
+                )
+                val budgetMins = prefs.getInt(PrefsKeys.DAILY_BUDGET_MINUTES + pkg, 0)
+                val icon = remember(app.icon) { app.icon?.asImageBitmap() }
 
-                    val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + app.packageName, false)
-                    val sessionMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_SESSION_MINUTES + app.packageName, 10) else prefs.getInt(PrefsKeys.SESSION_MINUTES, 10)
-                    val lockoutMins = if (hasCustom) prefs.getInt(PrefsKeys.PER_APP_LOCKOUT_MINUTES + app.packageName, 60) else prefs.getInt(PrefsKeys.LOCKOUT_MINUTES, 60)
-
-                    GZCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(app.name, color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(modifier = Modifier.weight(1f))
-                                when (snapshot.status) {
-                                    AppRuntimeStatus.LOCKED -> Text(
-                                        "🔒 Locked (${snapshot.remainingMinutes}m)",
-                                        color = GZRed.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold
-                                    )
-                                    AppRuntimeStatus.ACTIVE -> Text(
-                                        "⏳ Active (${snapshot.remainingMinutes}m)",
-                                        color = GZGreen.copy(alpha = pulseAlpha), fontSize = 12.sp, fontWeight = FontWeight.Bold
-                                    )
-                                    AppRuntimeStatus.PAUSED -> Text(
-                                        "⏸ Paused (${snapshot.remainingMinutes}m)",
-                                        color = GZAmber, fontSize = 12.sp, fontWeight = FontWeight.Bold
-                                    )
-                                    AppRuntimeStatus.READY -> Text("Ready", color = GZTextSecondary, fontSize = 12.sp)
+                GZCard {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (icon != null) {
+                                Image(icon, contentDescription = null, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)))
+                            } else {
+                                Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(GZSurfaceHigh))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                app.name,
+                                color = GZTextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            when (snapshot.status) {
+                                AppRuntimeStatus.LOCKED -> StatusChip("Locked · ${snapshot.remainingMinutes}m", ChipTone.BAD)
+                                AppRuntimeStatus.ACTIVE -> StatusChip("Session · ${snapshot.remainingMinutes}m", ChipTone.GOOD)
+                                AppRuntimeStatus.PAUSED -> StatusChip("Paused · ${snapshot.remainingMinutes}m", ChipTone.WARN)
+                                AppRuntimeStatus.READY -> when {
+                                    isBudgetExhausted(prefs, pkg) -> StatusChip("Daily limit reached", ChipTone.BAD)
+                                    scheduleActive -> StatusChip("Locked by schedule", ChipTone.BAD)
+                                    else -> StatusChip("Ready", ChipTone.NEUTRAL)
                                 }
                             }
-                            Spacer(Modifier.height(12.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Session Pill
-                                Row(
-                                    modifier = Modifier
-                                        .background(GZPrimaryContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZPrimary, modifier = Modifier.size(14.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Session: ${sessionMins}m", color = GZTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                }
-                                
-                                Spacer(Modifier.width(12.dp))
-                                
-                                // Lockout Pill
-                                Row(
-                                    modifier = Modifier
-                                        .background(GZRedContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Filled.Timer, contentDescription = null, tint = GZRed, modifier = Modifier.size(14.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Lockout: ${lockoutMins}m", color = GZTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                }
-                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LimitStat("Session", formatMinutes(sessionMins), Modifier.weight(1f))
+                            LimitStat("Lockout", formatMinutes(lockoutMins), Modifier.weight(1f))
+                            LimitStat("Daily", if (budgetMins > 0) formatMinutes(budgetMins) else "No cap", Modifier.weight(1f))
                         }
                     }
                 }
             }
         }
+}
+
+@Composable
+private fun LimitStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(GZSurfaceElevated)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(label, color = GZTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Text(value, color = GZTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }

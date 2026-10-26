@@ -32,8 +32,7 @@ import com.grayzone.app.PrefsKeys
 import com.grayzone.app.getInstalledAppsCached
 import com.grayzone.app.peekCachedApps
 import com.grayzone.app.service.vpn.AdBlockVpnService
-import com.grayzone.app.ui.components.GZLoadingSpinner
-import com.grayzone.app.ui.components.GZSwitch
+import com.grayzone.app.ui.components.*
 import com.grayzone.app.ui.theme.*
 
 @Composable
@@ -56,6 +55,14 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
     }
 
     fun toggleBypass(pkg: String, bypass: Boolean) {
+        if (bypass && com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)) {
+            android.widget.Toast.makeText(
+                context,
+                "Apps can't skip the VPN while its 24-hour lock is on",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         val newSet = if (bypass) bypassApps + pkg else bypassApps - pkg
         bypassApps = newSet
         prefs.edit().putStringSet(PrefsKeys.VPN_BYPASS_APPS, newSet).apply()
@@ -78,44 +85,24 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
         )
     }
 
+    androidx.activity.compose.BackHandler(onBack = onBack)
+
     Column(modifier = Modifier.fillMaxSize().background(GZBackground)) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 16.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = GZTextPrimary
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Split Tunneling",
-                    color = GZTextPrimary,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.3).sp
-                )
-            }
-            Spacer(Modifier.height(8.dp))
+        ScreenHeader(title = "Split tunneling", onBack = onBack)
+        Column(modifier = Modifier.fillMaxWidth().padding(start = GZGutter, end = GZGutter, bottom = 12.dp)) {
             Text(
-                "Selected apps will completely bypass the VPN. Use this for banking or streaming apps that don't work with VPNs.",
+                "Apps you turn on here skip the VPN entirely. Useful for banking or streaming apps that refuse VPNs.",
                 color = GZTextSecondary,
                 fontSize = 13.sp
             )
-            Spacer(Modifier.height(16.dp))
-            
+            Spacer(Modifier.height(12.dp))
             // Search bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(GZSurfaceElevated)
-                    .border(1.dp, GZBorder, RoundedCornerShape(12.dp))
+                    .clip(GZControlShape)
+                    .background(GZSurface)
+                    .border(1.dp, if (GZIsDark) GZBorder else GZBorderSubtle, GZControlShape)
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -129,7 +116,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                     singleLine = true,
                     decorationBox = { inner ->
                         if (searchQuery.isEmpty()) {
-                            Text("Search apps…", color = GZTextTertiary, fontSize = 15.sp)
+                            Text("Search apps", color = GZTextTertiary, fontSize = 15.sp)
                         }
                         inner()
                     }
@@ -157,12 +144,13 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                             .fillMaxWidth()
                             .clickable { toggleBypass(app.packageName, !isBypassed) }
                             .background(if (isBypassed) GZPrimaryContainer.copy(alpha = 0.35f) else Color.Transparent)
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                            .padding(horizontal = GZGutter, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (app.icon != null) {
+                        val icon = remember(app.icon) { app.icon?.asImageBitmap() }
+                        if (icon != null) {
                             Image(
-                                bitmap = app.icon.asImageBitmap(),
+                                bitmap = icon,
                                 contentDescription = app.name,
                                 modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
                             )
@@ -187,7 +175,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                             onCheckedChange = { toggleBypass(app.packageName, it) }
                         )
                     }
-                    Divider(color = GZBorderSubtle, thickness = 0.5.dp, modifier = Modifier.padding(start = 84.dp, end = 24.dp))
+                    Divider(color = GZBorderSubtle, thickness = 0.5.dp, modifier = Modifier.padding(start = 80.dp, end = GZGutter))
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }

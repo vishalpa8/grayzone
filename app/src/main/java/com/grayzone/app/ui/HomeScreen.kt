@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.ui
+package com.grayzone.app.ui
 
 import com.grayzone.app.ui.components.*
 
@@ -32,6 +32,8 @@ import com.grayzone.app.data.ProtectionHealthRepository
 import com.grayzone.app.ui.theme.*
 import kotlinx.coroutines.launch
 
+private enum class HomeStatus { OFF, PAUSED, NOT_RUNNING, LIMITED, ACTIVE }
+
 data class HomeData(
     val monitoredCount: Int = 0
 )
@@ -46,6 +48,7 @@ fun HomeScreen() {
     var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var batteryExempt by remember { mutableStateOf(!isBatteryOptimized(context)) }
     var monitoringOn by remember { mutableStateOf(isMonitoringEnabled(context)) }
+    var notificationsOn by remember { mutableStateOf(areAppNotificationsEnabled(context)) }
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var monitoredCount by remember { mutableStateOf(prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0) }
     val streakScope = rememberCoroutineScope()
@@ -57,8 +60,9 @@ fun HomeScreen() {
                 overlayOn = Settings.canDrawOverlays(context)
                 batteryExempt = !isBatteryOptimized(context)
                 monitoringOn = isMonitoringEnabled(context)
+                notificationsOn = areAppNotificationsEnabled(context)
                 monitoredCount = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet())?.size ?: 0
-                streakScope.launch {
+                streakScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     try {
                         com.grayzone.app.data.StreakEvaluator.run(context)
                     } catch (e: Exception) {
@@ -78,110 +82,108 @@ fun HomeScreen() {
     // F-155: permissions alone are not "active" — OverlayService must also be running.
     val health by ProtectionHealthRepository.status.collectAsStateWithLifecycle()
     val coreReady = accessibilityOn && overlayOn
-    // F-087: battery exemption is part of "active" — do not show green while optimized.
-    val isActive = monitoringOn && coreReady && batteryExempt && health.overlayActive && health.accessibilityActive
+    val isActive = monitoringOn && coreReady && health.overlayActive && health.accessibilityActive
 
+    // One status, in priority order. Only "Active" is green; anything that weakens protection says so.
+    val status = when {
+        !monitoringOn -> HomeStatus.OFF
+        !coreReady -> HomeStatus.PAUSED
+        !isActive -> HomeStatus.NOT_RUNNING
+        !batteryExempt || !notificationsOn -> HomeStatus.LIMITED
+        else -> HomeStatus.ACTIVE
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .background(GZBackground),
-        contentPadding = PaddingValues(bottom = 24.dp)
+        contentPadding = PaddingValues(bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(GZPrimaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_launcher_monochrome),
-                            contentDescription = null,
-                            tint = GZPrimary,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Grayzone",
-                            color = GZTextPrimary,
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = (-0.3).sp
-                        )
-                        Text(
-                            "Friction, not hard blocks.",
-                            color = GZTextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                    ActivePill(isActive = isActive)
-                }
-            }
+            ScreenHeader(title = "Grayzone", subtitle = "Friction, not hard blocks.")
         }
 
         // Status only. Permissions are asked for in the popup, never with buttons here;
         // tapping the card while something core is off simply reopens that popup.
         item {
-            val off = !monitoringOn
-            val paused = monitoringOn && !coreReady
+            val tint = when (status) {
+                HomeStatus.OFF -> GZTextTertiary
+                HomeStatus.PAUSED, HomeStatus.LIMITED, HomeStatus.NOT_RUNNING -> GZAmber
+                HomeStatus.ACTIVE -> GZGreen
+            }
             GZCard(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                background = when { off -> GZSurface; paused -> GZAmberContainer; else -> GZGreenContainer },
-                border = when { off -> GZBorder; paused -> GZAmber.copy(alpha = 0.3f); else -> GZGreen.copy(alpha = 0.3f) },
-                onClick = if (paused) ({ gate.requireSetup { } }) else null
+                modifier = Modifier.padding(horizontal = GZGutter),
+                onClick = when (status) {
+                    HomeStatus.PAUSED, HomeStatus.LIMITED -> ({ gate.requireSetup { startMonitoringIfReady(context) } })
+                    HomeStatus.NOT_RUNNING -> ({ startMonitoringIfReady(context) })
+                    else -> null
+                }
             ) {
                 Row(
                     modifier = Modifier.padding(18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Filled.Shield,
-                        contentDescription = null,
-                        tint = when { off -> GZTextTertiary; paused -> GZAmber; else -> GZGreen },
-                        modifier = Modifier.size(28.dp)
-                    )
+                    IconBadge(Icons.Filled.Shield, tint = tint, size = 44)
                     Spacer(Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            when { off -> "Monitoring is off"; paused -> "Protection paused"; else -> "Protection ready" },
+                            when (status) {
+                                HomeStatus.OFF -> "Monitoring is off"
+                                HomeStatus.PAUSED -> "Protection paused"
+                                HomeStatus.NOT_RUNNING -> "Protection not running"
+                                HomeStatus.LIMITED, HomeStatus.ACTIVE -> "Protection on"
+                            },
                             color = GZTextPrimary,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            if (off) "Turn it on in the Apps tab to start."
-                            else if (paused) "A permission is needed. Tap to review."
-                            else "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored",
+                            when (status) {
+                                HomeStatus.OFF -> "Turn it on in the Apps tab to start."
+                                HomeStatus.PAUSED -> "A permission is needed. Tap to review."
+                                HomeStatus.NOT_RUNNING -> "Tap to start it again."
+                                HomeStatus.LIMITED -> if (!batteryExempt) "Battery saving may stop it. Tap to fix."
+                                    else "Notifications are off. Tap to fix."
+                                HomeStatus.ACTIVE -> "${data.monitoredCount} app${if (data.monitoredCount != 1) "s" else ""} monitored"
+                            },
                             color = GZTextSecondary,
                             fontSize = 13.sp
                         )
                     }
+                    StatusChip(
+                        text = when (status) {
+                            HomeStatus.OFF -> "Off"
+                            HomeStatus.PAUSED -> "Paused"
+                            HomeStatus.NOT_RUNNING -> "Stopped"
+                            HomeStatus.LIMITED -> "Limited"
+                            HomeStatus.ACTIVE -> "Active"
+                        },
+                        tone = when (status) {
+                            HomeStatus.OFF -> ChipTone.NEUTRAL
+                            HomeStatus.ACTIVE -> ChipTone.GOOD
+                            else -> ChipTone.WARN
+                        }
+                    )
                 }
             }
         }
+        item { SectionLabel("Focus", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp)) }
         item { QuickFocusCard() }
         item { DailyBreakCard() }
         item { StreakCard() }
 
+        item { SectionLabel("How it works", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp)) }
         item {
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                SectionLabel("HOW IT WORKS")
-                Spacer(Modifier.height(10.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    HowItWorksStep("1", "Open a monitored app", GZPrimary)
-                    HowItWorksStep("2", "Grayzone overlays a pause screen", GZPrimary)
-                    HowItWorksStep("3", "A reflection question prompts mindfulness", GZPrimary)
-                    HowItWorksStep("4", "Wait the timer or skip — your choice", GZPrimary)
+            GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    HowItWorksStep("1", "Open an app you chose to monitor", GZPrimary)
+                    HowItWorksStep("2", "Grayzone shows a short pause screen", GZPrimary)
+                    HowItWorksStep("3", "A reflection question asks why", GZPrimary)
+                    HowItWorksStep("4", "Wait it out, then decide", GZPrimary)
                 }
             }
         }

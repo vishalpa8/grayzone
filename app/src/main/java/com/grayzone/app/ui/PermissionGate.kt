@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.ui
+package com.grayzone.app.ui
 
 import androidx.compose.runtime.staticCompositionLocalOf
 

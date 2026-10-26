@@ -13,13 +13,15 @@ class MidnightResetReceiver : BroadcastReceiver() {
         }
 
         // Notify OverlayService if running to refresh UI
-        try {
-            val serviceIntent = Intent(context, OverlayService::class.java).apply {
-                action = OverlayService.ACTION_MIDNIGHT_RESET
+        if (com.grayzone.app.isMonitoringEnabled(context)) {
+            try {
+                val serviceIntent = Intent(context, OverlayService::class.java).apply {
+                    action = OverlayService.ACTION_MIDNIGHT_RESET
+                }
+                context.startService(serviceIntent)
+            } catch (e: Exception) {
+                // Ignore if service is not running or can't be started
             }
-            context.startService(serviceIntent)
-        } catch (e: Exception) {
-            // Ignore if service is not running or can't be started
         }
         
         // Re-arm for the next day

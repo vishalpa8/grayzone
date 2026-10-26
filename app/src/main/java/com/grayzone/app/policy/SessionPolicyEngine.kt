@@ -134,7 +134,9 @@ class SessionPolicyEngine {
                 // Pause the session if time remains. The lockout is deliberately untouched:
                 // leaving mid-session banks the remainder, it is not a penalty.
                 if (state.hasActiveSession(now, nowElapsed)) {
-                    val remainingMs = state.activeUntil - now
+                    // Wall-clock `activeUntil - now` would let a clock change bank extra time
+                    // (clock set back) or jump straight to a lockout (clock set forward).
+                    val remainingMs = state.activeRemainingMs(now, nowElapsed)
                     if (remainingMs > 0) {
                         commands.add(SessionCommand.UpdateState(
                             packageName = state.packageName,

@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.ui
+package com.grayzone.app.ui
 
 import com.grayzone.app.ui.components.*
 
@@ -25,6 +25,7 @@ import com.grayzone.app.data.ScheduleManager
 import com.grayzone.app.data.ScheduleRule
 import com.grayzone.app.ui.theme.*
 import java.util.Calendar
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,9 +42,13 @@ fun ScheduleSheet(
     var focusRemainingMillis by remember { mutableStateOf(scheduleManager.getFocusModeRemainingMillis()) }
     
     var showAddRuleDialog by remember { mutableStateOf(false) }
+    var confirmStop by remember { mutableStateOf(false) }
+    val ticker by com.grayzone.app.rememberResumedTicker(5_000L)
+    // While a schedule is blocking apps its rules can't be switched off or deleted (that would be a bypass).
+    val scheduleActive = remember(rules, ticker, isFocusMode) { scheduleManager.isCurrentlyScheduled() }
     
     // Countdown only ticks while focus mode is active AND the sheet is visible.
-    ResumedInterval(enabled = isFocusMode, intervalMs = 2000L) {
+    ResumedInterval(enabled = isFocusMode, intervalMs = 1000L) {
         focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
         if (focusRemainingMillis <= 0) {
             isFocusMode = false
@@ -69,6 +74,17 @@ fun ScheduleSheet(
         )
     }
 
+    if (confirmStop) {
+        EndDeepWorkDialog(
+            onConfirm = {
+                confirmStop = false
+                scheduleManager.stopFocusMode()
+                isFocusMode = false
+            },
+            onDismiss = { confirmStop = false }
+        )
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = GZSurface,
@@ -82,7 +98,7 @@ fun ScheduleSheet(
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
-                "Focus Mode & Schedule",
+                "Deep Work & schedules",
                 color = GZTextPrimary,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
@@ -93,14 +109,14 @@ fun ScheduleSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(GZPrimaryContainer, RoundedCornerShape(12.dp))
+                    .background(GZPrimaryContainer, RoundedCornerShape(16.dp))
                     .padding(16.dp)
             ) {
                 Column {
                     Text("How it works", color = GZPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "During an active schedule or focus mode, all monitored apps are strictly locked. " +
+                        "During an active schedule or Deep Work, all monitored apps are strictly locked. " +
                         "There are no reflection prompts and no skip timers. Use this to protect your most productive hours and sleep.",
                         color = GZTextSecondary,
                         fontSize = 13.sp,
@@ -113,31 +129,28 @@ fun ScheduleSheet(
             Spacer(Modifier.height(24.dp))
             
             // --- Quick Focus Mode ---
-            Text("Quick Focus Mode", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("Deep Work", color = GZTextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Spacer(Modifier.height(8.dp))
             
             if (isFocusMode) {
                 val remainingMins = focusRemainingMillis / 1000 / 60
                 val remainingSecs = (focusRemainingMillis / 1000) % 60
-                Text("Focus mode active for ${remainingMins}m ${remainingSecs}s", color = GZAccent, fontWeight = FontWeight.SemiBold)
+                Text("Active · ${remainingMins}m ${remainingSecs.toString().padStart(2, '0')}s left", color = GZPrimary, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        scheduleManager.stopFocusMode()
-                        isFocusMode = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZRed, contentColor = Color.White)
-                ) {
-                    Text("Stop Focus Mode")
-                }
+                GZSmallButton(
+                    text = "End early",
+                    onClick = { confirmStop = true },
+                    containerColor = GZRedContainer,
+                    contentColor = GZRed
+                )
             } else {
-                Text("Lock all apps immediately for $focusDuration minutes", color = GZTextSecondary, fontSize = 13.sp)
+                Text("Lock every monitored app for $focusDuration minutes", color = GZTextSecondary, fontSize = 13.sp)
                 Slider(
                     value = focusDuration.toFloat(),
-                    onValueChange = { focusDuration = it.toInt() },
+                    onValueChange = { focusDuration = it.roundToInt() },
                     valueRange = 5f..120f,
                     steps = 22,
-                    colors = SliderDefaults.colors(thumbColor = GZAccent, activeTrackColor = GZAccent)
+                    colors = SliderDefaults.colors(thumbColor = GZPrimary, activeTrackColor = GZPrimary, inactiveTrackColor = GZSurfaceHigh)
                 )
                 Button(
                     onClick = {
@@ -147,9 +160,9 @@ fun ScheduleSheet(
                             focusRemainingMillis = scheduleManager.getFocusModeRemainingMillis()
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GZAccent, contentColor = Color.White)
+                    colors = ButtonDefaults.buttonColors(containerColor = GZPrimary, contentColor = GZOnPrimary)
                 ) {
-                    Text("Start Focus Mode")
+                    Text("Start Deep Work")
                 }
             }
             
@@ -175,32 +188,38 @@ fun ScheduleSheet(
                             val endStr = String.format("%02d:%02d", rule.endHour, rule.endMinute)
                             Text("$startStr to $endStr", color = GZTextSecondary, fontSize = 13.sp)
                         }
-                        Switch(
+                        GZSwitch(
                             checked = rule.isEffectivelyEnabled(),
+                            enabled = !(scheduleActive && rule.isEffectivelyEnabled()),
                             onCheckedChange = { enabled ->
                                 val apply = {
                                     scheduleManager.toggleRule(rule.id, enabled)
                                     reloadRules()
                                 }
                                 if (enabled) gate.requireSetup(apply) else apply()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = GZPrimary,
-                                uncheckedThumbColor = GZTextTertiary,
-                                uncheckedTrackColor = GZSurfaceHigh
-                            )
+                            }
                         )
-                        IconButton(onClick = {
-                            scheduleManager.removeRule(rule.id)
-                            reloadRules()
-                        }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = GZRed)
+                        IconButton(
+                            enabled = !scheduleActive,
+                            onClick = {
+                                scheduleManager.removeRule(rule.id)
+                                reloadRules()
+                            }
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = "Delete ${rule.name}",
+                                tint = if (scheduleActive) GZTextTertiary else GZRed
+                            )
                         }
                     }
                 }
             }
             
+            if (scheduleActive) {
+                Spacer(Modifier.height(8.dp))
+                Text("Schedules can't be switched off or deleted while one is active.", color = GZAmber, fontSize = 12.sp)
+            }
             Spacer(Modifier.height(24.dp))
             
             Button(
@@ -326,7 +345,9 @@ fun AddRuleDialog(
                         )
                     )
                 },
-                enabled = (weekdaysSelected || weekendsSelected) && name.isNotBlank()
+                // A rule that starts and ends at the same minute would never apply.
+                enabled = (weekdaysSelected || weekendsSelected) && name.isNotBlank() &&
+                    (startHour != endHour || startMin != endMin)
             ) {
                 Text("Save", color = GZPrimary, fontWeight = FontWeight.Bold)
             }

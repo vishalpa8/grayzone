@@ -1,4 +1,4 @@
-﻿package com.grayzone.app.service
+package com.grayzone.app.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -87,7 +87,7 @@ class OverlayService : Service() {
         /** Re-read a11y/overlay permissions and refresh the ongoing notification (F-080). */
         const val ACTION_REFRESH_PROTECTION_STATUS = "com.grayzone.app.ACTION_REFRESH_PROTECTION_STATUS"
         private const val DEFAULT_WAIT = 5
-        private const val AMBER_WARNING = 0xFFD97706.toInt()
+        private const val AMBER_WARNING = 0xFFB45309.toInt()
         /** Fixed brand teal for notifications: the shade follows the system theme, not the in-app one. */
         private const val NOTIFICATION_ACCENT = 0xFF0F766E.toInt()
         /** Upper bound on how long a lock screen lingers after its app was evicted. */
@@ -99,28 +99,28 @@ class OverlayService : Service() {
         private const val WINDOW_SNAPSHOT_POLL_MS = 50L
 
         // Light / dark chrome mirrors ui.theme palettes (see isNightMode)
-        private const val BG_LIGHT          = 0xFFF7F6F3.toInt()
+        private const val BG_LIGHT          = 0xFFF5F6F8.toInt()
         private const val SURFACE_LIGHT     = 0xFFFFFFFF.toInt()
         private const val ACCENT_LIGHT      = 0xFF0F766E.toInt()
-        private const val ACCENT_DIM_LIGHT  = 0xFFCCFBF1.toInt()
-        private const val TEXT_LIGHT        = 0xFF1C1917.toInt()
-        private const val GREY_LIGHT        = 0xFF57534E.toInt()
-        private const val GREY_DIM_LIGHT    = 0xFFA8A29E.toInt()
-        private const val RED_LIGHT         = 0xFFDC2626.toInt()
-        private const val BORDER_LIGHT      = 0xFFE2E0DC.toInt()
+        private const val ACCENT_DIM_LIGHT  = 0xFFE3F3F0.toInt()
+        private const val TEXT_LIGHT        = 0xFF111827.toInt()
+        private const val GREY_LIGHT        = 0xFF4B5563.toInt()
+        private const val GREY_DIM_LIGHT    = 0xFF9CA3AF.toInt()
+        private const val RED_LIGHT         = 0xFFC62828.toInt()
+        private const val BORDER_LIGHT      = 0xFFE3E6EA.toInt()
 
-        private const val BG_DARK           = 0xFF121416.toInt()
-        private const val SURFACE_DARK      = 0xFF1C1F24.toInt()
+        private const val BG_DARK           = 0xFF0E1113.toInt()
+        private const val SURFACE_DARK      = 0xFF161A1D.toInt()
         private const val ACCENT_DARK       = 0xFF2DD4BF.toInt()
-        private const val ACCENT_DIM_DARK   = 0xFF134E4A.toInt()
-        private const val TEXT_DARK         = 0xFFF4F4F5.toInt()
-        private const val GREY_DARK         = 0xFFA1A1AA.toInt()
-        private const val GREY_DIM_DARK     = 0xFF71717A.toInt()
+        private const val ACCENT_DIM_DARK   = 0xFF113330.toInt()
+        private const val TEXT_DARK         = 0xFFF1F5F9.toInt()
+        private const val GREY_DARK         = 0xFFA6B0BB.toInt()
+        private const val GREY_DIM_DARK     = 0xFF6B7682.toInt()
         private const val RED_DARK          = 0xFFF87171.toInt()
-        private const val BORDER_DARK       = 0xFF3A414A.toInt()
+        private const val BORDER_DARK       = 0xFF283036.toInt()
 
         private const val ON_ACCENT_LIGHT   = 0xFFFFFFFF.toInt()
-        private val ON_ACCENT_DARK    = 0xFF042F2E.toInt()
+        private val ON_ACCENT_DARK    = 0xFF032B27.toInt()
 
         private val sharedGson = Gson()
     }
@@ -180,11 +180,18 @@ class OverlayService : Service() {
     /** elapsedRealtime of the last window list received from the accessibility service. */
     @Volatile private var visibleSnapshotElapsedMs: Long = 0L
     private var sessionHeartbeatJob: Job? = null
+    /** Package the running heartbeat belongs to; another app's expiry must not cancel it. */
+    @Volatile private var heartbeatPackage: String? = null
+    /** Package the countdown notification is showing; another app's expiry must not clear it. */
+    @Volatile private var countdownPackage: String? = null
 
     /** Serialises session transitions so the heartbeat cannot pause mid-app-switch. */
     private val sessionMutex = kotlinx.coroutines.sync.Mutex()
     
     private val policyEngine = com.grayzone.app.policy.SessionPolicyEngine()
+
+    /** Set once the service is stopping; late coroutines must not re-post ongoing notifications. */
+    @Volatile private var isShuttingDown = false
 
     override fun onCreate() {
         super.onCreate()
@@ -200,9 +207,17 @@ class OverlayService : Service() {
             )
             com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(false)
             com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
+            isShuttingDown = true
             stopSelf()
             return
         }
+        // The accessibility watchdog, expiry alarms and sticky restarts all start this service
+        // without knowing the Monitoring switch, so the switch is enforced here.
+        if (!com.grayzone.app.isMonitoringEnabled(this)) {
+            stopWhileMonitoringOff()
+            return
+        }
+        broadcastMonitoringState(true)
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         scheduleManager = ScheduleManager(this)
 
@@ -367,35 +382,21 @@ class OverlayService : Service() {
 
     private suspend fun performMidnightReset() {
         val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
-        if (!com.grayzone.app.data.RuntimeSessionReset.resetIfNeeded(prefs)) return
-
-        GrayzoneLogger.i(LogComponent.OVERLAY, "Midnight reset: session locks cleared for the new day")
-
-        val currentPkg = lastForegroundPackage
-        val monitoredApps = prefs.getStringSet(PrefsKeys.MONITORED_APPS, emptySet()) ?: emptySet()
-
-        // Pending session-expiry alarms from yesterday are now stale.
-        monitoredApps.forEach { SessionExpiryScheduler.cancel(this@OverlayService, it) }
-
-        val appName = if (currentPkg != null) getAppName(currentPkg) else ""
-        withContext(Dispatchers.Main) {
-            // Any session/lock UI from yesterday is now stale.
-            cancelCountdownNotification()
-            dismissOverlay()
-            // If the user is sitting in a monitored app at midnight, re-enter
-            // through the friction wait screen instead of granting silent access
-            // (unless Grayzone is disabled or a break is running).
-            if (currentPkg != null && monitoredApps.contains(currentPkg) &&
-                prefs.getBoolean(PrefsKeys.GRAYZONE_ENABLED, false) &&
-                !scheduleManager.isBreakActive()
-            ) {
-                sessionStartTime = 0L
-                showOverlay(currentPkg, appName, OverlayMode.FRICTION, 0L)
-            }
+        // RuntimeSessionReset keeps sessions and lockouts that are still running and only clears
+        // expired ones, so there is no session UI to tear down here — doing so would cut a live
+        // session short. MidnightResetReceiver (or an app switch) usually resets first; either way
+        // the day that just ended must have its streak settled.
+        if (com.grayzone.app.data.RuntimeSessionReset.resetIfNeeded(prefs)) {
+            GrayzoneLogger.i(LogComponent.OVERLAY, "Midnight reset: expired session state cleared for the new day")
         }
+        settleCompletedDayStreak()
+    }
 
-        // The day that just ended is now complete, so settle its streak outcome
-        // here rather than waiting for the user to open the Home screen.
+    /**
+     * The day that just ended is now complete, so settle its streak outcome
+     * here rather than waiting for the user to open the Home screen.
+     */
+    private suspend fun settleCompletedDayStreak() {
         try {
             com.grayzone.app.data.StreakEvaluator.run(this)
         } catch (e: Exception) {
@@ -585,12 +586,19 @@ class OverlayService : Service() {
      */
     private fun startSessionHeartbeat(pkg: String) {
         sessionHeartbeatJob?.cancel()
+        heartbeatPackage = pkg
         sessionHeartbeatJob = serviceScope.launch {
             while (isActive) {
-                delay(SESSION_HEARTBEAT_INTERVAL_MS)
                 val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
+                val remainingMs = buildSessionState(pkg, prefs)
+                    .activeRemainingMs(System.currentTimeMillis(), SystemClock.elapsedRealtime())
+                delay(remainingMs.coerceIn(0L, SESSION_HEARTBEAT_INTERVAL_MS))
                 val state = buildSessionState(pkg, prefs)
                 if (!state.hasActiveSession(System.currentTimeMillis(), SystemClock.elapsedRealtime())) {
+                    // Without the exact-alarm grant the expiry alarm can land minutes late (or be
+                    // refused an FGS start), leaving the app usable and the timer running negative.
+                    // Separate coroutine: the lockout cancels this heartbeat job.
+                    serviceScope.launch { handleSessionExpired(pkg) }
                     return@launch
                 }
                 if (confirmStillInUse(pkg)) continue
@@ -611,6 +619,7 @@ class OverlayService : Service() {
     private fun stopSessionHeartbeat() {
         sessionHeartbeatJob?.cancel()
         sessionHeartbeatJob = null
+        heartbeatPackage = null
     }
 
     /**
@@ -891,7 +900,9 @@ class OverlayService : Service() {
 
                 // Don't slam the budget lock down mid-break; it will be enforced
                 // by the policy engine on the next foreground once the break ends.
-                val stillVisible = isPackageStillVisible(pkg)
+                // Usage is only logged as [pkg] leaves, while lastForegroundPackage still names it,
+                // so only the window list can say whether it is genuinely still on screen.
+                val stillVisible = pkg in visibleMonitoredPackages
                 if (com.grayzone.app.data.DailyBudget.shouldShowBudgetLock(
                         usedMs = newUsedMs,
                         budgetMins = budgetMins,
@@ -932,7 +943,7 @@ class OverlayService : Service() {
             nowElapsed
         )
         if (alreadyLocked) return existingUntil
-        stopSessionHeartbeat()
+        if (heartbeatPackage == pkg) stopSessionHeartbeat()
 
         val hasCustom = prefs.getBoolean(PrefsKeys.PER_APP_HAS_CUSTOM + pkg, false)
         val lockoutMins = com.grayzone.app.data.PerAppLimits.lockoutMinutes(
@@ -964,7 +975,9 @@ class OverlayService : Service() {
      * monitored app is still foreground within its lockout window. Reliable across
      * screen-off/Doze/process death, unlike the old in-memory coroutine delay.
      */
-    private fun handleSessionExpired(packageName: String) {
+    // Holds [sessionMutex] so a lockout cannot interleave with the app-switch pause, and the
+    // alarm and the heartbeat cannot both begin the same lockout.
+    private suspend fun handleSessionExpired(packageName: String): Unit = sessionMutex.withLock {
         try {
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
@@ -985,7 +998,10 @@ class OverlayService : Service() {
             val lockedStartedElapsedMs = prefs.getLong(PrefsKeys.LOCKED_STARTED_ELAPSED + packageName, 0L)
             val lockedDurationMs = prefs.getLong(PrefsKeys.LOCKED_DURATION_MS + packageName, 0L)
 
-            val stillVisible = isPackageStillVisible(packageName)
+            // A service the alarm just restarted has no foreground history, so ask accessibility
+            // rather than letting the user keep using an app whose session has run out.
+            val stillVisible = isPackageStillVisible(packageName) ||
+                (sessionEnded && confirmStillInUse(packageName))
             val outcome = SessionExpiryDecision.decide(
                 now = now,
                 activeUntil = activeUntil,
@@ -1003,7 +1019,7 @@ class OverlayService : Service() {
             when (outcome) {
                 com.grayzone.app.policy.SessionExpiryOutcome.NoOp -> Unit
                 com.grayzone.app.policy.SessionExpiryOutcome.ClampCountdown ->
-                    serviceScope.launch(Dispatchers.Main) { cancelCountdownNotification() }
+                    serviceScope.launch(Dispatchers.Main) { cancelCountdownNotificationFor(packageName) }
                 com.grayzone.app.policy.SessionExpiryOutcome.ShowLock ->
                     serviceScope.launch {
                         val appName = getAppName(packageName)
@@ -1018,11 +1034,15 @@ class OverlayService : Service() {
                 "handleSessionExpired failed (prefs type drift?); clamping countdown",
                 e
             )
-            serviceScope.launch(Dispatchers.Main) { cancelCountdownNotification() }
+            serviceScope.launch(Dispatchers.Main) { cancelCountdownNotificationFor(packageName) }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!::scheduleManager.isInitialized || !com.grayzone.app.isMonitoringEnabled(this)) {
+            stopWhileMonitoringOff()
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
             dismissOverlay(); stopSelf()
         } else if (intent?.action == ACTION_START_COUNTDOWN) {
@@ -1056,8 +1076,19 @@ class OverlayService : Service() {
         return START_STICKY
     }
 
+    /** Takes down every overlay and notification this service owns, then stops it. */
+    private fun stopWhileMonitoringOff() {
+        isShuttingDown = true
+        dismissOverlay()
+        cancelCountdownNotification()
+        // No explicit stopForeground: a start arriving between it and stopSelf would trip the
+        // foreground-service timeout. Destroying the service removes its notification anyway.
+        stopSelf()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        if (isShuttingDown || !com.grayzone.app.isMonitoringEnabled(this)) return
         
         com.grayzone.app.GrayzoneLogger.w(
             com.grayzone.app.LogComponent.OVERLAY,
@@ -1087,6 +1118,7 @@ class OverlayService : Service() {
     }
 
     private fun startCountdownNotification(packageName: String, activeUntil: Long) {
+        if (isShuttingDown) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val appName = getAppName(packageName)
 
@@ -1132,6 +1164,12 @@ class OverlayService : Service() {
                 )
                 .build()
         )
+        countdownPackage = packageName
+    }
+
+    /** Clears the countdown only if it belongs to [packageName]. */
+    private fun cancelCountdownNotificationFor(packageName: String) {
+        if (countdownPackage == null || countdownPackage == packageName) cancelCountdownNotification()
     }
     
     /**
@@ -1141,14 +1179,18 @@ class OverlayService : Service() {
     private fun cancelCountdownNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(COUNTDOWN_NOTIF_ID)
+        countdownPackage = null
     }
 
     private fun postProtectionNotification() {
+        // After stopForeground this would be a plain ongoing notification nothing ever cancels.
+        if (isShuttingDown) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification())
     }
 
     override fun onDestroy() {
+        isShuttingDown = true
         super.onDestroy()
         com.grayzone.app.data.ProtectionHealthRepository.updateOverlayStatus(false)
         safeUnregister(appChangeReceiver)
@@ -1160,6 +1202,20 @@ class OverlayService : Service() {
         cancelCountdownNotification()
         serviceScope.cancel()
         dismissOverlay()
+        if (!com.grayzone.app.isMonitoringEnabled(this)) broadcastMonitoringState(false)
+    }
+
+    /** Lets the accessibility watchdog stop (or resume) restarting this service. */
+    private fun broadcastMonitoringState(enabled: Boolean) {
+        try {
+            sendBroadcast(
+                Intent(GrayzoneAccessibilityService.ACTION_MONITORING_STATE)
+                    .putExtra(GrayzoneAccessibilityService.EXTRA_MONITORING_ENABLED, enabled)
+                    .setPackage(getPackageName())
+            )
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.OVERLAY, "Monitoring state broadcast failed: ${e.message}")
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -1629,7 +1685,7 @@ class OverlayService : Service() {
             .putLong(PrefsKeys.ACTIVE_UNTIL + packageName, activeUntil)
             .putLong(PrefsKeys.ACTIVE_STARTED_ELAPSED + packageName, nowElapsed)
             .putLong(PrefsKeys.ACTIVE_DURATION_MS + packageName, grantedSessionMs)
-            .commit()
+            .apply()
 
         startCountdownNotification(packageName, activeUntil)
         SessionExpiryScheduler.arm(this, packageName, activeUntil)

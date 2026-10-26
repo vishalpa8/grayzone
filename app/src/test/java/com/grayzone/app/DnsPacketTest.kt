@@ -31,6 +31,29 @@ class DnsPacketTest {
     }
 
     @Test
+    fun `ipv4 tcp to port 53 is not parsed as a udp dns query`() {
+        val packet = ipv4DnsQuery(id = 0x1234, qType = 1)
+        packet[9] = 6
+        assertFalse(DnsPacketHelper.isDnsQuery(packet, packet.size))
+        assertNull(DnsPacketHelper.getDomainName(packet, packet.size))
+    }
+
+    @Test
+    fun `ipv4 non-first fragment is not parsed as dns`() {
+        val packet = ipv4DnsQuery(id = 0x1234, qType = 1)
+        writeShort(packet, 6, 0x0010) // fragment offset 16 (x8 bytes), not the first fragment
+        assertFalse(DnsPacketHelper.isDnsQuery(packet, packet.size))
+        assertNull(DnsPacketHelper.getDomainName(packet, packet.size))
+    }
+
+    @Test
+    fun `ipv4 first fragment with more-fragments flag is still a dns query`() {
+        val packet = ipv4DnsQuery(id = 0x1234, qType = 1)
+        writeShort(packet, 6, 0x2000) // MF set, offset 0
+        assertTrue(DnsPacketHelper.isDnsQuery(packet, packet.size))
+    }
+
+    @Test
     fun `ipv4 query metadata uses DNS payload offset and question type`() {
         val packet = ipv4DnsQuery(id = 0x1234, qType = 28)
 

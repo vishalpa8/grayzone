@@ -30,10 +30,6 @@ object SetupRequirements {
         SetupRequirement.OVERLAY,
         SetupRequirement.BATTERY,
     )
-
-    /** Recommended-only grants: the user may decline these without losing core protection. */
-    fun isOptional(requirement: SetupRequirement): Boolean = requirement !in CORE
-
     /**
      * Ordered so the first entry is the one to fix next: detection before drawing,
      * then degrading grants (notifications, battery).

@@ -1,7 +1,9 @@
 package com.grayzone.app.ui
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -25,7 +27,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.grayzone.app.SetupRequirement
 import com.grayzone.app.appInfoSettingsIntent
-import com.grayzone.app.settingsIntentFor
+import com.grayzone.app.openSettingsFor
 import com.grayzone.app.startActivitySafely
 import com.grayzone.app.ui.theme.*
 
@@ -79,20 +81,26 @@ fun PermissionPrompt(
     }
 
     fun allow() {
+        // The system dialog only helps while the runtime permission itself is missing and Android
+        // will still show it. If the permission is granted but notifications are switched off, or
+        // the dialog was already refused, the app's notification settings page is the right place.
         if (requirement == SetupRequirement.NOTIFICATIONS &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            !notificationDialogShown
+            !notificationDialogShown &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
         ) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
         // Only the one screen for this permission — no chained OEM screens on top of it.
-        startActivitySafely(
-            context,
-            settingsIntentFor(context, requirement),
-            "prompt${requirement.name}",
-            showToast = requirement != SetupRequirement.BATTERY
-        )
+        if (!openSettingsFor(context, requirement, "prompt${requirement.name}")) {
+            android.widget.Toast.makeText(
+                context,
+                "Couldn't open settings. Open Settings > Apps > Grayzone to allow it.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     Dialog(
@@ -109,7 +117,7 @@ fun PermissionPrompt(
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (position != null) {
+            if (position != null && position.second > 1) {
                 Text(
                     "Step ${position.first} of ${position.second}",
                     color = GZTextTertiary,
@@ -134,7 +142,7 @@ fun PermissionPrompt(
             )
             Spacer(Modifier.height(24.dp))
             Button(
-                onClick = ::allow,
+                onClick = { allow() },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
