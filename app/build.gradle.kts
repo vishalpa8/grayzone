@@ -69,6 +69,21 @@ android {
         }
     }
 
+    // Same app, two distributions. "github" updates itself from GitHub Releases (sideloaded
+    // installs); "play" leaves updates to the Play Store, whose policy forbids self-updating and
+    // restricts the install-packages permission, so neither is in that build.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "true")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+        }
+    }
+
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {

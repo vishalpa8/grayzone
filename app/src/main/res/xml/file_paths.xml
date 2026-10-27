@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Only the exported log file is ever shared. -->
+<!-- Only the exported log file and downloaded app updates are ever shared. -->
 <paths>
     <cache-path name="logs" path="logs/" />
+    <cache-path name="updates" path="updates/" />
 </paths>

@@ -75,6 +75,11 @@ class GrayzoneApplication : Application() {
         } catch (e: Exception) {
             GrayzoneLogger.w(LogComponent.VPN, "Failed to schedule blocklist updates", e)
         }
+        try {
+            com.grayzone.app.update.AppUpdateWorker.schedule(this)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.UI, "Failed to schedule app update checks", e)
+        }
     }
 
     /**

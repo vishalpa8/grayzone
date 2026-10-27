@@ -84,6 +84,8 @@ object PrefsKeys {
     const val VPN_BLOCK_TELEMETRY     = "vpn_block_telemetry"
     /** Epoch millis of the last successful blocklist update check (0 = never). */
     const val BLOCKLIST_LAST_CHECK_MS = "blocklist_last_check_ms"
+    /** versionCode of the newest release the user was already notified about (0 = none). */
+    const val APP_UPDATE_NOTIFIED_CODE = "app_update_notified_code"
 
     // ── Custom Reflection Prompts ──────────────────────────────────────────
     const val CUSTOM_PROMPTS_JSON     = "custom_prompts_json"

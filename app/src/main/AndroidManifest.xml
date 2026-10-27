@@ -110,10 +110,10 @@
             android:enabled="true"
             android:exported="false" />
 
-        <!-- Shares the exported log file (Settings > Export logs); scoped to cache/logs only. -->
+        <!-- Shares the exported log file (Settings > Export logs) and hands downloaded updates to the installer; scoped to cache/logs and cache/updates only. -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.logs"
+            android:authorities="${applicationId}.files"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

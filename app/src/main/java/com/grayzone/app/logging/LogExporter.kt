@@ -82,7 +82,7 @@ object LogExporter {
                 writeHeader(context, writer)
                 writeBundle(GrayzoneLogger.logDirectory(context), writer)
             }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.logs", out)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", out)
             Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_SUBJECT, "Grayzone logs")

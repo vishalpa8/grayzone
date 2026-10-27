@@ -1,10 +1,24 @@
 # Changelog
 
 All notable changes to Grayzone. Versions follow [semantic versioning](https://semver.org);
-the number lives in `version.properties` and each release is tagged `vX.Y.Z`.
+the number lives in `version.properties`. Pushing a new version to `main` makes GitHub Actions
+publish it as release `vX.Y.Z`, using the section below as the release notes.
 
 VPN blocklists are versioned separately (a UTC timestamp such as `202610270634`) and update
 on the phone by themselves; see Settings → VPN settings → Blocklists.
+
+## [1.2.0] - 2026-10-27
+
+### Added
+- In-app updates: Settings → App updates checks GitHub for a new version, shows what changed,
+  downloads it (checksum, version and signing key verified) and opens the installer. A daily
+  background check sends a notification when a new version is out.
+- Automated releases: every push builds and tests the app; bumping the version publishes a
+  signed release that phones pick up.
+
+### Changed
+- Two editions from one codebase: the GitHub build updates itself, the Play build leaves
+  updates to the Play Store (no install permission).
 
 ## [1.1.2] - 2026-10-27
 

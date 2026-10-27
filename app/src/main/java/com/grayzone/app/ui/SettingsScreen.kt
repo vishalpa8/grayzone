@@ -216,6 +216,10 @@ fun SettingsScreen(
                     icon = Icons.Filled.Share,
                     onClick = { shareApp(context) }
                 )
+                if (BuildConfig.SELF_UPDATE) {
+                    RowDivider(startIndent = 68)
+                    AppUpdateRow()
+                }
                 RowDivider(startIndent = 68)
                 SettingsRow(
                     title = "Export logs",

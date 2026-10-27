@@ -44,8 +44,26 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** A [Tab] name to open, e.g. from the app-update notification. */
+        const val EXTRA_OPEN_TAB = "open_tab"
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenTab(intent)
+    }
+
+    private fun handleOpenTab(intent: Intent?) {
+        val name = intent?.getStringExtra(EXTRA_OPEN_TAB) ?: return
+        Tab.values().firstOrNull { it.name == name }?.let { TabRequests.requested.value = it }
+        intent.removeExtra(EXTRA_OPEN_TAB)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleOpenTab(intent)
         setContent {
             val prefs = getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
             var themeMode by remember {
@@ -164,6 +182,11 @@ private val PermissionWalkSaver = androidx.compose.runtime.saveable.listSaver<Pe
     }
 )
 enum class Tab { HOME, APPS, VPN, LIMITS, SETTINGS }
+
+/** One-shot tab switch requested from outside the UI (notification taps). */
+object TabRequests {
+    val requested = kotlinx.coroutines.flow.MutableStateFlow<Tab?>(null)
+}
 
 /**
  * Always shows the app; permissions are asked for in a small popup, one at a time, never as a
@@ -336,6 +359,13 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
 fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     val context = LocalContext.current
     var selectedTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Tab.HOME) }
+    val requestedTab by TabRequests.requested.collectAsState()
+    LaunchedEffect(requestedTab) {
+        requestedTab?.let {
+            selectedTab = it
+            TabRequests.requested.value = null
+        }
+    }
 
     val vpnConsentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
