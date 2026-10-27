@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -231,10 +233,15 @@ fun SettingsScreen(
             }
         }
 
+        val blocklistDate by produceState<String?>(null) {
+            value = withContext(Dispatchers.IO) { com.grayzone.app.AppVersion.blocklistDate(context) }
+        }
         Text(
-            "Grayzone ${BuildConfig.VERSION_NAME}",
+            "Grayzone ${com.grayzone.app.AppVersion.summary}" +
+                (blocklistDate?.let { "\nBlocklists from $it" } ?: ""),
             color = GZTextTertiary,
             fontSize = 12.sp,
+            lineHeight = 18.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
         )

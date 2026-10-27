@@ -79,7 +79,7 @@ object LogExporter {
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
             val out = File(outDir, "grayzone-logs-$stamp.txt")
             out.bufferedWriter().use { writer ->
-                writeHeader(writer)
+                writeHeader(context, writer)
                 writeBundle(GrayzoneLogger.logDirectory(context), writer)
             }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.logs", out)
@@ -96,8 +96,9 @@ object LogExporter {
         }
     }
 
-    private fun writeHeader(writer: Writer) {
-        writer.appendLine("Grayzone ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")
+    private fun writeHeader(context: Context, writer: Writer) {
+        writer.appendLine("Grayzone ${com.grayzone.app.AppVersion.summary}, ${BuildConfig.BUILD_TYPE}")
+        writer.appendLine("Blocklists: ${com.grayzone.app.AppVersion.blocklists(context)}")
         writer.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         writer.appendLine("Exported: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())}")
     }

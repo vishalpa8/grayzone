@@ -44,7 +44,7 @@ class GrayzoneApplication : Application() {
         GrayzoneLogger.init(this, processName)
         GrayzoneLogger.i(
             LogComponent.BOOT,
-            "Grayzone ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}) starting in $processName " +
+            "Grayzone ${AppVersion.summary}, ${BuildConfig.BUILD_TYPE}, starting in $processName " +
                 "on ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}"
         )
 

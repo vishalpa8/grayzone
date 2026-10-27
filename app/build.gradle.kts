@@ -24,6 +24,30 @@ val keystoreProperties = Properties().apply {
 }
 val hasReleaseKeystore = keystorePropertiesFile.exists()
 
+// Version lives in version.properties at the repo root (see the release checklist there).
+val versionProperties = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+fun versionPart(key: String, max: Int): Int {
+    val value = versionProperties.getProperty(key)?.trim()?.toIntOrNull()
+        ?: throw GradleException("version.properties: $key is missing or not a number")
+    if (value !in 0..max) throw GradleException("version.properties: $key=$value must be within 0..$max")
+    return value
+}
+val versionMajor = versionPart("VERSION_MAJOR", 2000)
+val versionMinor = versionPart("VERSION_MINOR", 99)
+val versionPatch = versionPart("VERSION_PATCH", 99)
+
+// Short commit the build came from, shown in Settings and exported logs ("unknown" outside git).
+val gitCommit: String = try {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=8", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+} catch (e: Exception) {
+    "unknown"
+}
+
 android {
     namespace = "com.grayzone.app"
     compileSdk = 34
@@ -32,8 +56,9 @@ android {
         applicationId = "com.grayzone.app"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = versionMajor * 10000 + versionMinor * 100 + versionPatch
+        versionName = "$versionMajor.$versionMinor.$versionPatch"
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
