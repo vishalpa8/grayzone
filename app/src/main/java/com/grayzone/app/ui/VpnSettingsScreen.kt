@@ -1,6 +1,7 @@
 package com.grayzone.app.ui
 
 import android.content.Context
+import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -15,8 +17,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.vpn.BlocklistManager
+import com.grayzone.app.service.vpn.update.BlocklistUpdates
 import com.grayzone.app.ui.components.*
 import com.grayzone.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun VpnSettingsScreen(
@@ -27,6 +32,11 @@ fun VpnSettingsScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
     var blockTelemetry by remember { mutableStateOf(prefs.getBoolean(PrefsKeys.VPN_BLOCK_TELEMETRY, false)) }
+    val listsBuiltAt by produceState(0L) {
+        value = withContext(Dispatchers.IO) {
+            BlocklistUpdates.store(context).activeManifest()?.builtAtMs ?: 0L
+        }
+    }
 
     androidx.activity.compose.BackHandler(onBack = onBack)
 
@@ -55,6 +65,18 @@ fun VpnSettingsScreen(
                     subtitle = "Always allow or always block a domain",
                     icon = Icons.Filled.Security,
                     onClick = onNavigateToCustomRules
+                )
+                RowDivider(startIndent = 68)
+                SettingsRow(
+                    title = "Blocklists",
+                    subtitle = if (listsBuiltAt > 0L) {
+                        "Updated automatically · current lists from " +
+                            DateUtils.getRelativeTimeSpanString(listsBuiltAt, System.currentTimeMillis(), DateUtils.DAY_IN_MILLIS)
+                                .toString().lowercase()
+                    } else {
+                        "Updated automatically"
+                    },
+                    icon = Icons.Filled.Update
                 )
             }
         }

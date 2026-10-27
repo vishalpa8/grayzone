@@ -321,6 +321,11 @@ class AdBlockVpnService : VpnService() {
 
                 com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
                 com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "VPN started")
+                try {
+                    com.grayzone.app.service.vpn.update.BlocklistUpdateWorker.Scheduler.onVpnStarted(this)
+                } catch (e: Exception) {
+                    com.grayzone.app.GrayzoneLogger.w(com.grayzone.app.LogComponent.VPN, "Could not queue a blocklist freshness check", e)
+                }
             } catch (e: Exception) {
 
                 // F-036: distinguish consent/establish failure from other startup errors.

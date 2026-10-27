@@ -66,6 +66,15 @@ class GrayzoneApplication : Application() {
         resetRuntimeStateIfNeeded()
         catchUpStreaks()
         schedulePeriodicCleanup()
+        scheduleBlocklistUpdates()
+    }
+
+    private fun scheduleBlocklistUpdates() {
+        try {
+            com.grayzone.app.service.vpn.update.BlocklistUpdateWorker.Scheduler.schedule(this)
+        } catch (e: Exception) {
+            GrayzoneLogger.w(LogComponent.VPN, "Failed to schedule blocklist updates", e)
+        }
     }
 
     /**

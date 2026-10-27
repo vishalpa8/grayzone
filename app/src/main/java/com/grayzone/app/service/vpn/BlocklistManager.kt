@@ -1,7 +1,7 @@
 package com.grayzone.app.service.vpn
 
 import android.content.Context
-import com.grayzone.app.R
+import com.grayzone.app.service.vpn.update.BlocklistUpdates
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,7 +12,8 @@ object BlocklistManager {
 
     // Bloom filters replace the old 120 MB HashSet<String> approach. Shipped filters are
     // ~1.5 MB (ads), ~4 MB (adult) and ~6 MB (security: malware, phishing, scams), sized at
-    // ~0.009% false positives. See scripts/blocklist_tools.ps1 for generation.
+    // ~0.009% false positives. Built daily by scripts/blocklist_tools.ps1 in CI; the APK ships a
+    // copy and BlocklistUpdateWorker installs newer verified sets by itself (see BlocklistStore).
     @Volatile private var adFilter:       GrayzoneBloomFilter? = null
     @Volatile private var adultFilter:    GrayzoneBloomFilter? = null
     @Volatile private var securityFilter: GrayzoneBloomFilter? = null
@@ -25,29 +26,16 @@ object BlocklistManager {
     // Bloom false positive, or a feed listing a whole platform, taking down an essential service.
     @Volatile private var criticalDomains: Set<String> = emptySet()
 
+    // Auto-updated companions to the hardcoded floors below (doh_domains.txt, telemetry_domains.txt).
+    @Volatile private var listedDohDomains: Set<String> = emptySet()
+    @Volatile private var listedTelemetryDomains: Set<String> = emptySet()
+
     // Custom Rules
     @Volatile private var customAllowlist: Set<String> = emptySet()
     @Volatile private var customDenylist: Set<String> = emptySet()
     @Volatile private var blockTelemetry: Boolean = false
 
-    // Hardcoded allowlist for domains that are frequently flagged as false-positives 
-    // by community blocklists, breaking core functionality of essential apps.
-    private val falsePositiveAllowlist: Set<String> = hashSetOf(
-        "rapido.bike",
-        "rapido.com",
-        "olacabs.com",
-        "swiggy.in",
-        "swiggy.com",
-        "zomato.com",
-        "uber.com",
-        "ubereats.com",
-        "juspay.in", // Common payment gateway
-        "razorpay.com",
-        "paytm.com",
-        "paytm.in",
-        "phonepe.com"
-    )
-
+    // Floor for "Block background telemetry"; the auto-updated vendor lists add to it.
     private val telemetryDomains: Set<String> = hashSetOf(
         "tracking.miui.com",
         "api.ad.xiaomi.com",
@@ -74,7 +62,8 @@ object BlocklistManager {
      * way to block that at the DNS layer — it must be surfaced as a UI warning instead
      * (see HomeScreen). The domains here cover in-app DoH/DoT libraries only.
      *
-     * Last verified: 2026-07-21
+     * A fixed floor that works before any list loads; the auto-updated doh_domains.txt
+     * (HaGeZi DoH, thousands of resolvers) adds to it.
      */
     private val dohBypassDomains: Set<String> = hashSetOf(
         // ── Google ────────────────────────────────────────────────────────
@@ -212,40 +201,86 @@ object BlocklistManager {
         com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Rules applied: ${customAllowlist.size} allowed, ${customDenylist.size} blocked, telemetry blocking ${if (blockTelemetry) "on" else "off"}")
     }
 
+    /** Loads the lists once per process (later calls only refresh custom rules). */
     fun load(context: Context) {
         reloadCustomRules(context)
         if (!loadStarted.compareAndSet(false, true)) return
-        Thread {
-            try {
-                // Critical names first: the filters must never be live without their guard.
-                criticalDomains = context.resources.openRawResource(R.raw.critical_domains)
-                    .bufferedReader().use { parseDomainList(it.readText()) }
-                adFilter       = loadFilter(context, R.raw.adblock_bloom)
-                adultFilter    = loadFilter(context, R.raw.adult_bloom)
-                securityFilter = loadFilter(context, R.raw.security_bloom)
-                abusedTlds     = loadAbusedTlds(context)
-                isLoaded = true
-                com.grayzone.app.GrayzoneLogger.i(
-                    com.grayzone.app.LogComponent.VPN,
-                    "Blocklists loaded (ads, adult, security, ${abusedTlds.size} TLDs, ${criticalDomains.size} protected names)"
-                )
-            } catch (e: Exception) {
-                // F-026: do not swallow Errors (e.g. OutOfMemoryError) — let them propagate.
-                adFilter = null
-                adultFilter = null
-                securityFilter = null
-                abusedTlds = AbusedTldList.EMPTY
-                isLoaded = false
-                loadStarted.set(false)
-                com.grayzone.app.GrayzoneLogger.e(
-                    com.grayzone.app.LogComponent.VPN,
-                    "Blocklist load failed — filtering degraded to fallback domains only",
-                    e
-                )
-            }
-        }.start()
+        startLoad(context.applicationContext, initial = true)
     }
 
+    /**
+     * Swaps in the active list set (e.g. right after an update installed a newer one) without
+     * interrupting the VPN: lookups keep using the previous lists until the new ones are ready.
+     */
+    fun reloadLists(context: Context) {
+        loadStarted.set(true)
+        startLoad(context.applicationContext, initial = false)
+    }
+
+    private val loadLock = Any()
+
+    private fun startLoad(app: Context, initial: Boolean) {
+        Thread({
+            synchronized(loadLock) {
+                val store = BlocklistUpdates.store(app)
+                val fromDownload = store.usesDownloadedSet()
+                try {
+                    loadFrom(store)
+                } catch (e: Exception) {
+                    // F-026: do not swallow Errors (e.g. OutOfMemoryError) — let them propagate.
+                    if (fromDownload) {
+                        // A downloaded set that verified but won't load must never cost protection:
+                        // drop it and fall back to the copy built into the app.
+                        com.grayzone.app.GrayzoneLogger.e(com.grayzone.app.LogComponent.VPN, "Downloaded blocklists failed to load; using the built-in lists", e)
+                        store.discard()
+                        try {
+                            loadFrom(store)
+                            return@Thread
+                        } catch (e2: Exception) {
+                            com.grayzone.app.GrayzoneLogger.e(com.grayzone.app.LogComponent.VPN, "Built-in blocklists failed to load", e2)
+                        }
+                    } else {
+                        com.grayzone.app.GrayzoneLogger.e(com.grayzone.app.LogComponent.VPN, "Blocklist load failed — filtering degraded to fallback domains only", e)
+                    }
+                    if (initial || !isLoaded) {
+                        adFilter = null
+                        adultFilter = null
+                        securityFilter = null
+                        abusedTlds = AbusedTldList.EMPTY
+                        isLoaded = false
+                        loadStarted.set(false)
+                    }
+                }
+            }
+        }, "Grayzone-Blocklists").start()
+    }
+
+    /** Reads every list first and only then publishes them, so a failure leaves the old ones in place. */
+    private fun loadFrom(store: com.grayzone.app.service.vpn.update.BlocklistStore) {
+        // Critical names first: the filters must never be live without their guard.
+        val critical = store.open("critical_domains.txt").bufferedReader().use { parseDomainList(it.readText()) }
+        val ad = store.open("adblock_bloom.bin").use { GrayzoneBloomFilter.readFrom(it) }
+        val adult = store.open("adult_bloom.bin").use { GrayzoneBloomFilter.readFrom(it) }
+        val security = store.open("security_bloom.bin").use { GrayzoneBloomFilter.readFrom(it) }
+        val tlds = store.open("abused_tlds.txt").use { AbusedTldList.readFrom(it) }
+        val doh = store.open("doh_domains.txt").bufferedReader().use { parseDomainList(it.readText()) }
+        val telemetry = store.open("telemetry_domains.txt").bufferedReader().use { parseDomainList(it.readText()) }
+
+        criticalDomains = critical
+        adFilter = ad
+        adultFilter = adult
+        securityFilter = security
+        abusedTlds = tlds
+        listedDohDomains = doh
+        listedTelemetryDomains = telemetry
+        isLoaded = true
+        com.grayzone.app.GrayzoneLogger.i(
+            com.grayzone.app.LogComponent.VPN,
+            "Blocklists loaded: set ${store.activeManifest()?.version ?: "unknown"} " +
+                "(${if (store.usesDownloadedSet()) "downloaded" else "built-in"}; ${tlds.size} TLDs, " +
+                "${doh.size} DoH, ${telemetry.size} telemetry, ${critical.size} protected names)"
+        )
+    }
     /** Normalize a domain before matching: lowercase, trim whitespace, remove a trailing dot. */
     fun normalizeDomain(domain: String): String? {
         try {
@@ -301,7 +336,9 @@ object BlocklistManager {
     /** True if domain is a known DoH/DoT bypass endpoint (always checked). */
     fun isDoHBypass(domain: String): Boolean {
         val normalized = normalizeDomain(domain) ?: return false
-        return dohBypassDomains.contains(normalized)
+        if (dohBypassDomains.contains(normalized)) return true
+        val listed = listedDohDomains
+        return listed.isNotEmpty() && DomainZoneMatcher.anyListedMatch(normalized, criticalDomains) { it in listed }
     }
 
     /** True if the domain should be blocked for any reason (see [blockReason]). */
@@ -310,27 +347,26 @@ object BlocklistManager {
     /**
      * Why [domain] is blocked, or null when it is allowed.
      * Evaluation order:
-     * 1. Hardcoded DoH fallback bypass (always blocked)
-     * 2. Hardcoded False-Positive Allowlist (always allowed)
-     * 3. Custom Allowlist (takes precedence over everything below, threats included, so a
+     * 1. DoH / DoT resolvers (always blocked)
+     * 2. Custom Allowlist (takes precedence over everything below, threats included, so a
      *    false positive always has a way out)
-     * 4. Custom Denylist
-     * 5. Threats: abused TLDs and the security filter
-     * 6. Telemetry rules, high-confidence ad / adult rules, ad and adult filters
+     * 3. Custom Denylist
+     * 4. Threats: abused TLDs and the security filter
+     * 5. Telemetry rules, high-confidence ad / adult rules, ad and adult filters
      *
-     * Shipped lists (5 and 6, filters only) never fire on a protected critical name.
+     * Downloaded / shipped lists never fire on a protected critical name.
      */
     fun blockReason(domain: String): BlockReason? {
         if (isDoHBypass(domain)) return BlockReason.LISTED
         val normalized = normalizeDomain(domain) ?: return null
-        if (isUserOrSafeAllowed(normalized)) return null
+        if (isCustomAllowed(normalized)) return null
         synchronized(cacheLock) {
             if (matchesHighConfidence(normalized, customDenylist)) return BlockReason.LISTED
         }
 
         if (matchesThreatLists(normalized)) return BlockReason.THREAT
 
-        if (blockTelemetry && matchesHighConfidence(normalized, telemetryDomains)) return BlockReason.LISTED
+        if (blockTelemetry && isTelemetry(normalized)) return BlockReason.LISTED
         if (matchesHighConfidence(normalized, highConfidenceAdDomains) ||
             matchesHighConfidence(normalized, highConfidenceAdultDomains)) return BlockReason.LISTED
         if (!isLoaded) return null
@@ -347,7 +383,7 @@ object BlocklistManager {
      */
     fun isThreat(domain: String): Boolean {
         val normalized = normalizeDomain(domain) ?: return false
-        if (isUserOrSafeAllowed(normalized)) return false
+        if (isCustomAllowed(normalized)) return false
         return matchesThreatLists(normalized)
     }
 
@@ -361,11 +397,10 @@ object BlocklistManager {
 
     // ─── private helpers ───────────────────────────────────────────────────
 
-    private fun isUserOrSafeAllowed(normalized: String): Boolean {
-        if (matchesHighConfidence(normalized, falsePositiveAllowlist)) return true
-        synchronized(cacheLock) {
-            return matchesHighConfidence(normalized, customAllowlist)
-        }
+    private fun isTelemetry(normalized: String): Boolean {
+        if (matchesHighConfidence(normalized, telemetryDomains)) return true
+        val listed = listedTelemetryDomains
+        return listed.isNotEmpty() && DomainZoneMatcher.anyListedMatch(normalized, criticalDomains) { it in listed }
     }
 
     private fun matchesThreatLists(normalized: String): Boolean {
@@ -386,20 +421,6 @@ object BlocklistManager {
             .filter { it.isNotEmpty() }
             .mapNotNull { normalizeDomain(it) }
             .toHashSet()
-
-    private fun loadFilter(context: Context, resId: Int): GrayzoneBloomFilter {
-        val filter = context.resources.openRawResource(resId).use { stream ->
-            GrayzoneBloomFilter.readFrom(stream)
-        }
-        return filter
-    }
-
-    private fun loadAbusedTlds(context: Context): AbusedTldList {
-        val list = context.resources.openRawResource(R.raw.abused_tlds).use { stream ->
-            AbusedTldList.readFrom(stream)
-        }
-        return list
-    }
 
     /**
      * Check whether [domain] (already lowercased) or any of its parent zones

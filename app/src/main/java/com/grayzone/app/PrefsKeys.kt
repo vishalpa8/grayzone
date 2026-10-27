@@ -82,6 +82,8 @@ object PrefsKeys {
     const val VPN_CUSTOM_DENYLIST     = "vpn_custom_denylist"
     /** Whether background telemetry domains should be blocked. */
     const val VPN_BLOCK_TELEMETRY     = "vpn_block_telemetry"
+    /** Epoch millis of the last successful blocklist update check (0 = never). */
+    const val BLOCKLIST_LAST_CHECK_MS = "blocklist_last_check_ms"
 
     // ── Custom Reflection Prompts ──────────────────────────────────────────
     const val CUSTOM_PROMPTS_JSON     = "custom_prompts_json"

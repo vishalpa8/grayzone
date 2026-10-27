@@ -3,15 +3,23 @@
     Grayzone Blocklist Tools
 
 .DESCRIPTION
+    Builds every list the VPN uses and a manifest describing them:
+      adblock_bloom.bin, adult_bloom.bin, security_bloom.bin  (Bloom filters)
+      abused_tlds.txt, doh_domains.txt, telemetry_domains.txt, critical_domains.txt  (exact lists)
+      blocklist_manifest.txt  (version + SHA-256 of each file)
+
+    Runs daily in GitHub Actions (.github/workflows/blocklists.yml), which signs the manifest and
+    publishes the set; the app downloads it by itself. Running it by hand is never required.
+
     Modes:
-      (default)  Build Bloom filter binaries (adblock_bloom.bin, adult_bloom.bin,
-                 security_bloom.bin) plus the bare-TLD block list (abused_tlds.txt)
-      -AdultOnly Skip ad and security sources, only rebuild the adult filter
-      -Probe     Health-check all source URLs and DoH bypass domains
+      (default)               Build everything into -OutputDir
+      -TolerateSourceFailures Skip a dead or degraded feed with a warning instead of failing,
+                              as long as each list still meets its total-size floor (used by CI)
+      -Probe                  Health-check all source URLs and DoH bypass domains
 #>
 param(
-    [string]$OutputDir = "app\src\main\res\raw",
-    [switch]$AdultOnly,
+    [string]$OutputDir = "app/src/main/res/raw",
+    [switch]$TolerateSourceFailures,
     [switch]$Probe
 )
 
@@ -40,7 +48,11 @@ $ADULT_MIN_TOTAL_DOMAINS    = 50000
 $SECURITY_MIN_TOTAL_DOMAINS = 500000
 $MIN_ABUSED_TLDS            = 200
 
-$CriticalDomainsFile = "app\src\main\res\raw\critical_domains.txt"
+$MIN_DOH_DOMAINS            = 500
+$MIN_TELEMETRY_DOMAINS      = 200
+
+# Forward slashes: the script also runs on Linux (CI).
+$CriticalDomainsFile = "app/src/main/res/raw/critical_domains.txt"
 
 # HaGeZi lists must use wildcard/*-onlydomains.txt (plain domains); the old domains/*.txt paths
 # are gone, and adblock/* uses ||domain^ syntax.
@@ -85,7 +97,19 @@ $GamblingSources = [ordered]@{
     "HaGeZi Gambling" = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/gambling-onlydomains.txt"; MinDomains = 1000 }
 }
 
-# Keep this in sync with BlocklistManager.dohBypassDomains.
+# Encrypted-DNS (DoH/DoT) resolvers apps could use to dodge the VPN's filtering. Always blocked;
+# the app keeps a small hardcoded floor of the big providers in case this list is unavailable.
+$DohSources = [ordered]@{
+    "HaGeZi DoH" = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-onlydomains.txt"; MinDomains = 500 }
+}
+
+# Phone / OS vendor telemetry, blocked only when the user turns on "Block background telemetry".
+$TelemetrySources = [ordered]@{}
+foreach ($vendor in "xiaomi", "samsung", "apple", "amazon", "huawei", "winoffice", "tiktok", "vivo", "oppo-realme", "lgwebos", "roku") {
+    $TelemetrySources["HaGeZi native $vendor"] = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/native.$vendor-onlydomains.txt"; MinDomains = 5 }
+}
+
+# The hardcoded floor in BlocklistManager.dohBypassDomains; probed to spot dead entries.
 $DohDomains = @(
     "dns.google", "dns.google.com", "8888.google",
     "cloudflare-dns.com", "1dot1dot1dot1.cloudflare-dns.com", "mozilla.cloudflare-dns.com",
@@ -258,32 +282,45 @@ function Read-CriticalDomains([string]$Path) {
     return $set
 }
 
-function Build-Filter($Sources, [int]$NumHashes, [string]$Label, [int]$MinTotalDomains, $Critical) {
-    Write-Host "[$Label] Building filter from $($Sources.Count) sources..." -ForegroundColor Yellow
+function Write-SourceProblem([string]$Message) {
+    if (-not $TolerateSourceFailures) { throw $Message }
+    Write-Warning $Message
+    # Surfaces as an annotation on the GitHub Actions run.
+    if ($env:GITHUB_ACTIONS -eq "true") { Write-Host "::warning::$Message" }
+}
+
+function Get-Domains($Sources, [string]$Label, [int]$MinTotalDomains, $Critical) {
+    Write-Host "[$Label] Collecting from $($Sources.Count) sources..." -ForegroundColor Yellow
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
 
     foreach ($name in $Sources.Keys) {
         $source = $Sources[$name]
         $url = Get-SourceUrl $source
         $minDomains = Get-SourceMinDomains $source
-        $before = $seen.Count
-        $parsed = 0
         Write-Host "  $name" -ForegroundColor Gray
-        foreach ($line in (Invoke-Download $url -Strict)) {
-            $d = [BloomBuilder]::ParseDomain($line)
-            if ($d) {
-                $parsed++
-                [void]$seen.Add($d)
-            }
+        $lines = @()
+        try {
+            $lines = Invoke-Download $url -Strict
+        } catch {
+            Write-SourceProblem "[$Label] Source '$name' could not be downloaded: $($_.Exception.Message)"
+            continue
         }
-        $added = $seen.Count - $before
+        $fromSource = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($line in $lines) {
+            $d = [BloomBuilder]::ParseDomain($line)
+            if ($d) { [void]$fromSource.Add($d) }
+        }
         # Guard on domains PARSED from this source (download-health check), not on
         # newly-unique domains: small curated lists processed after large ones can
         # legitimately add ~0 new domains due to heavy overlap, which is not a failure.
-        if ($parsed -lt $minDomains) {
-            throw "[$Label] Source '$name' parsed only $parsed valid domains; expected at least $minDomains. Refusing to write a degraded filter (download may be broken)."
+        # A degraded source is skipped whole, never merged half-broken.
+        if ($fromSource.Count -lt $minDomains) {
+            Write-SourceProblem "[$Label] Source '$name' parsed only $($fromSource.Count) valid domains; expected at least $minDomains (download may be broken)."
+            continue
         }
-        Write-Host "  -> $($seen.Count) total unique so far (source parsed $parsed, +$added new)" -ForegroundColor DarkGray
+        $before = $seen.Count
+        $seen.UnionWith($fromSource)
+        Write-Host "  -> $($seen.Count) total unique so far (source parsed $($fromSource.Count), +$($seen.Count - $before) new)" -ForegroundColor DarkGray
     }
 
     # The app ignores hits on these names anyway; dropping them keeps the filter honest and
@@ -294,15 +331,47 @@ function Build-Filter($Sources, [int]$NumHashes, [string]$Label, [int]$MinTotalD
         Write-Host "  Dropped critical domains listed by feeds: $($dropped -join ', ')" -ForegroundColor DarkYellow
     }
 
+    # Always fatal: a list this small means the feeds broke, and publishing it would weaken every
+    # phone. CI then fails and phones keep the last good set.
     if ($seen.Count -lt $MinTotalDomains) {
-        throw "[$Label] Total unique domains $($seen.Count) is below safety threshold $MinTotalDomains. Refusing to write filter."
+        throw "[$Label] Total unique domains $($seen.Count) is below safety threshold $MinTotalDomains. Refusing to write it."
     }
+    # Comma: return the set itself, not its enumerated items.
+    return ,$seen
+}
 
+function Build-Filter($Sources, [int]$NumHashes, [string]$Label, [int]$MinTotalDomains, $Critical) {
+    $seen = Get-Domains $Sources $Label $MinTotalDomains $Critical
     # Byte aligned (the app requires it).
     $bitCount = [long]([Math]::Ceiling($seen.Count * $BITS_PER_DOMAIN / 8.0) * 8)
     $bits = [BloomBuilder]::Build($seen, $bitCount, $NumHashes)
     Write-Host "[$Label] $($seen.Count) unique domains inserted into filter ($bitCount bits)" -ForegroundColor Green
     return @{ Bits = $bits; BitCount = $bitCount; Count = $seen.Count }
+}
+
+function Save-DomainList([string]$Path, $Domains, [string]$Description) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("# Generated by scripts/blocklist_tools.ps1 - do not edit by hand.`n")
+    [void]$sb.Append("# $Description`n")
+    foreach ($d in ($Domains | Sort-Object)) { [void]$sb.Append($d).Append("`n") }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    Write-FileAtomic $Path $encoding.GetBytes($sb.ToString())
+}
+
+function Save-Manifest([string]$Dir, [string[]]$Names) {
+    $version = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmm")
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("format=1`n")
+    [void]$sb.Append("version=$version`n")
+    foreach ($name in $Names) {
+        $path = Join-Path $Dir $name
+        $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $size = (Get-Item -LiteralPath $path).Length
+        [void]$sb.Append("file $name $sha $size`n")
+    }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    Write-FileAtomic (Join-Path $Dir "blocklist_manifest.txt") $encoding.GetBytes($sb.ToString())
+    Write-Host "  Manifest version $version" -ForegroundColor Cyan
 }
 
 function Build-AbusedTldList([string]$Url, [int]$MinTlds) {
@@ -400,6 +469,10 @@ if ($Probe) {
     foreach ($v in $AdSources.Values)         { $allSources += $v }
     foreach ($v in $SecuritySources.Values)   { $allSources += $v }
     foreach ($v in $AdultBuildSources.Values) { $allSources += $v }
+    foreach ($v in $DohSources.Values)        { $allSources += $v }
+    foreach ($v in $TelemetrySources.Values)  { $allSources += $v }
+    foreach ($v in $DohSources.Values)        { $allSources += $v }
+    foreach ($v in $TelemetrySources.Values)  { $allSources += $v }
     $deadUrls = @()
     foreach ($source in $allSources) {
         $url = Get-SourceUrl $source
@@ -439,23 +512,39 @@ Write-Host "FPR target ~0.009%  |  k=$K hashes  |  $BITS_PER_DOMAIN bits per dom
 
 $critical = Read-CriticalDomains $CriticalDomainsFile
 
-if (-not $AdultOnly) {
-    $ad = Build-Filter $AdSources $K "ADS" $AD_MIN_TOTAL_DOMAINS $critical
-    Save-BloomFile (Join-Path $OutputDir "adblock_bloom.bin") $ad.Bits $ad.BitCount $K
+$ad = Build-Filter $AdSources $K "ADS" $AD_MIN_TOTAL_DOMAINS $critical
+Save-BloomFile (Join-Path $OutputDir "adblock_bloom.bin") $ad.Bits $ad.BitCount $K
 
-    Write-Host ""
-    $security = Build-Filter $SecuritySources $K "SECURITY" $SECURITY_MIN_TOTAL_DOMAINS $critical
-    Save-BloomFile (Join-Path $OutputDir "security_bloom.bin") $security.Bits $security.BitCount $K
-
-    Write-Host ""
-    $tlds = Build-AbusedTldList $AbusedTldSourceUrl $MIN_ABUSED_TLDS
-    Save-TldFile (Join-Path $OutputDir "abused_tlds.txt") $tlds
-} else {
-    Write-Host "[ADS/SECURITY] Skipped (-AdultOnly)" -ForegroundColor DarkGray
-}
+Write-Host ""
+$security = Build-Filter $SecuritySources $K "SECURITY" $SECURITY_MIN_TOTAL_DOMAINS $critical
+Save-BloomFile (Join-Path $OutputDir "security_bloom.bin") $security.Bits $security.BitCount $K
 
 Write-Host ""
 $adult = Build-Filter $AdultBuildSources $K "ADULT" $ADULT_MIN_TOTAL_DOMAINS $critical
 Save-BloomFile (Join-Path $OutputDir "adult_bloom.bin") $adult.Bits $adult.BitCount $K
 
-Write-Host "`nDone. Run: .\gradlew.bat installDebug" -ForegroundColor Cyan
+Write-Host ""
+$tlds = Build-AbusedTldList $AbusedTldSourceUrl $MIN_ABUSED_TLDS
+Save-TldFile (Join-Path $OutputDir "abused_tlds.txt") $tlds
+
+Write-Host ""
+$doh = Get-Domains $DohSources "DOH" $MIN_DOH_DOMAINS $critical
+Save-DomainList (Join-Path $OutputDir "doh_domains.txt") $doh "Encrypted-DNS (DoH/DoT) resolvers; a listed domain blocks its subdomains too."
+
+Write-Host ""
+$telemetry = Get-Domains $TelemetrySources "TELEMETRY" $MIN_TELEMETRY_DOMAINS $critical
+Save-DomainList (Join-Path $OutputDir "telemetry_domains.txt") $telemetry "Phone / OS vendor telemetry; a listed domain blocks its subdomains too."
+
+# The protected-name list ships with the set, so new protections reach phones without an app update.
+$criticalOut = Join-Path $OutputDir "critical_domains.txt"
+if ((Resolve-Path $CriticalDomainsFile).Path -ne [System.IO.Path]::GetFullPath((Join-Path (Resolve-Path .).Path $criticalOut))) {
+    Copy-Item -LiteralPath $CriticalDomainsFile -Destination $criticalOut -Force
+}
+
+Write-Host ""
+Save-Manifest $OutputDir @(
+    "adblock_bloom.bin", "adult_bloom.bin", "security_bloom.bin",
+    "abused_tlds.txt", "doh_domains.txt", "telemetry_domains.txt", "critical_domains.txt"
+)
+
+Write-Host "`nDone." -ForegroundColor Cyan

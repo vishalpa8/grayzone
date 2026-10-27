@@ -64,6 +64,28 @@ class ThreatProtectionTest {
     }
 
     @Test
+    fun `built-in manifest matches every shipped list`() {
+        val files = com.grayzone.app.service.vpn.update.BlocklistUpdateConfig.FILES
+        val manifest = com.grayzone.app.service.vpn.update.BlocklistManifest.parse(
+            File(rawDir, "blocklist_manifest.txt").readText(), files
+        )
+        assertTrue("blocklist_manifest.txt must list every file", manifest != null)
+        files.forEach { name ->
+            val bytes = File(rawDir, name).readBytes()
+            val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            val entry = manifest!!.files.getValue(name)
+            assertEquals("$name changed without regenerating blocklist_manifest.txt", entry.sha256, sha)
+            assertEquals(entry.size, bytes.size.toLong())
+        }
+    }
+
+    @Test
+    fun `shipped doh and telemetry lists are substantial`() {
+        assertTrue(BlocklistManager.parseDomainList(File(rawDir, "doh_domains.txt").readText()).size >= 500)
+        assertTrue(BlocklistManager.parseDomainList(File(rawDir, "telemetry_domains.txt").readText()).size >= 200)
+    }
+
+    @Test
     fun `abused tld list does not swallow protected names`() {
         val tlds = File(rawDir, "abused_tlds.txt").inputStream().use { AbusedTldList.readFrom(it) }
         // .bike is abused, but Rapido lives there: only the zone-wide critical guard keeps it working.

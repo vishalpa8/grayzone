@@ -1,0 +1,85 @@
+# Rebuilds every VPN blocklist daily from the upstream feeds, signs the manifest and publishes the
+# set to the "blocklists" release. The app checks that release by itself and installs verified
+# updates, so the lists stay fresh with no manual step.
+#
+# Needs the BLOCKLIST_SIGNING_KEY secret: a PEM P-256 private key whose public half is
+# BlocklistUpdateConfig.PUBLIC_KEY in the app.
+name: Blocklists
+
+on:
+  schedule:
+    - cron: "17 1 * * *" # daily, 06:47 IST
+  push:
+    branches: [main]
+    paths:
+      - scripts/blocklist_tools.ps1
+      - app/src/main/res/raw/critical_domains.txt
+      - .github/workflows/blocklists.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write # publish release assets
+  actions: write  # keep this scheduled workflow enabled
+
+concurrency:
+  group: blocklists
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build lists
+        shell: pwsh
+        run: ./scripts/blocklist_tools.ps1 -OutputDir dist -TolerateSourceFailures
+
+      - name: Sign manifest
+        env:
+          BLOCKLIST_SIGNING_KEY: ${{ secrets.BLOCKLIST_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BLOCKLIST_SIGNING_KEY}" ]; then
+            echo "::error::BLOCKLIST_SIGNING_KEY secret is missing"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${BLOCKLIST_SIGNING_KEY}" > "${RUNNER_TEMP}/key.pem"
+          openssl dgst -sha256 -sign "${RUNNER_TEMP}/key.pem" -out dist/blocklist_manifest.sig dist/blocklist_manifest.txt
+          rm -f "${RUNNER_TEMP}/key.pem"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version=//p' dist/blocklist_manifest.txt)"
+          if ! gh release view blocklists > /dev/null 2>&1; then
+            gh release create blocklists --target "${GITHUB_SHA}" --prerelease --title "Blocklists" \
+              --notes "Signed VPN blocklists, rebuilt daily. The Grayzone app downloads and verifies these by itself."
+          fi
+
+          # Versioned names: a phone mid-download of the previous set is never handed a new file.
+          mkdir -p upload
+          while read -r kind name sha size; do
+            if [ "${kind}" = "file" ]; then cp "dist/${name}" "upload/${version}-${name}"; fi
+          done < dist/blocklist_manifest.txt
+          gh release upload blocklists upload/* --clobber
+          # Manifest last, so it only ever points at files that are already published.
+          gh release upload blocklists dist/blocklist_manifest.txt dist/blocklist_manifest.sig --clobber
+
+          # Keep the two newest sets.
+          gh release view blocklists --json assets -q '.assets[].name' > assets.txt
+          grep -oE '^[0-9]{12}-' assets.txt | sort -u | head -n -2 | while read -r old; do
+            grep "^${old}" assets.txt | while read -r asset; do gh release delete-asset blocklists "${asset}" -y; done
+          done
+          echo "Published blocklist set ${version}"
+
+      - name: Keep the schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # GitHub disables scheduled workflows after 60 days without repository activity.
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/blocklists.yml/enable" || true

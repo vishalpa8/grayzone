@@ -50,3 +50,6 @@ crash.log
 Thumbs.db
 *.tmp
 *.swp
+
+# Blocklist manifest signing key (lives in the BLOCKLIST_SIGNING_KEY GitHub secret)
+*.pem

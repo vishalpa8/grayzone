@@ -123,8 +123,10 @@ swiggy.com
 swiggy.in
 zomato.com
 uber.com
+ubereats.com
 olacabs.com
 rapido.bike
+rapido.com
 vivo.com
 vivo.com.cn
 vivoglobal.com
