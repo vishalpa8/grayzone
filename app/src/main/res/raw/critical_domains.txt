@@ -1,0 +1,132 @@
+# Names the shipped blocklists may never block (hand-maintained).
+# Read by BlocklistManager at runtime and by scripts/blocklist_tools.ps1 at build time.
+#
+# Matching is exact: a filter hit on one of these names is ignored, including while checking a
+# subdomain (a false positive on "google.com" can't take down "mail.google.com"). Subdomains are
+# NOT protected themselves, so a phishing host such as "evil.web.app" is still blocked.
+# Custom rules still apply. Never add ad servers, trackers or DNS-over-HTTPS resolvers here.
+
+# Google / Android
+google.com
+google.co.in
+googleapis.com
+gstatic.com
+googleusercontent.com
+googlevideo.com
+youtube.com
+ytimg.com
+ggpht.com
+android.com
+gmail.com
+gvt1.com
+gvt2.com
+firebaseio.com
+withgoogle.com
+
+# Apple / Microsoft
+apple.com
+icloud.com
+mzstatic.com
+microsoft.com
+live.com
+outlook.com
+office.com
+office365.com
+microsoftonline.com
+windows.net
+bing.com
+
+# Meta / messaging / social
+facebook.com
+fbcdn.net
+instagram.com
+cdninstagram.com
+whatsapp.com
+whatsapp.net
+messenger.com
+telegram.org
+signal.org
+x.com
+twitter.com
+twimg.com
+linkedin.com
+reddit.com
+snapchat.com
+discord.com
+discord.gg
+
+# Infrastructure / CDNs
+amazonaws.com
+cloudfront.net
+akamaihd.net
+akamaized.net
+akamai.net
+edgekey.net
+edgesuite.net
+cloudflare.com
+fastly.net
+azureedge.net
+github.com
+githubusercontent.com
+
+# Shared hosting parents (individual tenants can still be blocked)
+github.io
+web.app
+firebaseapp.com
+appspot.com
+blogspot.com
+pages.dev
+workers.dev
+netlify.app
+vercel.app
+herokuapp.com
+azurewebsites.net
+sharepoint.com
+wixsite.com
+
+# Everyday services
+amazon.com
+amazon.in
+wikipedia.org
+netflix.com
+nflxvideo.net
+spotify.com
+zoom.us
+duckduckgo.com
+yahoo.com
+openai.com
+chatgpt.com
+paypal.com
+dropbox.com
+
+# India: payments, banking, government, telecom, phone vendors
+npci.org.in
+razorpay.com
+paytm.com
+paytm.in
+phonepe.com
+juspay.in
+onlinesbi.sbi
+sbi.co.in
+hdfcbank.com
+icicibank.com
+axisbank.com
+kotak.com
+gov.in
+nic.in
+irctc.co.in
+uidai.gov.in
+airtel.in
+jio.com
+flipkart.com
+swiggy.com
+swiggy.in
+zomato.com
+uber.com
+olacabs.com
+rapido.bike
+vivo.com
+vivo.com.cn
+vivoglobal.com
+samsung.com
+xiaomi.com

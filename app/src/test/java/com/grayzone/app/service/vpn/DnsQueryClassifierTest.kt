@@ -13,11 +13,18 @@ class DnsQueryClassifierTest {
     private fun classify(
         domain: String,
         doh: Set<String> = emptySet(),
-        blocked: Set<String> = emptySet()
+        blocked: Set<String> = emptySet(),
+        threats: Set<String> = emptySet()
     ) = DnsQueryClassifier.classify(
         rawDomain = domain,
         isDoHBypass = { it in doh },
-        isBlocked = { it in blocked },
+        blockReason = {
+            when (it) {
+                in threats -> BlocklistManager.BlockReason.THREAT
+                in blocked -> BlocklistManager.BlockReason.LISTED
+                else -> null
+            }
+        },
         normalize = BlocklistManager::normalizeDomain
     )
 
@@ -79,6 +86,22 @@ class DnsQueryClassifierTest {
         assertEquals(
             DnsQueryClassifier.Action.FORWARD,
             classify("8.8.8.8", blocked = setOf("8.8.8.8"), doh = setOf("8.8.8.8"))
+        )
+    }
+
+    @Test
+    fun `threat domain is reported as a threat not an ad`() {
+        assertEquals(
+            DnsQueryClassifier.Action.SINKHOLE_THREAT,
+            classify("login-paypa1.example", threats = setOf("login-paypa1.example"), blocked = setOf("login-paypa1.example"))
+        )
+    }
+
+    @Test
+    fun `doh endpoint beats a threat verdict`() {
+        assertEquals(
+            DnsQueryClassifier.Action.NXDOMAIN_DOH,
+            classify("dns.google", doh = setOf("dns.google"), threats = setOf("dns.google"))
         )
     }
 

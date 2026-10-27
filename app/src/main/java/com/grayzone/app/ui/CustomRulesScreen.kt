@@ -55,8 +55,9 @@ fun CustomRulesScreen(onBack: () -> Unit) {
     ) {
         ScreenHeader(title = "Custom rules", onBack = onBack)
         Text(
-            "Block or allow a domain and all its subdomains. Allow overrides the ad, tracker and adult lists " +
-                "(encrypted-DNS servers stay blocked). Rules apply right away while the VPN is on; an app with " +
+            "Block or allow a domain and all its subdomains. Allow overrides every list, malware and phishing " +
+                "included, so only allow sites you trust (encrypted-DNS servers stay blocked). Rules apply right " +
+                "away while the VPN is on; an app with " +
                 "an open connection may keep using it until it reconnects.",
             color = GZTextSecondary,
             fontSize = 13.sp,

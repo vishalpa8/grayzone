@@ -165,7 +165,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
             subtitle = when {
                 vpnRunning -> "Filtering DNS on this device"
                 reconnectPending -> "Interrupted · reconnecting"
-                else -> "Off · ads and trackers not blocked"
+                else -> "Off · ads, trackers and threats not blocked"
             },
             onBack = onBack
         ) {
@@ -208,7 +208,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                             vpnRunning && holdActive ->
                                 "Locked on · ${VpnHoldLock.formatRemaining(holdRemaining)} left, then turns off by itself"
                             vpnRunning ->
-                                "Blocking ads, trackers and adult sites"
+                                "Blocking malware, phishing, ads, trackers and adult sites"
                             else ->
                                 "Stays on for 24 hours once enabled, with no early off"
                         },
@@ -240,7 +240,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
         if (vpnRunning) {
             val events by DnsTrafficBus.events.collectAsState()
             val totalQueries = events.size
-            val blockedCount = events.count { it.status != Status.ALLOWED }
+            val blockedCount = events.count { it.status != Status.ALLOWED && it.status != Status.FAILED }
 
             Row(
                 modifier = Modifier
@@ -406,18 +406,21 @@ private fun VpnTrafficRow(event: DnsTrafficBus.DnsEvent) {
     val dotColor = when (event.status) {
         Status.ALLOWED     -> GZAccent
         Status.BLOCKED_AD  -> GZRed
+        Status.BLOCKED_THREAT -> GZRed
         Status.BLOCKED_DOH -> GZAmber
         Status.FAILED      -> GZTextTertiary
     }
     val textColor = when (event.status) {
         Status.ALLOWED     -> GZTextSecondary
         Status.BLOCKED_AD  -> GZRed.copy(alpha = 0.9f)
+        Status.BLOCKED_THREAT -> GZRed
         Status.BLOCKED_DOH -> GZAmber.copy(alpha = 0.9f)
         Status.FAILED      -> GZTextTertiary
     }
     val badge = when (event.status) {
         Status.ALLOWED     -> null
         Status.BLOCKED_AD  -> "AD"
+        Status.BLOCKED_THREAT -> "THREAT"
         Status.BLOCKED_DOH -> "DOH"
         Status.FAILED      -> "FAIL"
     }

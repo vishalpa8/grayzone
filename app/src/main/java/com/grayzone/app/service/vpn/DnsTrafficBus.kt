@@ -29,7 +29,7 @@ object DnsTrafficBus {
         val timestampMs: Long = System.currentTimeMillis(),
         val id: String = idCounter.incrementAndGet().toString()
     ) {
-        enum class Status { ALLOWED, BLOCKED_AD, BLOCKED_DOH, FAILED }
+        enum class Status { ALLOWED, BLOCKED_AD, BLOCKED_THREAT, BLOCKED_DOH, FAILED }
     }
 
     private val _events = MutableStateFlow<List<DnsEvent>>(emptyList())

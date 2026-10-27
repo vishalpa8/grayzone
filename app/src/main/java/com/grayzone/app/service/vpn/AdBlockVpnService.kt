@@ -37,14 +37,26 @@ class AdBlockVpnService : VpnService() {
             private set
 
         /**
-         * Ordered list of real DNS servers to try.
-         * We try each in order; if the first times out we fall back automatically.
+         * Ordered list of real DNS servers to try; on a timeout the next one is used.
+         *
+         * Every server refuses known malware / phishing domains from live threat feeds, which
+         * covers threats newer than the shipped lists. Providers alternate so one provider's
+         * outage costs a single timeout. There is deliberately no unfiltered fallback.
          */
         private val DNS_SERVERS = listOf(
-            "8.8.8.8",   // Google Primary
-            "1.1.1.1",   // Cloudflare Primary (fallback 1)
-            "9.9.9.9"    // Quad9 (fallback 2)
-        )
+            "9.9.9.9",          // Quad9 (threat blocking, no logging of IPs)
+            "1.1.1.2",          // Cloudflare for Families: malware blocking
+            "149.112.112.112",  // Quad9 secondary
+            "1.0.0.2"           // Cloudflare for Families secondary
+        ).map { InetAddress.getByName(it) }
+
+        /** Same providers without threat filtering, used only for domains the user explicitly allowed. */
+        private val UNFILTERED_DNS_SERVERS = listOf(
+            "9.9.9.10",         // Quad9 unsecured
+            "1.1.1.1",          // Cloudflare
+            "149.112.112.10",   // Quad9 unsecured secondary
+            "1.0.0.1"           // Cloudflare secondary
+        ).map { InetAddress.getByName(it) }
 
         private const val DNS_TIMEOUT_MS = 2000
 
@@ -575,8 +587,9 @@ class AdBlockVpnService : VpnService() {
      * Route a parsed DNS query domain:
      *  1. Firefox DoH canary → NXDOMAIN (so Firefox disables DoH and uses system DNS)
      *  2. Known DoH/DoT bypass endpoint → NXDOMAIN (force apps back to plain DNS53)
-     *  3. Blocked ad/adult domain → sinkhole (0.0.0.0)
-     *  4. Everything else → forward to real DNS with fallback servers
+     *  3. Malware / phishing / scam domain → NXDOMAIN, reported as a threat
+     *  4. Blocked ad/adult domain → NXDOMAIN
+     *  5. Everything else → forward to real DNS with fallback servers
      */
     private fun handleDnsQuery(
         domain: String,
@@ -590,6 +603,11 @@ class AdBlockVpnService : VpnService() {
             // Firefox canary + known DoH/DoT resolvers → NXDOMAIN so apps fall back to DNS-53
             DnsQueryClassifier.Action.NXDOMAIN_DOH -> {
                 DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_DOH)
+                writeNxDomain(packet, length, outputStream)
+            }
+
+            DnsQueryClassifier.Action.SINKHOLE_THREAT -> {
+                DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_THREAT)
                 writeNxDomain(packet, length, outputStream)
             }
 
@@ -632,35 +650,37 @@ class AdBlockVpnService : VpnService() {
         length: Int,
         outputStream: FileOutputStream
     ) {
+        // The user's Allow rules must also beat the resolvers' own threat filtering.
+        val userAllowed = normalizedDomain != null && BlocklistManager.isCustomAllowed(normalizedDomain)
         val key = normalizedDomain?.let { DnsPacketHelper.getQuestionKey(packet, length, it) }
         if (key == null) {
-            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
-            writeForwardedResponse(domain, packet, dnsPayload, outputStream)
+            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length, userAllowed) }
+            writeForwardedResponse(domain, packet, length, dnsPayload, outputStream)
             return
         }
 
         val cached = synchronized(dnsCache) { dnsCache[key] }
         if (cached != null && (System.currentTimeMillis() - cached.timestamp) < DNS_CACHE_TTL_MS) {
-            writeForwardedResponse(domain, packet, cached.payload, outputStream)
+            writeForwardedResponse(domain, packet, length, cached.payload, outputStream)
             return
         }
 
         val deferred = CompletableDeferred<ByteArray?>()
         val existingQuery = pendingQueries.putIfAbsent(key, deferred)
         if (existingQuery != null) {
-            writeForwardedResponse(domain, packet, existingQuery.await(), outputStream)
+            writeForwardedResponse(domain, packet, length, existingQuery.await(), outputStream)
             return
         }
 
         try {
-            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length) }
+            val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length, userAllowed) }
             if (dnsPayload != null && isCacheable(dnsPayload)) {
                 synchronized(dnsCache) {
                     dnsCache[key] = CachedDnsResponse(dnsPayload, System.currentTimeMillis())
                 }
             }
             deferred.complete(dnsPayload)
-            writeForwardedResponse(domain, packet, dnsPayload, outputStream)
+            writeForwardedResponse(domain, packet, length, dnsPayload, outputStream)
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.e(
                 com.grayzone.app.LogComponent.DNS,
@@ -685,11 +705,23 @@ class AdBlockVpnService : VpnService() {
     private fun writeForwardedResponse(
         domain: String,
         requestPacket: ByteArray,
+        requestLength: Int,
         dnsPayload: ByteArray?,
         outputStream: FileOutputStream
     ) {
         if (dnsPayload == null) {
             DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.FAILED)
+            return
+        }
+        // CNAME uncloaking: an allowed name that is only an alias for a threat host is refused.
+        // Checked on every answer, cached ones included, so a list reload applies at once.
+        // Skipped for names the user explicitly allowed.
+        if (DnsResponseInspector.cnameTargets(dnsPayload).any { BlocklistManager.isThreat(it) } &&
+            !BlocklistManager.isCustomAllowed(domain)
+        ) {
+            com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "Blocked $domain: CNAME to a threat host")
+            DnsTrafficBus.emit(domain, DnsTrafficBus.DnsEvent.Status.BLOCKED_THREAT)
+            writeNxDomain(requestPacket, requestLength, outputStream)
             return
         }
         val wrapped = DnsPacketHelper.wrapDnsResponse(requestPacket, dnsPayload, dnsPayload.size) ?: run {
@@ -704,17 +736,16 @@ class AdBlockVpnService : VpnService() {
      * Perform the actual DNS query with server fallback.
      * Returns the DNS response payload, or null on failure.
      */
-    private suspend fun performDnsQuery(packet: ByteArray, length: Int): ByteArray? {
+    private suspend fun performDnsQuery(packet: ByteArray, length: Int, unfiltered: Boolean): ByteArray? {
         val dnsOffset = DnsPacketHelper.getDnsPayloadOffset(packet, length) ?: return null
         val dnsPayloadLength = DnsPacketHelper.getDnsPayloadLength(packet, length) ?: return null
 
         val pool = resolverPool ?: return null
         
-        for (serverIp in DNS_SERVERS) {
-            val server = InetAddress.getByName(serverIp)
+        for (server in if (unfiltered) UNFILTERED_DNS_SERVERS else DNS_SERVERS) {
             val result = pool.performQuery(packet, dnsOffset, dnsPayloadLength, server)
             if (result != null) return result
-            com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "DNS server $serverIp failed, trying next")
+            com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "DNS server ${server.hostAddress} failed, trying next")
         }
         // Offline, every query fails: one line a minute is enough to see it in the log.
         val now = android.os.SystemClock.elapsedRealtime()

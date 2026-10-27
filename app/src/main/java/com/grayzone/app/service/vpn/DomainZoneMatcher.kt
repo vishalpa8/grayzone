@@ -26,4 +26,12 @@ object DomainZoneMatcher {
         }
         return false
     }
+
+    /**
+     * [anyMatch] for list lookups that must never fire on a [protected] name, at any level of the
+     * walk: a filter hit on "google.com" can't block "mail.google.com", while a listed tenant such
+     * as "evil.web.app" still matches on its own name.
+     */
+    fun anyListedMatch(domain: String, protected: Set<String>, predicate: (String) -> Boolean): Boolean =
+        anyMatch(domain) { it !in protected && predicate(it) }
 }

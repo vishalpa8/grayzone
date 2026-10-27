@@ -7,15 +7,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object BlocklistManager {
 
-    // Bloom filters replace the old 120 MB HashSet<String> approach.
-    // Shipped filters are ~6 MB (ads) and ~4 MB (adult) on disk/RAM, targeting a
-    // ~0.1% false-positive rate. See scripts/blocklist_tools.ps1 for generation.
-    private var adFilter:    GrayzoneBloomFilter? = null
-    private var adultFilter: GrayzoneBloomFilter? = null
+    /** Why a domain is blocked. Threats are reported separately from ordinary list blocks. */
+    enum class BlockReason { THREAT, LISTED }
+
+    // Bloom filters replace the old 120 MB HashSet<String> approach. Shipped filters are
+    // ~1.5 MB (ads), ~4 MB (adult) and ~6 MB (security: malware, phishing, scams), sized at
+    // ~0.009% false positives. See scripts/blocklist_tools.ps1 for generation.
+    @Volatile private var adFilter:       GrayzoneBloomFilter? = null
+    @Volatile private var adultFilter:    GrayzoneBloomFilter? = null
+    @Volatile private var securityFilter: GrayzoneBloomFilter? = null
 
     // Bare TLD blocks (".zip", ".mov", ".surf", ...) cannot go into a Bloom filter —
     // see AbusedTldList — so they are kept as an exact-match set alongside it.
-    private var abusedTlds: AbusedTldList = AbusedTldList.EMPTY
+    @Volatile private var abusedTlds: AbusedTldList = AbusedTldList.EMPTY
+
+    // Names the shipped lists may never block (res/raw/critical_domains.txt). Guards against a
+    // Bloom false positive, or a feed listing a whole platform, taking down an essential service.
+    @Volatile private var criticalDomains: Set<String> = emptySet()
 
     // Custom Rules
     @Volatile private var customAllowlist: Set<String> = emptySet()
@@ -209,15 +217,23 @@ object BlocklistManager {
         if (!loadStarted.compareAndSet(false, true)) return
         Thread {
             try {
-                adFilter    = loadFilter(context, R.raw.adblock_bloom, "ads")
-                adultFilter = loadFilter(context, R.raw.adult_bloom,   "adult")
-                abusedTlds  = loadAbusedTlds(context)
+                // Critical names first: the filters must never be live without their guard.
+                criticalDomains = context.resources.openRawResource(R.raw.critical_domains)
+                    .bufferedReader().use { parseDomainList(it.readText()) }
+                adFilter       = loadFilter(context, R.raw.adblock_bloom)
+                adultFilter    = loadFilter(context, R.raw.adult_bloom)
+                securityFilter = loadFilter(context, R.raw.security_bloom)
+                abusedTlds     = loadAbusedTlds(context)
                 isLoaded = true
-                com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Blocklists loaded (ads, adult, ${abusedTlds.size} TLDs)")
+                com.grayzone.app.GrayzoneLogger.i(
+                    com.grayzone.app.LogComponent.VPN,
+                    "Blocklists loaded (ads, adult, security, ${abusedTlds.size} TLDs, ${criticalDomains.size} protected names)"
+                )
             } catch (e: Exception) {
                 // F-026: do not swallow Errors (e.g. OutOfMemoryError) — let them propagate.
                 adFilter = null
                 adultFilter = null
+                securityFilter = null
                 abusedTlds = AbusedTldList.EMPTY
                 isLoaded = false
                 loadStarted.set(false)
@@ -288,50 +304,90 @@ object BlocklistManager {
         return dohBypassDomains.contains(normalized)
     }
 
+    /** True if the domain should be blocked for any reason (see [blockReason]). */
+    fun isBlocked(domain: String): Boolean = blockReason(domain) != null
+
     /**
-     * Master check. Returns true if the domain should be blocked for any
-     * reason: ad, adult content, or known DoH bypass endpoint.
-     *
-     * DoH bypass is checked first and works even before loading completes.
-     */
-    /**
-     * Checks if a domain is blocked.
+     * Why [domain] is blocked, or null when it is allowed.
      * Evaluation order:
      * 1. Hardcoded DoH fallback bypass (always blocked)
      * 2. Hardcoded False-Positive Allowlist (always allowed)
-     * 3. Custom Allowlist (takes precedence over Denylist)
+     * 3. Custom Allowlist (takes precedence over everything below, threats included, so a
+     *    false positive always has a way out)
      * 4. Custom Denylist
-     * 5. Telemetry rules
-     * 6. High-confidence rules
-     * 7. Bloom Filter
+     * 5. Threats: abused TLDs and the security filter
+     * 6. Telemetry rules, high-confidence ad / adult rules, ad and adult filters
+     *
+     * Shipped lists (5 and 6, filters only) never fire on a protected critical name.
      */
-    fun isBlocked(domain: String): Boolean {
-        if (isDoHBypass(domain)) return true
-        val normalized = normalizeDomain(domain) ?: return false
-
-        if (matchesHighConfidence(normalized, falsePositiveAllowlist)) return false
-
+    fun blockReason(domain: String): BlockReason? {
+        if (isDoHBypass(domain)) return BlockReason.LISTED
+        val normalized = normalizeDomain(domain) ?: return null
+        if (isUserOrSafeAllowed(normalized)) return null
         synchronized(cacheLock) {
-            if (matchesHighConfidence(normalized, customAllowlist)) return false
-            if (matchesHighConfidence(normalized, customDenylist)) return true
+            if (matchesHighConfidence(normalized, customDenylist)) return BlockReason.LISTED
         }
 
-        if (blockTelemetry && matchesHighConfidence(normalized, telemetryDomains)) return true
+        if (matchesThreatLists(normalized)) return BlockReason.THREAT
 
+        if (blockTelemetry && matchesHighConfidence(normalized, telemetryDomains)) return BlockReason.LISTED
         if (matchesHighConfidence(normalized, highConfidenceAdDomains) ||
-            matchesHighConfidence(normalized, highConfidenceAdultDomains)) return true
-        if (!isLoaded) return false
-        // Cheaper than ten SHA-256 probes, so it runs ahead of the Bloom filters.
-        if (abusedTlds.blocks(normalized)) return true
+            matchesHighConfidence(normalized, highConfidenceAdultDomains)) return BlockReason.LISTED
+        if (!isLoaded) return null
         val ad    = adFilter
         val adult = adultFilter
-        return (ad    != null && matchesFilter(normalized, ad)) ||
-               (adult != null && matchesFilter(normalized, adult))
+        return if ((ad    != null && matchesFilter(normalized, ad)) ||
+                   (adult != null && matchesFilter(normalized, adult))) BlockReason.LISTED else null
+    }
+
+    /**
+     * True if [domain] is a known malware / phishing / scam host. Used for CNAME targets in
+     * upstream answers, where only threats are enforced: the ad lists are tuned for names
+     * clients ask for, and applying them to CDN aliases would break ordinary sites.
+     */
+    fun isThreat(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        if (isUserOrSafeAllowed(normalized)) return false
+        return matchesThreatLists(normalized)
+    }
+
+    /** True if the user's Allow rules cover [domain] (or a parent zone of it). */
+    fun isCustomAllowed(domain: String): Boolean {
+        val normalized = normalizeDomain(domain) ?: return false
+        synchronized(cacheLock) {
+            return matchesHighConfidence(normalized, customAllowlist)
+        }
     }
 
     // ─── private helpers ───────────────────────────────────────────────────
 
-    private fun loadFilter(context: Context, resId: Int, label: String): GrayzoneBloomFilter {
+    private fun isUserOrSafeAllowed(normalized: String): Boolean {
+        if (matchesHighConfidence(normalized, falsePositiveAllowlist)) return true
+        synchronized(cacheLock) {
+            return matchesHighConfidence(normalized, customAllowlist)
+        }
+    }
+
+    private fun matchesThreatLists(normalized: String): Boolean {
+        if (!isLoaded) return false
+        // Cheaper than ten SHA-256 probes, so it runs ahead of the Bloom filter.
+        // A TLD block names no site, so protection covers a critical name's whole zone here
+        // (".bike" is abused; rapido.bike and its API hosts are not).
+        if (abusedTlds.blocks(normalized) &&
+            !DomainZoneMatcher.anyMatch(normalized) { it in criticalDomains }) return true
+        val security = securityFilter
+        return security != null && matchesFilter(normalized, security)
+    }
+
+    /** One domain per line; blank lines and # comments ignored. */
+    internal fun parseDomainList(text: String): Set<String> =
+        text.lineSequence()
+            .map { it.substringBefore('#').trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { normalizeDomain(it) }
+            .toHashSet()
+
+    private fun loadFilter(context: Context, resId: Int): GrayzoneBloomFilter {
         val filter = context.resources.openRawResource(resId).use { stream ->
             GrayzoneBloomFilter.readFrom(stream)
         }
@@ -360,5 +416,5 @@ object BlocklistManager {
         DomainZoneMatcher.anyMatch(domain) { matchSet.contains(it) }
 
     private fun matchesFilter(domain: String, filter: GrayzoneBloomFilter): Boolean =
-        DomainZoneMatcher.anyMatch(domain) { filter.mightContain(it) }
+        DomainZoneMatcher.anyListedMatch(domain, criticalDomains) { filter.mightContain(it) }
 }

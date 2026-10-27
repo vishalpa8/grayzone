@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Modes:
-      (default)  Build Bloom filter binaries (adblock_bloom.bin, adult_bloom.bin)
-                 plus the bare-TLD block list (abused_tlds.txt)
-      -AdultOnly Skip ad sources, only rebuild the adult filter
+      (default)  Build Bloom filter binaries (adblock_bloom.bin, adult_bloom.bin,
+                 security_bloom.bin) plus the bare-TLD block list (abused_tlds.txt)
+      -AdultOnly Skip ad and security sources, only rebuild the adult filter
       -Probe     Health-check all source URLs and DoH bypass domains
 #>
 param(
@@ -30,42 +30,52 @@ try {
 # Many list hosts (e.g. pgl.yoyo.org) throttle or deny the default PowerShell UA.
 $UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GrayzoneBlocklistTools/1.0"
 
-$AD_BITS    = [long]50331648
-$ADULT_BITS = [long]33554432
-$K          = [int]10
+$K = [int]10
+# 20 bits per domain with k=10 gives a false-positive rate of ~0.009% (1 in ~11,000 lookups).
+# Filters are sized from their real domain count, so lists can grow without the rate creeping up.
+$BITS_PER_DOMAIN = 20
 
-$AD_MIN_TOTAL_DOMAINS    = 100000
-$ADULT_MIN_TOTAL_DOMAINS = 50000
-$MIN_ABUSED_TLDS         = 200
+$AD_MIN_TOTAL_DOMAINS       = 100000
+$ADULT_MIN_TOTAL_DOMAINS    = 50000
+$SECURITY_MIN_TOTAL_DOMAINS = 500000
+$MIN_ABUSED_TLDS            = 200
 
+$CriticalDomainsFile = "app\src\main\res\raw\critical_domains.txt"
+
+# HaGeZi lists must use wildcard/*-onlydomains.txt (plain domains); the old domains/*.txt paths
+# are gone, and adblock/* uses ||domain^ syntax.
 $AdSources = [ordered]@{
-    "HaGeZi Ultimate"        = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/ultimate.txt"; MinDomains = 10000 }
-    "HaGeZi Threat Intel"    = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt"; MinDomains = 1000 }
+    "HaGeZi Ultimate"        = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/ultimate-onlydomains.txt"; MinDomains = 10000 }
     "OISD Big"               = @{ Url = "https://big.oisd.nl/"; MinDomains = 10000 }
     "Block List Project Ads" = @{ Url = "https://blocklistproject.github.io/Lists/ads.txt"; MinDomains = 1000 }
     "StevenBlack Unified"    = @{ Url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"; MinDomains = 1000 }
     "Peter Lowe AdServers"   = @{ Url = "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"; MinDomains = 1000 }
 }
 
-# Extra security feeds merged into the ads bloom filter. Prefer HaGeZi
-# wildcard/*-onlydomains.txt (plain domains) over adblock/* (||domain^).
+# Malware, phishing, scam and C2 domains: their own filter (security_bloom.bin), reported as
+# threats in the app and also used to unmask CNAMEs that point at them.
 $SecuritySources = [ordered]@{
+    "HaGeZi Threat Intel"      = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif-onlydomains.txt"; MinDomains = 500000 }
+    "HaGeZi Fake (scam shops)" = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake-onlydomains.txt"; MinDomains = 1000 }
+    "HaGeZi Badware Hosters"   = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/hoster-onlydomains.txt"; MinDomains = 100 }
     # DynDNS hosts are commonly abused for phishing / malware C2.
-    "HaGeZi DynDNS"           = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/dyndns-onlydomains.txt"; MinDomains = 500 }
+    "HaGeZi DynDNS"            = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/dyndns-onlydomains.txt"; MinDomains = 500 }
     # Only the multi-label rows (e.g. co.com, dpdns.org) enter the filter here;
     # the ~430 bare TLDs go to res/raw/abused_tlds.txt instead, because a Bloom
     # false positive on a bare TLD would blackhole everything under it.
-    "HaGeZi Most Abused TLDs" = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/spam-tlds-onlydomains.txt"; MinDomains = 5 }
+    "HaGeZi Most Abused TLDs"  = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/spam-tlds-onlydomains.txt"; MinDomains = 5 }
+    "URLhaus (malware)"        = @{ Url = "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-hosts.txt"; MinDomains = 100 }
+    "Phishing Filter"          = @{ Url = "https://malware-filter.gitlab.io/malware-filter/phishing-filter-hosts.txt"; MinDomains = 1000 }
+    "Phishing Army Extended"   = @{ Url = "https://phishing.army/download/phishing_army_blocklist_extended.txt"; MinDomains = 10000 }
+    "Block List Project Phishing"   = @{ Url = "https://blocklistproject.github.io/Lists/phishing.txt"; MinDomains = 10000 }
+    "Block List Project Scam"       = @{ Url = "https://blocklistproject.github.io/Lists/scam.txt"; MinDomains = 1000 }
+    "Block List Project Ransomware" = @{ Url = "https://blocklistproject.github.io/Lists/ransomware.txt"; MinDomains = 500 }
 }
 
 $AbusedTldSourceUrl = $SecuritySources["HaGeZi Most Abused TLDs"].Url
 
 $AdultSources = [ordered]@{
-    # Must be Domains syntax (wildcard/*-onlydomains), not adblock/nsfw.txt —
-    # Adblock Plus ||domain^ lines are a different syntax from the domains/
-    # lists used elsewhere and are easy to mis-wire.
     "HaGeZi NSFW"             = @{ Url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/nsfw-onlydomains.txt"; MinDomains = 1000 }
-    "OISD NSFW"               = @{ Url = "https://nsfw.oisd.nl/"; MinDomains = 1000 }
     "Block List Project Porn" = @{ Url = "https://blocklistproject.github.io/Lists/porn.txt"; MinDomains = 1000 }
     "StevenBlack Porn"        = @{ Url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn/hosts"; MinDomains = 1000 }
 }
@@ -109,6 +119,12 @@ public static class BloomBuilder {
             if (idx < 0) idx += bitCount;
             bits[idx / 8] |= (byte)(1 << (int)(idx % 8));
         }
+    }
+
+    public static byte[] Build(System.Collections.Generic.IEnumerable<string> domains, long bitCount, int k) {
+        byte[] bits = new byte[(bitCount + 7) / 8];
+        foreach (string d in domains) AddDomain(bits, bitCount, k, d);
+        return bits;
     }
 
     public static string ParseDomain(string raw) {
@@ -232,14 +248,19 @@ function Invoke-Download([string]$Url, [switch]$Strict, [int]$MaxAttempts = 3) {
     return @()
 }
 
-function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label, [int]$MinTotalDomains) {
+function Read-CriticalDomains([string]$Path) {
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        $d = [BloomBuilder]::ParseDomain($line)
+        if ($d) { [void]$set.Add($d) }
+    }
+    if ($set.Count -lt 20) { throw "Critical domain list $Path has only $($set.Count) entries; refusing to build." }
+    return $set
+}
+
+function Build-Filter($Sources, [int]$NumHashes, [string]$Label, [int]$MinTotalDomains, $Critical) {
     Write-Host "[$Label] Building filter from $($Sources.Count) sources..." -ForegroundColor Yellow
-    # Ceiling division. Note: PowerShell "/" is floating point and [int] ROUNDS
-    # (banker's rounding), so the "+7)/8" idiom over-allocates by one byte when
-    # BitCount is already a multiple of 8. Use Math::Ceiling for an exact size.
-    $byteCount = [int][Math]::Ceiling($BitCount / 8.0)
-    $bits      = New-Object byte[] $byteCount
-    $seen      = New-Object 'System.Collections.Generic.HashSet[string]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
 
     foreach ($name in $Sources.Keys) {
         $source = $Sources[$name]
@@ -252,9 +273,7 @@ function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label
             $d = [BloomBuilder]::ParseDomain($line)
             if ($d) {
                 $parsed++
-                if ($seen.Add($d)) {
-                    [BloomBuilder]::AddDomain($bits, $BitCount, $NumHashes, $d)
-                }
+                [void]$seen.Add($d)
             }
         }
         $added = $seen.Count - $before
@@ -267,12 +286,23 @@ function Build-Filter($Sources, [long]$BitCount, [int]$NumHashes, [string]$Label
         Write-Host "  -> $($seen.Count) total unique so far (source parsed $parsed, +$added new)" -ForegroundColor DarkGray
     }
 
+    # The app ignores hits on these names anyway; dropping them keeps the filter honest and
+    # surfaces feeds that list a whole platform.
+    $dropped = @($Critical | Where-Object { $seen.Contains($_) })
+    foreach ($d in $dropped) { [void]$seen.Remove($d) }
+    if ($dropped.Count -gt 0) {
+        Write-Host "  Dropped critical domains listed by feeds: $($dropped -join ', ')" -ForegroundColor DarkYellow
+    }
+
     if ($seen.Count -lt $MinTotalDomains) {
         throw "[$Label] Total unique domains $($seen.Count) is below safety threshold $MinTotalDomains. Refusing to write filter."
     }
 
-    Write-Host "[$Label] $($seen.Count) unique domains inserted into filter" -ForegroundColor Green
-    return @{ Bits = $bits; Count = $seen.Count }
+    # Byte aligned (the app requires it).
+    $bitCount = [long]([Math]::Ceiling($seen.Count * $BITS_PER_DOMAIN / 8.0) * 8)
+    $bits = [BloomBuilder]::Build($seen, $bitCount, $NumHashes)
+    Write-Host "[$Label] $($seen.Count) unique domains inserted into filter ($bitCount bits)" -ForegroundColor Green
+    return @{ Bits = $bits; BitCount = $bitCount; Count = $seen.Count }
 }
 
 function Build-AbusedTldList([string]$Url, [int]$MinTlds) {
@@ -362,19 +392,20 @@ function Save-BloomFile([string]$Path, [byte[]]$Bits, [long]$BitCount, [int]$Num
     Write-FileAtomic $Path $payload
 }
 
-$AdBuildSources    = Merge-SourceTables @($AdSources, $SecuritySources)
 $AdultBuildSources = Merge-SourceTables @($AdultSources, $GamblingSources)
 
 if ($Probe) {
     Write-Host "`n=== Probing Blocklist Source URLs ===" -ForegroundColor Cyan
     $allSources = @()
-    foreach ($v in $AdBuildSources.Values)    { $allSources += $v }
+    foreach ($v in $AdSources.Values)         { $allSources += $v }
+    foreach ($v in $SecuritySources.Values)   { $allSources += $v }
     foreach ($v in $AdultBuildSources.Values) { $allSources += $v }
     $deadUrls = @()
     foreach ($source in $allSources) {
         $url = Get-SourceUrl $source
         try {
-            $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15 -Method Head -UserAgent $UserAgent
+            # GET, not HEAD: several list hosts reject HEAD requests.
+            $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 60 -UserAgent $UserAgent
             Write-Host "  OK   [$($r.StatusCode)] $url" -ForegroundColor Green
         } catch {
             $code = if ($_.Exception.Response) { $_.Exception.Response.StatusCode.value__ } else { "ERR" }
@@ -404,23 +435,27 @@ if ($Probe) {
 }
 
 Write-Host "`n=== Grayzone Bloom Filter Builder ===" -ForegroundColor Cyan
-Write-Host "FPR target ~0.1%  |  k=$K hashes  |  Ad bits=$AD_BITS  |  Adult bits=$ADULT_BITS`n" -ForegroundColor Gray
+Write-Host "FPR target ~0.009%  |  k=$K hashes  |  $BITS_PER_DOMAIN bits per domain`n" -ForegroundColor Gray
+
+$critical = Read-CriticalDomains $CriticalDomainsFile
 
 if (-not $AdultOnly) {
-    $ad = Build-Filter $AdBuildSources $AD_BITS $K "ADS" $AD_MIN_TOTAL_DOMAINS
-    Save-BloomFile (Join-Path $OutputDir "adblock_bloom.bin") $ad.Bits $AD_BITS $K
-    Write-Host "  $($ad.Count) domains encoded" -ForegroundColor Green
+    $ad = Build-Filter $AdSources $K "ADS" $AD_MIN_TOTAL_DOMAINS $critical
+    Save-BloomFile (Join-Path $OutputDir "adblock_bloom.bin") $ad.Bits $ad.BitCount $K
+
+    Write-Host ""
+    $security = Build-Filter $SecuritySources $K "SECURITY" $SECURITY_MIN_TOTAL_DOMAINS $critical
+    Save-BloomFile (Join-Path $OutputDir "security_bloom.bin") $security.Bits $security.BitCount $K
 
     Write-Host ""
     $tlds = Build-AbusedTldList $AbusedTldSourceUrl $MIN_ABUSED_TLDS
     Save-TldFile (Join-Path $OutputDir "abused_tlds.txt") $tlds
 } else {
-    Write-Host "[ADS] Skipped (-AdultOnly)" -ForegroundColor DarkGray
+    Write-Host "[ADS/SECURITY] Skipped (-AdultOnly)" -ForegroundColor DarkGray
 }
 
 Write-Host ""
-$adult = Build-Filter $AdultBuildSources $ADULT_BITS $K "ADULT" $ADULT_MIN_TOTAL_DOMAINS
-Save-BloomFile (Join-Path $OutputDir "adult_bloom.bin") $adult.Bits $ADULT_BITS $K
-Write-Host "  $($adult.Count) domains encoded" -ForegroundColor Green
+$adult = Build-Filter $AdultBuildSources $K "ADULT" $ADULT_MIN_TOTAL_DOMAINS $critical
+Save-BloomFile (Join-Path $OutputDir "adult_bloom.bin") $adult.Bits $adult.BitCount $K
 
 Write-Host "`nDone. Run: .\gradlew.bat installDebug" -ForegroundColor Cyan
