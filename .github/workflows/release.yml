@@ -52,10 +52,17 @@ jobs:
             echo "::warning::Not publishing: repository secret(s) missing or empty:${missing} (Settings > Secrets and variables > Actions > Repository secrets)"
             exit 0
           fi
-          printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d ' \r\n' | base64 -d > grayzone-release.jks
+          # Pasting often adds a trailing line break or spaces; neither is ever part of the values.
+          password="$(printf '%s' "${RELEASE_KEYSTORE_PASSWORD}" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if ! printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d ' \t\r\n' | base64 -d > grayzone-release.jks 2> /dev/null; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is not valid base64"
+            exit 1
+          fi
           printf 'storeFile=grayzone-release.jks\nstorePassword=%s\nkeyAlias=grayzone\nkeyPassword=%s\n' \
-            "${RELEASE_KEYSTORE_PASSWORD}" "${RELEASE_KEYSTORE_PASSWORD}" > keystore.properties
-          if ! keytool -list -keystore grayzone-release.jks -storepass "${RELEASE_KEYSTORE_PASSWORD}" -alias grayzone > /dev/null 2>&1; then
+            "${password}" "${password}" > keystore.properties
+          if ! keytool -list -keystore grayzone-release.jks -storepass "${password}" -alias grayzone > /dev/null 2>&1; then
+            # Size and hash prefix of the encrypted keystore reveal nothing, but tell a wrong file from a wrong password.
+            echo "Decoded keystore: $(stat -c %s grayzone-release.jks) bytes, sha256 $(sha256sum grayzone-release.jks | cut -c1-12); password length ${#password}"
             echo "::error::RELEASE_KEYSTORE_BASE64 / RELEASE_KEYSTORE_PASSWORD don't open the release key"
             exit 1
           fi
