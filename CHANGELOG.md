@@ -6,6 +6,12 @@ the number lives in `version.properties` and each release is tagged `vX.Y.Z`.
 VPN blocklists are versioned separately (a UTC timestamp such as `202610270634`) and update
 on the phone by themselves; see Settings → VPN settings → Blocklists.
 
+## [1.1.2] - 2026-10-27
+
+### Fixed
+- Exported logs no longer repeat an "exact alarms unavailable" warning on every VPN start and
+  session; the inexact alarm it described is the intended behaviour.
+
 ## [1.1.1] - 2026-10-27
 
 ### Changed
