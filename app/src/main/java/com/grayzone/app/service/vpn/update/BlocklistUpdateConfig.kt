@@ -15,7 +15,7 @@ object BlocklistUpdateConfig {
      * tampered file can never change what the VPN blocks.
      */
     const val PUBLIC_KEY =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEa8X7m43EHhJH99x+QWwKiF2OyviiE1xyk8mFHJiaEF+wcn0EnHZSrgkDi1MFY4+9QXHZbJlnoLWeSvXWl/QhEQ=="
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEc1dt7nbKrAYCHrkwbKDzro9xX8RuE8YAbJxJiAj5ItF5EtC2N5l1NaaKNNDZb+w1FF+i92iDLnY1CkC3/bHXyA=="
 
     /** Every list the VPN loads. A set is installed only when all of them are present and valid. */
     val FILES = listOf(

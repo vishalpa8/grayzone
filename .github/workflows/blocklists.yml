@@ -46,9 +46,29 @@ jobs:
             exit 1
           fi
           umask 077
-          printf '%s\n' "${BLOCKLIST_SIGNING_KEY}" > "${RUNNER_TEMP}/key.pem"
-          openssl dgst -sha256 -sign "${RUNNER_TEMP}/key.pem" -out dist/blocklist_manifest.sig dist/blocklist_manifest.txt
-          rm -f "${RUNNER_TEMP}/key.pem"
+          key="${RUNNER_TEMP}/key.pem"
+          pub="${RUNNER_TEMP}/pub.pem"
+          trap 'rm -f "${key}" "${pub}"' EXIT
+          # Rebuild a clean PEM whatever the paste did to it (CRLF, lost line breaks, spaces).
+          body="$(printf '%s' "${BLOCKLIST_SIGNING_KEY}" | tr -d '\r' \
+            | sed -e 's/-----BEGIN [A-Z ]*-----//g' -e 's/-----END [A-Z ]*-----//g' | tr -d ' \t\n')"
+          { echo "-----BEGIN PRIVATE KEY-----"; printf '%s' "${body}" | fold -w 64; echo; echo "-----END PRIVATE KEY-----"; } > "${key}"
+          if ! openssl pkey -in "${key}" -noout 2> /dev/null; then
+            echo "::error::BLOCKLIST_SIGNING_KEY is not a readable private key. Paste the whole blocklist-signing-key.pem file."
+            exit 1
+          fi
+
+          # A key the app doesn't trust would make every phone reject every update; refuse to publish.
+          expected="$(sed -n 's/.*"\(MFkw[A-Za-z0-9+\/=]*\)".*/\1/p' app/src/main/java/com/grayzone/app/service/vpn/update/BlocklistUpdateConfig.kt)"
+          actual="$(openssl pkey -in "${key}" -pubout -outform DER | base64 -w0)"
+          if [ -z "${expected}" ] || [ "${expected}" != "${actual}" ]; then
+            echo "::error::BLOCKLIST_SIGNING_KEY does not match BlocklistUpdateConfig.PUBLIC_KEY in the app"
+            exit 1
+          fi
+
+          openssl dgst -sha256 -sign "${key}" -out dist/blocklist_manifest.sig dist/blocklist_manifest.txt
+          openssl pkey -in "${key}" -pubout -out "${pub}"
+          openssl dgst -sha256 -verify "${pub}" -signature dist/blocklist_manifest.sig dist/blocklist_manifest.txt
 
       - name: Publish
         env:

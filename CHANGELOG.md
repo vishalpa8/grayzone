@@ -6,6 +6,13 @@ the number lives in `version.properties` and each release is tagged `vX.Y.Z`.
 VPN blocklists are versioned separately (a UTC timestamp such as `202610270634`) and update
 on the phone by themselves; see Settings → VPN settings → Blocklists.
 
+## [1.1.1] - 2026-10-27
+
+### Changed
+- Rotated the blocklist signing key.
+- The blocklist workflow accepts the signing key in any paste format and refuses to publish
+  with a key the app doesn't trust.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added
