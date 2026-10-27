@@ -28,16 +28,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Signing key
         env:
@@ -45,8 +45,11 @@ jobs:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${RELEASE_KEYSTORE_BASE64}" ] || [ -z "${RELEASE_KEYSTORE_PASSWORD}" ]; then
-            echo "::warning::Release signing secrets are not set; building without publishing"
+          missing=""
+          [ -n "${RELEASE_KEYSTORE_BASE64}" ] || missing="${missing} RELEASE_KEYSTORE_BASE64"
+          [ -n "${RELEASE_KEYSTORE_PASSWORD}" ] || missing="${missing} RELEASE_KEYSTORE_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::warning::Not publishing: repository secret(s) missing or empty:${missing} (Settings > Secrets and variables > Actions > Repository secrets)"
             exit 0
           fi
           printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d ' \r\n' | base64 -d > grayzone-release.jks
@@ -64,7 +67,7 @@ jobs:
           ./gradlew --no-daemon testGithubDebugUnitTest assembleGithubRelease bundlePlayRelease
 
       - name: Keep the build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: grayzone-${{ github.sha }}
           path: |
