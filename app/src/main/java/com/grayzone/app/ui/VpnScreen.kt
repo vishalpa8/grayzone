@@ -113,7 +113,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
             }
         } catch (e: Exception) {
             // F-211: OEM / work-profile builds may lack the VPN consent activity.
-            GrayzoneLogger.w(LogComponent.VPN, "VPN enable failed: ${e.message}", e)
+            GrayzoneLogger.w(LogComponent.VPN, "VPN enable failed", e)
             statusMessage = "Couldn't open VPN settings"
             android.widget.Toast.makeText(
                 context,
@@ -286,7 +286,7 @@ fun VpnScreen(onBack: (() -> Unit)? = null) {
                     Text(
                         "Note: Bloom filters may occasionally block legitimate domains (~0.1% false positive rate, " +
                         "or about 1 in 1,000 sites). If you encounter blocked sites that shouldn't be, " +
-                        "disable the VPN temporarily or report the domain.",
+                        "add it under VPN settings > Custom rules > Allow.",
                         color = GZTextSecondary,
                         fontSize = 11.sp,
                         lineHeight = 15.sp
@@ -487,7 +487,7 @@ private fun startVpnService(context: Context) {
             }
         )
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.VPN, "startVpnService failed: ${e.message}", e)
+        GrayzoneLogger.w(LogComponent.VPN, "startVpnService failed", e)
         android.widget.Toast.makeText(
             context,
             "Couldn't start VPN",
@@ -504,7 +504,7 @@ private fun stopVpnService(context: Context) {
             }
         )
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.VPN, "stopVpnService failed: ${e.message}", e)
+        GrayzoneLogger.w(LogComponent.VPN, "stopVpnService failed", e)
         android.widget.Toast.makeText(
             context,
             "Couldn't stop VPN",
@@ -521,6 +521,6 @@ fun refreshVpnNotification(context: Context) {
             }
         )
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.VPN, "refreshVpnNotification failed: ${e.message}", e)
+        GrayzoneLogger.w(LogComponent.VPN, "refreshVpnNotification failed", e)
     }
 }

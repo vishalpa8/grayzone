@@ -57,7 +57,7 @@ private fun copyFor(requirement: SetupRequirement) = when (requirement) {
  * A small popup that asks for exactly one permission. It floats over the normal app (never a
  * full-screen page) and can always be declined.
  *
- * @param position "Step n of m" shown during first-run setup; null when asked from a feature.
+ * @param position "Step n of m" for this pass; hidden when null or when the pass has one step.
  * @param onDecline the user said no (button or back press).
  * @param onChanged called when the answer may have changed (e.g. after the system dialog returns).
  */

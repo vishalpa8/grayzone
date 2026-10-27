@@ -85,7 +85,7 @@ object SessionExpiryScheduler {
         } catch (e: Exception) {
             GrayzoneLogger.w(
                 LogComponent.OVERLAY,
-                "Failed to cancel session expiry alarm for $packageName: ${e.message}"
+                "Failed to cancel session expiry alarm for $packageName", e
             )
         }
     }

@@ -6,13 +6,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -45,9 +45,11 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
     var isLoading by remember { mutableStateOf(cachedApps == null) }
     var searchQuery by remember { mutableStateOf("") }
     
-    var bypassApps by remember { 
-        mutableStateOf(prefs.getStringSet(PrefsKeys.VPN_BYPASS_APPS, emptySet())?.toSet() ?: emptySet()) 
+    var bypassApps by remember {
+        mutableStateOf(prefs.getStringSet(PrefsKeys.VPN_BYPASS_APPS, emptySet())?.toSet() ?: emptySet())
     }
+    // The list the running tunnel was built with; reload only when the screen's list differs.
+    var appliedSet by remember { mutableStateOf(bypassApps) }
 
     LaunchedEffect(Unit) {
         installedApps = getInstalledAppsCached(context)
@@ -55,23 +57,39 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
     }
 
     fun toggleBypass(pkg: String, bypass: Boolean) {
-        if (bypass && com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)) {
-            android.widget.Toast.makeText(
-                context,
-                "Apps can't skip the VPN while its 24-hour lock is on",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
         val newSet = if (bypass) bypassApps + pkg else bypassApps - pkg
         bypassApps = newSet
         prefs.edit().putStringSet(PrefsKeys.VPN_BYPASS_APPS, newSet).apply()
-        
-        // Re-apply bypass lists by sending RELOAD_RULES to bounce the VPN tunnel
-        if (prefs.getBoolean(PrefsKeys.VPN_ENABLED, false)) {
-            context.startService(Intent(context, AdBlockVpnService::class.java).apply {
-                action = AdBlockVpnService.ACTION_RELOAD_RULES
-            })
+    }
+
+    // Applying the list restarts the tunnel, so do it once when leaving the screen rather than
+    // on every toggle. "Leaving" includes Home / Recents (ON_STOP), not just Back: the usual case
+    // is enabling a banking app here and jumping straight into it.
+    fun applyIfChanged() {
+        val running = com.grayzone.app.data.ProtectionHealthRepository.status.value.vpnActive
+        if (com.grayzone.app.service.vpn.SplitTunnelPolicy.shouldReload(appliedSet, bypassApps, running)) {
+            try {
+                context.startService(Intent(context, AdBlockVpnService::class.java).apply {
+                    action = AdBlockVpnService.ACTION_RELOAD_RULES
+                })
+                com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Split tunneling changed; rebuilding the tunnel")
+            } catch (e: Exception) {
+                com.grayzone.app.GrayzoneLogger.w(com.grayzone.app.LogComponent.VPN, "Split tunnel reload failed", e)
+                return
+            }
+        }
+        appliedSet = bypassApps
+    }
+
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) applyIfChanged()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            applyIfChanged()
         }
     }
 
@@ -91,7 +109,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
         ScreenHeader(title = "Split tunneling", onBack = onBack)
         Column(modifier = Modifier.fillMaxWidth().padding(start = GZGutter, end = GZGutter, bottom = 12.dp)) {
             Text(
-                "Apps you turn on here skip the VPN entirely. Useful for banking or streaming apps that refuse VPNs.",
+                "Apps you turn on here skip the VPN completely, e.g. banking or streaming apps that refuse VPNs. You can change this any time; it only has an effect while the VPN is running, and changes apply when you leave this screen.",
                 color = GZTextSecondary,
                 fontSize = 13.sp
             )
@@ -142,7 +160,11 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { toggleBypass(app.packageName, !isBypassed) }
+                            .toggleable(
+                                value = isBypassed,
+                                role = androidx.compose.ui.semantics.Role.Switch,
+                                onValueChange = { toggleBypass(app.packageName, it) }
+                            )
                             .background(if (isBypassed) GZPrimaryContainer.copy(alpha = 0.35f) else Color.Transparent)
                             .padding(horizontal = GZGutter, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -151,7 +173,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                         if (icon != null) {
                             Image(
                                 bitmap = icon,
-                                contentDescription = app.name,
+                                contentDescription = null,
                                 modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
                             )
                         } else {
@@ -162,7 +184,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                             Text(app.name, color = GZTextPrimary, fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (isBypassed) {
                                 Text(
-                                    "Bypassing VPN",
+                                    "Skips the VPN",
                                     color = GZPrimary,
                                     fontSize = 12.sp,
                                     maxLines = 1,
@@ -172,7 +194,7 @@ fun SplitTunnelingScreen(onBack: () -> Unit) {
                         }
                         GZSwitch(
                             checked = isBypassed,
-                            onCheckedChange = { toggleBypass(app.packageName, it) }
+                            onCheckedChange = null
                         )
                     }
                     Divider(color = GZBorderSubtle, thickness = 0.5.dp, modifier = Modifier.padding(start = 80.dp, end = GZGutter))

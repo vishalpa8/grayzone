@@ -39,14 +39,18 @@ class GrayzoneApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // The :a11y process must NEVER touch prefs or WorkManager —
-        // SharedPreferences isn't multi-process safe.
-        if (Application.getProcessName() != packageName) return
-
+        // First, in every process, so crashes anywhere (incl. the accessibility process) are recorded.
+        val processName = Application.getProcessName()
+        GrayzoneLogger.init(this, processName)
         GrayzoneLogger.i(
             LogComponent.BOOT,
-            "Grayzone ${BuildConfig.VERSION_NAME} starting on ${android.os.Build.MODEL}"
+            "Grayzone ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}) starting in $processName " +
+                "on ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}"
         )
+
+        // The :a11y process must NEVER touch prefs or WorkManager —
+        // SharedPreferences isn't multi-process safe.
+        if (processName != packageName) return
 
         // Force-stop strips Accessibility in Settings; sync health before UI/services assume it is on.
         com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(
@@ -73,7 +77,7 @@ class GrayzoneApplication : Application() {
             try {
                 StreakEvaluator.run(this@GrayzoneApplication)
             } catch (e: Exception) {
-                GrayzoneLogger.w(LogComponent.BOOT, "Streak catch-up on start failed: ${e.message}")
+                GrayzoneLogger.w(LogComponent.BOOT, "Streak catch-up on start failed", e)
             }
         }
     }
@@ -192,7 +196,7 @@ class GrayzoneApplication : Application() {
                 "Scheduled weekly database cleanup"
             )
         } catch (e: Exception) {
-            GrayzoneLogger.w(LogComponent.CLEANUP, "Failed to schedule cleanup: ${e.message}")
+            GrayzoneLogger.w(LogComponent.CLEANUP, "Failed to schedule cleanup", e)
         }
     }
 }

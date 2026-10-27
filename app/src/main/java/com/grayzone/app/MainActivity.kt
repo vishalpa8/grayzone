@@ -6,15 +6,14 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -101,7 +100,7 @@ private fun reconcileVpnState(
     val consentIntent = try {
         android.net.VpnService.prepare(context)
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.BOOT, "VpnService.prepare failed during reconcile: ${e.message}")
+        GrayzoneLogger.w(LogComponent.BOOT, "VpnService.prepare failed during reconcile", e)
         ProtectionHealthRepository.markVpnReconnectPending(true)
         return
     }
@@ -116,7 +115,7 @@ private fun reconcileVpnState(
             } catch (e: Exception) {
                 GrayzoneLogger.w(
                     LogComponent.BOOT,
-                    "VPN consent activity unavailable: ${e.message}"
+                    "VPN consent activity unavailable", e
                 )
             }
         }
@@ -147,6 +146,23 @@ private fun resumeVpn(context: Context) {
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
+/** Process-wide, so recreating the activity (rotation) doesn't re-log an unchanged state. */
+private var lastLoggedNotificationsOn: Boolean? = null
+
+/** Saves a [PermissionWalk] as its step and declined names. */
+private val PermissionWalkSaver = androidx.compose.runtime.saveable.listSaver<PermissionWalk?, String>(
+    save = { walk ->
+        if (walk == null) emptyList()
+        else listOf(walk.steps.joinToString(",") { it.name }, walk.declined.joinToString(",") { it.name })
+    },
+    restore = { saved ->
+        fun parse(value: String) = value.split(",").mapNotNull { name ->
+            SetupRequirement.values().firstOrNull { it.name == name }
+        }
+        if (saved.size < 2) null
+        else PermissionWalk(parse(saved[0]), parse(saved[1]).toSet()).takeIf { it.steps.isNotEmpty() }
+    }
+)
 enum class Tab { HOME, APPS, VPN, LIMITS, SETTINGS }
 
 /**
@@ -179,8 +195,10 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
             .toSet()
 
     var missingNow by remember { mutableStateOf(readMissing()) }
-    var walk by remember { mutableStateOf<PermissionWalk?>(null) }
-    var reason by remember { mutableStateOf(WalkReason.FIRST_RUN) }
+    // Saved across rotation / process death so a popup in progress (incl. the once-per-loss
+    // recovery popup) isn't silently lost. The pending feature action can't be saved; see finish().
+    var walk by rememberSaveable(stateSaver = PermissionWalkSaver) { mutableStateOf<PermissionWalk?>(null) }
+    var reason by rememberSaveable { mutableStateOf(WalkReason.FIRST_RUN) }
     var onGranted by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     fun begin(newReason: WalkReason, exclude: Set<SetupRequirement> = emptySet(), action: (() -> Unit)?): Boolean {
@@ -188,6 +206,7 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
         reason = newReason
         onGranted = action
         walk = next
+        GrayzoneLogger.i(LogComponent.PERMISSIONS, "Permission popups started ($newReason): ${next.steps.joinToString()}")
         return true
     }
 
@@ -195,12 +214,26 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
         val action = onGranted
         walk = null
         onGranted = null
+        GrayzoneLogger.i(
+            LogComponent.PERMISSIONS,
+            "Permission popups finished ($reason): " +
+                if (finished.succeeded(missingNow)) "all granted" else "still missing ${finished.steps.filter { it in missingNow }.joinToString()}"
+        )
         when (reason) {
             WalkReason.FIRST_RUN ->
                 prefs.edit().putBoolean(PrefsKeys.ONBOARDING_COMPLETED, true).apply()
             WalkReason.FEATURE, WalkReason.RECOVERY -> {
                 if (finished.succeeded(missingNow)) {
-                    action?.invoke()
+                    if (action != null) {
+                        action()
+                    } else if (reason == WalkReason.FEATURE) {
+                        // The app was recreated mid-walk, so the feature's action is gone.
+                        android.widget.Toast.makeText(
+                            context,
+                            "Permissions allowed — tap it again to turn it on",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
                     startMonitoringIfReady(context)
                 } else {
                     // Counts as "asked for this loss", so the recovery popup does not pop straight back.
@@ -284,11 +317,14 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
             requirement = requirement,
             position = active.position(requirement),
             onDecline = {
+                // Back press + Decline in the same frame: the second must not revive a finished walk.
+                if (walk !== active) return@PermissionPrompt
                 if (reason == WalkReason.FIRST_RUN) {
                     prefs.edit()
                         .putStringSet(PrefsKeys.SETUP_SKIPPED, skipped().map { it.name }.toSet() + requirement.name)
                         .apply()
                 }
+                GrayzoneLogger.i(LogComponent.PERMISSIONS, "Permission declined: $requirement")
                 walk = active.decline(requirement)
                 refresh()
             },
@@ -327,7 +363,7 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                     } catch (e: Exception) {
                         GrayzoneLogger.e(
                             LogComponent.OVERLAY,
-                            "Failed to restart OverlayService on resume: ${e.message}"
+                            "Failed to restart OverlayService on resume", e
                         )
                         ProtectionHealthRepository.updateOverlayStatus(false)
                     }
@@ -336,12 +372,17 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
                 }
                 // Silent only — never offer consent here (would re-prompt after the dialog returns).
                 reconcileVpnState(context, offerConsent = null)
-                // F-086: re-check notifications on every resume (not only the one-shot request).
-                if (!areAppNotificationsEnabled(context)) {
-                    GrayzoneLogger.w(
-                        LogComponent.BOOT,
-                        "Notifications disabled — ongoing protection notification may be hidden"
-                    )
+                // F-086: re-check notifications on every resume, but only log when it changes.
+                val notificationsOn = areAppNotificationsEnabled(context)
+                val previous = lastLoggedNotificationsOn
+                if (notificationsOn != previous) {
+                    lastLoggedNotificationsOn = notificationsOn
+                    if (notificationsOn) {
+                        // First observation in this process: nothing changed, nothing to say.
+                        if (previous != null) GrayzoneLogger.i(LogComponent.PERMISSIONS, "Notifications allowed")
+                    } else {
+                        GrayzoneLogger.w(LogComponent.PERMISSIONS, "Notifications are off; the session timer and status can't be shown")
+                    }
                 }
             }
         }

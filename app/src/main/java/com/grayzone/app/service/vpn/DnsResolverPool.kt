@@ -77,13 +77,18 @@ class DnsResolverPool(
                         response
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                reusable = false
+                throw e
             } catch (e: Exception) {
                 // The socket may be in an undefined state after an unexpected error;
                 // don't return it to the pool.
                 reusable = false
-                com.grayzone.app.GrayzoneLogger.w(
+                // Per query and per server, so offline this would flood the log; the VPN logs one
+                // rate-limited "all upstream servers failed" line instead.
+                com.grayzone.app.GrayzoneLogger.d(
                     com.grayzone.app.LogComponent.DNS,
-                    "DNS query failed (e.message sanitized)"
+                    "Upstream DNS query failed (${e.javaClass.simpleName}: ${e.message})"
                 )
                 null
             } finally {
@@ -155,9 +160,9 @@ class DnsResolverPool(
         try {
             socket.close()
         } catch (e: Exception) {
-            com.grayzone.app.GrayzoneLogger.w(
+            com.grayzone.app.GrayzoneLogger.d(
                 com.grayzone.app.LogComponent.DNS,
-                "socket.close failed ($reason): ${e.message}"
+                "socket.close failed ($reason): ${e.javaClass.simpleName}"
             )
         }
     }

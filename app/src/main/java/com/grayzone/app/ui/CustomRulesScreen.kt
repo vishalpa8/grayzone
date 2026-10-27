@@ -9,9 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -56,6 +54,14 @@ fun CustomRulesScreen(onBack: () -> Unit) {
             .background(GZBackground)
     ) {
         ScreenHeader(title = "Custom rules", onBack = onBack)
+        Text(
+            "Block or allow a domain and all its subdomains. Allow overrides the ad, tracker and adult lists " +
+                "(encrypted-DNS servers stay blocked). Rules apply right away while the VPN is on; an app with " +
+                "an open connection may keep using it until it reconnects.",
+            color = GZTextSecondary,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(start = GZGutter, end = GZGutter, bottom = 8.dp)
+        )
 
         TabRow(
             selectedTabIndex = currentTab,
@@ -112,14 +118,8 @@ fun CustomRulesScreen(onBack: () -> Unit) {
             Button(
                 onClick = {
                     val normalized = BlocklistManager.normalizeDomain(newDomain)
-                    val held = currentTab == 1 &&
-                        com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)
-                    inputError = when {
-                        normalized == null -> "That doesn't look like a domain, e.g. example.com"
-                        held -> "Domains can't be allowed while the VPN's 24-hour lock is on"
-                        else -> null
-                    }
-                    if (normalized != null && !held) {
+                    inputError = if (normalized == null) "That doesn't look like a domain, e.g. example.com" else null
+                    if (normalized != null) {
                         if (currentTab == 0 && !denylist.contains(normalized)) {
                             denylist = denylist + normalized
                             saveRules()
@@ -157,7 +157,7 @@ fun CustomRulesScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = GZGutter, vertical = 8.dp)
             ) {
-                items(currentList.sorted()) { domain ->
+                items(currentList.sorted(), key = { it }) { domain ->
                     GZCard(
                         modifier = Modifier.padding(vertical = 4.dp)
                     ) {
@@ -176,11 +176,6 @@ fun CustomRulesScreen(onBack: () -> Unit) {
                             IconButton(
                                 onClick = {
                                     if (currentTab == 0) {
-                                        // Un-blocking a domain loosens filtering, so the hold refuses it.
-                                        if (com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)) {
-                                            inputError = "Blocked domains can't be removed while the VPN's 24-hour lock is on"
-                                            return@IconButton
-                                        }
                                         denylist = denylist - domain
                                     } else {
                                         allowlist = allowlist - domain

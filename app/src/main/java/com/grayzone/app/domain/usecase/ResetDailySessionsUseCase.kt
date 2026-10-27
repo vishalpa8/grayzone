@@ -22,7 +22,7 @@ class ResetDailySessionsUseCase @Inject constructor(
         try {
             StreakEvaluator.run(context)
         } catch (e: Exception) {
-            GrayzoneLogger.w(LogComponent.OVERLAY, "Midnight streak catch-up failed: ${e.message}")
+            GrayzoneLogger.w(LogComponent.OVERLAY, "Midnight streak catch-up failed", e)
         }
         
         return true

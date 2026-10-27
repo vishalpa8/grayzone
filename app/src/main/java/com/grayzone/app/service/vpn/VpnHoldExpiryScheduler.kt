@@ -72,7 +72,7 @@ object VpnHoldExpiryScheduler {
         try {
             alarmManager(context).cancel(pendingIntent(context))
         } catch (e: Exception) {
-            GrayzoneLogger.w(LogComponent.VPN, "Failed to cancel VPN hold expiry alarm: ${e.message}")
+            GrayzoneLogger.w(LogComponent.VPN, "Failed to cancel VPN hold expiry alarm", e)
         }
     }
 

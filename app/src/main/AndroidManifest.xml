@@ -12,6 +12,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Resolves the home app so returning to the home screen counts as leaving an app. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
     </queries>
 
     <!-- Permissions requested for Grayzone overlay and services -->
@@ -104,6 +109,17 @@
             android:name=".service.vpn.VpnHoldExpiryReceiver"
             android:enabled="true"
             android:exported="false" />
+
+        <!-- Shares the exported log file (Settings > Export logs); scoped to cache/logs only. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".service.vpn.AdBlockVpnService"

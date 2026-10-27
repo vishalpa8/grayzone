@@ -69,14 +69,6 @@ fun VpnSettingsScreen(
                     GZSwitch(
                         checked = blockTelemetry,
                         onCheckedChange = {
-                            if (!it && com.grayzone.app.service.vpn.VpnHoldLockStore.isHoldEngaged(context)) {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Can't be turned off while the VPN's 24-hour lock is on",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                                return@GZSwitch
-                            }
                             blockTelemetry = it
                             prefs.edit().putBoolean(PrefsKeys.VPN_BLOCK_TELEMETRY, it).apply()
                             BlocklistManager.reloadCustomRules(context)

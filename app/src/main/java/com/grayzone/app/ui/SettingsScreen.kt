@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.Lock
@@ -65,6 +66,7 @@ fun SettingsScreen(
     var lockoutMinutes by remember(vmLockoutMinutes) { mutableIntStateOf(vmLockoutMinutes.coerceIn(ConfigValidator.LOCKOUT_MINUTES_RANGE)) }
 
     var showCustomPrompts by remember { mutableStateOf(false) }
+    var exportingLogs by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }
 
     var monitoredApps by remember {
@@ -205,12 +207,28 @@ fun SettingsScreen(
 
         SectionLabel("About", Modifier.padding(start = GZGutter + 4.dp, top = 8.dp))
         GZCard(modifier = Modifier.padding(horizontal = GZGutter)) {
-            SettingsRow(
-                title = "Share Grayzone",
-                subtitle = "Send the Play Store link to a friend",
-                icon = Icons.Filled.Share,
-                onClick = { shareApp(context) }
-            )
+            Column {
+                SettingsRow(
+                    title = "Share Grayzone",
+                    subtitle = "Send the Play Store link to a friend",
+                    icon = Icons.Filled.Share,
+                    onClick = { shareApp(context) }
+                )
+                RowDivider(startIndent = 68)
+                SettingsRow(
+                    title = "Export logs",
+                    subtitle = if (exportingLogs) "Preparing…" else "Share a diagnostic log to report a problem",
+                    icon = Icons.Filled.BugReport,
+                    enabled = !exportingLogs,
+                    onClick = {
+                        // A second tap before recomposition would start a second export of the same file.
+                        if (!exportingLogs) {
+                            exportingLogs = true
+                            com.grayzone.app.logging.LogExporter.exportAndShare(context) { exportingLogs = false }
+                        }
+                    }
+                )
+            }
         }
 
         Text(

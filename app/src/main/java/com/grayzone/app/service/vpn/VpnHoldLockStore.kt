@@ -31,6 +31,7 @@ object VpnHoldLockStore {
             .putLong(PrefsKeys.VPN_HOLD_STARTED_WALL, nowWallMs)
             .putLong(PrefsKeys.VPN_HOLD_STARTED_ELAPSED, nowElapsedMs)
             .apply()
+        com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "VPN 24h hold started")
     }
 
     fun clear(prefs: SharedPreferences) {
@@ -41,14 +42,4 @@ object VpnHoldLockStore {
     }
 
     fun clear(context: Context) = clear(prefs(context))
-
-    /**
-     * True while the VPN is on and its 24h hold is running. Settings that would weaken filtering
-     * (bypass apps, allow-list entries, turning telemetry blocking off) are refused meanwhile.
-     */
-    fun isHoldEngaged(context: Context): Boolean {
-        val p = prefs(context)
-        if (!p.getBoolean(PrefsKeys.VPN_ENABLED, false)) return false
-        return VpnHoldLock.isHoldActive(read(p), System.currentTimeMillis(), SystemClock.elapsedRealtime())
-    }
 }

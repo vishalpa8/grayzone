@@ -4,7 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
-import android.util.Log
+import com.grayzone.app.GrayzoneLogger
+import com.grayzone.app.LogComponent
 import com.grayzone.app.PrefsKeys
 import com.grayzone.app.service.vpn.AdBlockVpnService
 import com.grayzone.app.service.vpn.VpnHoldExpiryScheduler
@@ -29,7 +30,7 @@ class BootReceiver : BroadcastReceiver() {
         val receivedAction = intent.action ?: return
         if (receivedAction !in BOOT_ACTIONS) return
 
-        Log.d(TAG, "Boot detected ($receivedAction); restarting Grayzone services")
+        GrayzoneLogger.i(LogComponent.BOOT, "Boot detected ($receivedAction); restoring services")
 
         val prefs = context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -40,16 +41,16 @@ class BootReceiver : BroadcastReceiver() {
         if (com.grayzone.app.isMonitoringEnabled(context)) {
             try {
                 context.startForegroundService(Intent(context, OverlayService::class.java))
-                Log.d(TAG, "OverlayService restart requested")
+                GrayzoneLogger.i(LogComponent.BOOT, "Monitoring service restart requested")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start OverlayService: ${e.message}")
+                GrayzoneLogger.e(LogComponent.BOOT, "Failed to restart the monitoring service after boot", e)
             }
         }
 
         // F-010: BootReceiver cannot restart the :a11y process — surface the gap in health state.
         if (!com.grayzone.app.isAccessibilityServiceEnabled(context)) {
             com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
-            Log.w(TAG, "Accessibility service not enabled after boot — protection incomplete")
+            GrayzoneLogger.w(LogComponent.BOOT, "Accessibility is off after boot; monitoring cannot run until it is re-enabled")
         }
 
         // Only restart AdBlockVpnService if the user previously enabled the VPN.
@@ -61,7 +62,7 @@ class BootReceiver : BroadcastReceiver() {
             if (holdState.isTracked && !VpnHoldLock.isHoldActive(holdState, nowWall, nowElapsed)) {
                 prefs.edit().putBoolean(PrefsKeys.VPN_ENABLED, false).apply()
                 VpnHoldLockStore.clear(prefs)
-                Log.d(TAG, "VPN hold expired across reboot — cleared enable flag, not restarting")
+                GrayzoneLogger.i(LogComponent.VPN, "VPN 24h hold expired across reboot; VPN left off")
                 return
             }
             // F-012: re-arm hold expiry for every still-active hold outcome (consent missing /
@@ -76,11 +77,11 @@ class BootReceiver : BroadcastReceiver() {
             val consentNeeded = try {
                 android.net.VpnService.prepare(context) != null
             } catch (e: Exception) {
-                Log.e(TAG, "VpnService.prepare failed during boot restore; VPN intent preserved: ${e.message}")
+                GrayzoneLogger.e(LogComponent.VPN, "VpnService.prepare failed after boot; VPN will resume on next app launch", e)
                 return
             }
             if (consentNeeded) {
-                Log.d(TAG, "VPN consent missing at boot — skipping restart, intent preserved")
+                GrayzoneLogger.w(LogComponent.VPN, "VPN consent missing after boot; VPN will resume once consent is granted")
                 return
             }
             try {
@@ -88,16 +89,14 @@ class BootReceiver : BroadcastReceiver() {
                     action = AdBlockVpnService.ACTION_START
                 }
                 context.startForegroundService(vpnIntent)
-                Log.d(TAG, "AdBlockVpnService restart requested")
+                GrayzoneLogger.i(LogComponent.VPN, "VPN restart requested after boot")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start AdBlockVpnService; restore intent preserved: ${e.message}")
+                GrayzoneLogger.e(LogComponent.VPN, "Failed to restart the VPN after boot; it will retry on next app launch", e)
             }
         }
     }
 
     companion object {
-        private const val TAG = "GrayzoneBootReceiver"
-
         private val BOOT_ACTIONS = setOf(
             "android.intent.action.BOOT_COMPLETED",
             "android.intent.action.QUICKBOOT_POWERON",

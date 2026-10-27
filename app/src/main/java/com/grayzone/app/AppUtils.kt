@@ -115,7 +115,7 @@ fun isAccessibilityServiceEnabled(context: Context): Boolean {
     } catch (e: Exception) {
         GrayzoneLogger.w(
             LogComponent.ACCESSIBILITY,
-            "Failed to read accessibility enabled state: ${e.message}"
+            "Failed to read accessibility enabled state", e
         )
         false
     }
@@ -162,7 +162,7 @@ fun startMonitoringIfReady(context: Context) {
     try {
         context.startForegroundService(Intent(context, com.grayzone.app.service.OverlayService::class.java))
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.OVERLAY, "Could not start monitoring: ${e.message}")
+        GrayzoneLogger.w(LogComponent.OVERLAY, "Could not start monitoring", e)
     }
 }
 
@@ -172,24 +172,13 @@ fun isMonitoringEnabled(context: Context): Boolean =
         .getBoolean(PrefsKeys.GRAYZONE_ENABLED, false)
 
 /**
- * Opens the exact system page for [requirement] (e.g. Grayzone's own Accessibility page, not the
- * generic list). Falls back to a broader page, then App info, on phones that lack the exact one.
+ * Opens the most specific system page for [requirement]. Falls back to a broader page, then
+ * App info, on phones that lack it.
  */
 fun openSettingsFor(context: Context, requirement: SetupRequirement, logTag: String): Boolean {
+    // No ACCESSIBILITY_DETAILS_SETTINGS: it needs a system-only permission and is refused for
+    // regular apps; the list page (with the highlight extras) is the most direct option.
     val candidates = buildList {
-        if (requirement == SetupRequirement.ACCESSIBILITY && Build.VERSION.SDK_INT >= 34) {
-            // Android 14+: the details page of this one service (toggle + description).
-            add(
-                Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
-                    putExtra(
-                        Intent.EXTRA_COMPONENT_NAME,
-                        android.content.ComponentName(
-                            context, com.grayzone.app.service.GrayzoneAccessibilityService::class.java
-                        ).flattenToString()
-                    )
-                }
-            )
-        }
         add(settingsIntentFor(context, requirement))
         if (requirement == SetupRequirement.BATTERY) {
             add(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
@@ -238,7 +227,8 @@ fun startActivitySafely(
         context.startActivity(intent)
         true
     } catch (e: Exception) {
-        GrayzoneLogger.w(LogComponent.BOOT, "$logTag failed: ${e.message}", e)
+        // Missing settings screens are an OEM fact, not a bug: the type is enough, no stack trace.
+        GrayzoneLogger.w(LogComponent.UI, "$logTag failed: ${e.javaClass.simpleName}")
         if (showToast) {
             Toast.makeText(context, "Couldn't open settings", Toast.LENGTH_SHORT).show()
         }

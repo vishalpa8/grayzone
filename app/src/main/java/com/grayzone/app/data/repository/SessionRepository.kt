@@ -2,6 +2,8 @@ package com.grayzone.app.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.grayzone.app.GrayzoneLogger
+import com.grayzone.app.LogComponent
 import com.grayzone.app.PrefsKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,8 +28,12 @@ class SessionRepository @Inject constructor(
     val monitoredApps: StateFlow<Set<String>> = _monitoredApps.asStateFlow()
 
     fun setGrayzoneEnabled(enabled: Boolean) {
+        val changed = _grayzoneEnabled.value != enabled
         prefs.edit().putBoolean(PrefsKeys.GRAYZONE_ENABLED, enabled).apply()
         _grayzoneEnabled.value = enabled
+        if (changed) {
+            GrayzoneLogger.i(LogComponent.SESSION, "Monitoring turned ${if (enabled) "on" else "off"} by the user")
+        }
     }
 
     fun isAppLocked(packageName: String): Boolean {

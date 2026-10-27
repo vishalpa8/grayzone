@@ -68,7 +68,7 @@ fun HomeScreen() {
                     } catch (e: Exception) {
                         com.grayzone.app.GrayzoneLogger.w(
                             com.grayzone.app.LogComponent.DATABASE,
-                            "Streak evaluation from Home failed: ${e.message}"
+                            "Streak evaluation from Home failed", e
                         )
                     }
                 }

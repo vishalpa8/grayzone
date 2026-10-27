@@ -56,7 +56,7 @@ class ScheduleManager(private val context: Context) {
                 rule.copy(enabled = rule.isEffectivelyEnabled())
             })
         } catch (e: Exception) {
-            android.util.Log.e("ScheduleManager", "Failed to parse SCHEDULE_RULES_JSON; refusing to overwrite", e)
+            com.grayzone.app.GrayzoneLogger.e(com.grayzone.app.LogComponent.SCHEDULE, "Schedule rules are corrupt; refusing to overwrite them", e)
             RulesLoad.Corrupt
         }
     }

@@ -1,13 +1,11 @@
 package com.grayzone.app.service.vpn
 
 import android.content.Context
-import android.util.Log
 import com.grayzone.app.R
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 object BlocklistManager {
-    private const val TAG = "BlocklistManager"
 
     // Bloom filters replace the old 120 MB HashSet<String> approach.
     // Shipped filters are ~6 MB (ads) and ~4 MB (adult) on disk/RAM, targeting a
@@ -20,8 +18,8 @@ object BlocklistManager {
     private var abusedTlds: AbusedTldList = AbusedTldList.EMPTY
 
     // Custom Rules
-    private var customAllowlist: Set<String> = emptySet()
-    private var customDenylist: Set<String> = emptySet()
+    @Volatile private var customAllowlist: Set<String> = emptySet()
+    @Volatile private var customDenylist: Set<String> = emptySet()
     @Volatile private var blockTelemetry: Boolean = false
 
     // Hardcoded allowlist for domains that are frequently flagged as false-positives 
@@ -52,8 +50,8 @@ object BlocklistManager {
         "app-measurement.com",
         "crashlytics.com",
         "device-metrics-us.amazon.com",
-        "graph.facebook.com",
-        "graph.instagram.com",
+        // Not graph.facebook.com / graph.instagram.com: those are the apps' main APIs, and
+        // blocking them stops Facebook and Instagram from loading at all.
         "telemetry.microsoft.com",
         "vortex.data.microsoft.com"
     )
@@ -203,7 +201,7 @@ object BlocklistManager {
             customDenylist = prefs.getStringSet(com.grayzone.app.PrefsKeys.VPN_CUSTOM_DENYLIST, emptySet())?.mapNotNull { normalizeDomain(it) }?.toSet() ?: emptySet()
         }
         blockTelemetry = prefs.getBoolean(com.grayzone.app.PrefsKeys.VPN_BLOCK_TELEMETRY, false)
-        Log.d(TAG, "Reloaded custom rules. Allow: ${customAllowlist.size}, Deny: ${customDenylist.size}, TelemetryBlock: $blockTelemetry")
+        com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Rules applied: ${customAllowlist.size} allowed, ${customDenylist.size} blocked, telemetry blocking ${if (blockTelemetry) "on" else "off"}")
     }
 
     fun load(context: Context) {
@@ -215,6 +213,7 @@ object BlocklistManager {
                 adultFilter = loadFilter(context, R.raw.adult_bloom,   "adult")
                 abusedTlds  = loadAbusedTlds(context)
                 isLoaded = true
+                com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "Blocklists loaded (ads, adult, ${abusedTlds.size} TLDs)")
             } catch (e: Exception) {
                 // F-026: do not swallow Errors (e.g. OutOfMemoryError) — let them propagate.
                 adFilter = null
@@ -336,7 +335,6 @@ object BlocklistManager {
         val filter = context.resources.openRawResource(resId).use { stream ->
             GrayzoneBloomFilter.readFrom(stream)
         }
-        Log.d(TAG, "Loaded $label bloom filter")
         return filter
     }
 
@@ -344,7 +342,6 @@ object BlocklistManager {
         val list = context.resources.openRawResource(R.raw.abused_tlds).use { stream ->
             AbusedTldList.readFrom(stream)
         }
-        Log.d(TAG, "Loaded ${list.size} abused TLDs")
         return list
     }
 

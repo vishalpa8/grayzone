@@ -157,11 +157,8 @@ object DnsPacketHelper {
             return sb.toString()
         } catch (e: Exception) {
             domainParseErrors.incrementAndGet()
-            GrayzoneLogger.w(
-                LogComponent.DNS,
-                "Failed to parse domain name from DNS packet: ${e.message}",
-                e
-            )
+            // Malformed packets come from apps/the network; not an app failure, so debug only.
+            GrayzoneLogger.d(LogComponent.DNS, "Unparseable DNS question (${e.javaClass.simpleName})")
             return null
         }
     }
@@ -214,7 +211,7 @@ object DnsPacketHelper {
             nxdomainCreationErrors.incrementAndGet()
             GrayzoneLogger.e(
                 LogComponent.DNS,
-                "Failed to create NXDOMAIN response (IPv4): ${e.message}",
+                "Failed to create NXDOMAIN response (IPv4)",
                 e
             )
             return null
@@ -292,7 +289,7 @@ object DnsPacketHelper {
             responseWrapErrors.incrementAndGet()
             GrayzoneLogger.e(
                 LogComponent.DNS,
-                "Failed to wrap DNS response (IPv4): ${e.message}",
+                "Failed to wrap DNS response (IPv4)",
                 e
             )
             return null
@@ -333,7 +330,7 @@ object DnsPacketHelper {
             nxdomainCreationErrors.incrementAndGet()
             GrayzoneLogger.e(
                 LogComponent.DNS,
-                "Failed to create NXDOMAIN response (IPv6): ${e.message}",
+                "Failed to create NXDOMAIN response (IPv6)",
                 e
             )
             return null
@@ -389,7 +386,7 @@ object DnsPacketHelper {
             responseWrapErrors.incrementAndGet()
             GrayzoneLogger.e(
                 LogComponent.DNS,
-                "Failed to wrap DNS response (IPv6): ${e.message}",
+                "Failed to wrap DNS response (IPv6)",
                 e
             )
             return null

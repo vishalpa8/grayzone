@@ -9,7 +9,6 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.grayzone.app.MainActivity
 import com.grayzone.app.R
@@ -21,7 +20,6 @@ import kotlinx.coroutines.*
 class AdBlockVpnService : VpnService() {
 
     companion object {
-        const val TAG = "AdBlockVpnService"
         const val ACTION_START = "com.grayzone.app.START_VPN"
         const val ACTION_STOP = "com.grayzone.app.STOP_VPN"
         /** Alarm-driven stop after the 24h hold expires (always authorized). */
@@ -30,7 +28,8 @@ class AdBlockVpnService : VpnService() {
         const val ACTION_REFRESH_NOTIFICATION = "com.grayzone.app.REFRESH_VPN_NOTIFICATION"
         /** Reload custom blocklist rules dynamically. */
         const val ACTION_RELOAD_RULES = "com.grayzone.app.RELOAD_RULES"
-        const val NOTIF_ID = 2
+        /** Must not reuse OverlayService's ids (1 protection, 2 recovery, 3 countdown). */
+        const val NOTIF_ID = 4
         const val CHANNEL_ID = "adblock_vpn_channel"
 
         @Volatile
@@ -49,41 +48,6 @@ class AdBlockVpnService : VpnService() {
 
         private const val DNS_TIMEOUT_MS = 2000
 
-        /**
-         * Apps excluded from the VPN tunnel by default.
-         *
-         * Payment/banking apps often refuse to work while a VPN is active
-         * (fraud detection), and streaming apps can fail DRM/CDN checks or
-         * break when their telemetry domains resolve to NXDOMAIN. Excluding
-         * them routes their traffic (including DNS) outside the tunnel, so
-         * they behave exactly as if the VPN were off.
-         */
-        private val DEFAULT_BYPASS_APPS = listOf(
-            // Payments / UPI / banking
-            "com.google.android.apps.nbu.paisa.user",  // Google Pay
-            "com.google.android.apps.walletnfcrel",    // Google Wallet
-            "com.phonepe.app",                         // PhonePe
-            "net.one97.paytm",                         // Paytm
-            "in.org.npci.upiapp",                      // BHIM
-            "in.amazon.mShop.android.shopping",        // Amazon (Amazon Pay)
-            "com.mobikwik_new",                        // MobiKwik
-            "com.freecharge.android",                  // Freecharge
-            "com.csam.icici.bank.imobile",             // ICICI iMobile
-            "com.sbi.lotusintouch",                    // SBI YONO Lite
-            "com.sbi.SBIFreedomPlus",                  // SBI YONO
-            "com.snapwork.hdfc",                       // HDFC
-            "com.axis.mobile",                         // Axis Mobile
-            "com.msf.kbank.mobile",                    // Kotak
-            "com.paypal.android.p2pmobile",            // PayPal
-            // Streaming / DRM-heavy
-            "com.netflix.mediaclient",                 // Netflix
-            "in.startv.hotstar",                       // Hotstar (legacy)
-            "com.hotstar.android",                     // Hotstar / JioHotstar
-            "com.amazon.avod.thirdpartyclient",        // Prime Video
-            "com.jio.media.ondemand",                  // JioCinema
-            "com.disney.disneyplus",                   // Disney+
-            "com.sonyliv"                              // SonyLIV
-        )
     }
 
     @Volatile private var vpnInterface: ParcelFileDescriptor? = null
@@ -241,7 +205,8 @@ class AdBlockVpnService : VpnService() {
         } catch (e: Exception) {
             com.grayzone.app.GrayzoneLogger.w(
                 com.grayzone.app.LogComponent.VPN,
-                "startForeground before stop failed: ${e.message}"
+                "startForeground before stop failed",
+                e
             )
         }
     }
@@ -343,9 +308,8 @@ class AdBlockVpnService : VpnService() {
                 vpnThread?.start()
 
                 com.grayzone.app.data.ProtectionHealthRepository.updateVpnStatus(true)
-                Log.d(TAG, "VPN Started")
+                com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "VPN started")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start VPN", e)
 
                 // F-036: distinguish consent/establish failure from other startup errors.
                 val toastMessage = if (e is IllegalStateException) {
@@ -377,15 +341,15 @@ class AdBlockVpnService : VpnService() {
     }
 
     /**
-     * Excludes payment/banking/streaming apps (plus any user-chosen packages)
-     * from the tunnel. addDisallowedApplication throws NameNotFoundException
-     * for apps that aren't installed, so each package is applied individually.
+     * Excludes the apps the user picked in Split tunneling (nothing by default). Applied each
+     * time the tunnel is built. addDisallowedApplication throws NameNotFoundException for apps
+     * that aren't installed, so each package is applied individually.
      */
     private fun applyAppBypassList(builder: Builder, prefs: SharedPreferences) {
         val userBypass = prefs.getStringSet(com.grayzone.app.PrefsKeys.VPN_BYPASS_APPS, emptySet<String>()) ?: emptySet<String>()
 
         var applied = 0
-        (DEFAULT_BYPASS_APPS + userBypass).toSet().forEach { pkg ->
+        userBypass.forEach { pkg ->
             try {
                 builder.addDisallowedApplication(pkg)
                 applied++
@@ -395,13 +359,13 @@ class AdBlockVpnService : VpnService() {
         }
         com.grayzone.app.GrayzoneLogger.i(
             com.grayzone.app.LogComponent.VPN,
-            "VPN bypass applied to $applied installed payment/streaming apps"
+            "VPN split tunneling: $applied app(s) bypass the tunnel"
         )
     }
 
     private fun stopVpn() {
         shutdownVpn(clearPersistedFlag = true, stopService = true)
-        Log.d(TAG, "VPN Stopped")
+        com.grayzone.app.GrayzoneLogger.i(com.grayzone.app.LogComponent.VPN, "VPN stopped")
     }
 
     private fun shutdownVpn(clearPersistedFlag: Boolean, stopService: Boolean) {
@@ -684,11 +648,6 @@ class AdBlockVpnService : VpnService() {
         val deferred = CompletableDeferred<ByteArray?>()
         val existingQuery = pendingQueries.putIfAbsent(key, deferred)
         if (existingQuery != null) {
-            com.grayzone.app.GrayzoneLogger.d(
-                com.grayzone.app.LogComponent.DNS,
-                "Deduplicating DNS query",
-                mapOf("domain" to domain, "type" to key.qType, "class" to key.qClass)
-            )
             writeForwardedResponse(domain, packet, existingQuery.await(), outputStream)
             return
         }
@@ -751,30 +710,25 @@ class AdBlockVpnService : VpnService() {
 
         val pool = resolverPool ?: return null
         
-        for ((index, serverIp) in DNS_SERVERS.withIndex()) {
+        for (serverIp in DNS_SERVERS) {
             val server = InetAddress.getByName(serverIp)
             val result = pool.performQuery(packet, dnsOffset, dnsPayloadLength, server)
-            
-            if (result != null) {
-                if (index > 0) {
-                    com.grayzone.app.GrayzoneLogger.d(
-                        com.grayzone.app.LogComponent.DNS,
-                        "DNS succeeded via fallback server: $serverIp"
-                    )
-                }
-                return result
-            }
+            if (result != null) return result
+            com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "DNS server $serverIp failed, trying next")
+        }
+        // Offline, every query fails: one line a minute is enough to see it in the log.
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastAllServersFailedLogMs >= 60_000L) {
+            lastAllServersFailedLogMs = now
             com.grayzone.app.GrayzoneLogger.w(
                 com.grayzone.app.LogComponent.DNS,
-                "DNS server $serverIp failed, trying next…"
+                "All upstream DNS servers failed (offline or blocked network?)"
             )
         }
-        com.grayzone.app.GrayzoneLogger.e(
-            com.grayzone.app.LogComponent.DNS,
-            "All DNS servers failed for this query"
-        )
         return null
     }
+
+    @Volatile private var lastAllServersFailedLogMs = 0L
 
 
     

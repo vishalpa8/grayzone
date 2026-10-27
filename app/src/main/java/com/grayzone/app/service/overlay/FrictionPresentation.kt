@@ -19,6 +19,10 @@ object FrictionPresentation : OverlayPresentation {
     override fun onCountdownFinished(ctx: CountdownFinishContext) {
         // F-095: never grant a session if the user already left (or screen went off).
         if (!ctx.isStillForeground()) {
+            com.grayzone.app.GrayzoneLogger.i(
+                com.grayzone.app.LogComponent.OVERLAY,
+                "Wait finished but ${ctx.packageName} is no longer in front; no session granted"
+            )
             ctx.dismissOverlay()
             return
         }
