@@ -37,28 +37,35 @@ class AdBlockVpnService : VpnService() {
             private set
 
         /**
-         * Ordered list of real DNS servers to try; on a timeout the next one is used.
-         *
-         * Every server refuses known malware / phishing domains from live threat feeds, which
-         * covers threats newer than the shipped lists. Providers alternate so one provider's
-         * outage costs a single timeout. There is deliberately no unfiltered fallback.
+         * Upstream DNS servers. Every one refuses known malware / phishing domains from live threat
+         * feeds, which covers threats newer than the shipped lists; there is deliberately no
+         * unfiltered fallback. Asked fastest-first (measured on the current network, see
+         * [UpstreamRanking]), so a provider that routes badly from here (Quad9 can take 300+ ms from
+         * some Indian networks, Cloudflare ~20 ms) stops slowing every lookup.
          */
-        private val DNS_SERVERS = listOf(
-            "9.9.9.9",          // Quad9 (threat blocking, no logging of IPs)
-            "1.1.1.2",          // Cloudflare for Families: malware blocking
-            "149.112.112.112",  // Quad9 secondary
-            "1.0.0.2"           // Cloudflare for Families secondary
-        ).map { InetAddress.getByName(it) }
+        private val DNS_RANKING = UpstreamRanking(
+            listOf(
+                "1.1.1.2",          // Cloudflare for Families: malware blocking
+                "9.9.9.9",          // Quad9 (threat blocking, no logging of IPs)
+                "1.0.0.2",          // Cloudflare for Families secondary
+                "149.112.112.112",  // Quad9 secondary
+            ).map { InetAddress.getByName(it) }
+        )
 
         /** Same providers without threat filtering, used only for domains the user explicitly allowed. */
-        private val UNFILTERED_DNS_SERVERS = listOf(
-            "9.9.9.10",         // Quad9 unsecured
-            "1.1.1.1",          // Cloudflare
-            "149.112.112.10",   // Quad9 unsecured secondary
-            "1.0.0.1"           // Cloudflare secondary
-        ).map { InetAddress.getByName(it) }
+        private val UNFILTERED_DNS_RANKING = UpstreamRanking(
+            listOf(
+                "1.1.1.1",          // Cloudflare
+                "9.9.9.10",         // Quad9 unsecured
+                "1.0.0.1",          // Cloudflare secondary
+                "149.112.112.10",   // Quad9 unsecured secondary
+            ).map { InetAddress.getByName(it) }
+        )
 
         private const val DNS_TIMEOUT_MS = 2000
+        /** Answers are kept for their own TTL within these bounds; NXDOMAIN / empty for the minimum. */
+        private const val MIN_CACHE_MS = 30_000L
+        private const val MAX_CACHE_MS = 10 * 60_000L
 
     }
 
@@ -86,9 +93,8 @@ class AdBlockVpnService : VpnService() {
     // DNS request deduplication: prevent multiple identical questions from hitting upstream at once.
     private val pendingQueries = java.util.concurrent.ConcurrentHashMap<DnsPacketHelper.DnsQuestionKey, CompletableDeferred<ByteArray?>>()
 
-    // Aggressive DNS Caching (10 minute TTL) to speed up resolution and save bandwidth
-    private data class CachedDnsResponse(val payload: ByteArray, val timestamp: Long)
-    private val DNS_CACHE_TTL_MS = 10 * 60 * 1000L
+    // Answers cached for their own TTL (30 s – 10 min); a stale address can cost a failed connection.
+    private data class CachedDnsResponse(val payload: ByteArray, val expiresAtElapsed: Long)
     private val dnsCache = object : java.util.LinkedHashMap<DnsPacketHelper.DnsQuestionKey, CachedDnsResponse>(1000, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DnsPacketHelper.DnsQuestionKey, CachedDnsResponse>?): Boolean {
             return size > 2000
@@ -103,7 +109,8 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun createResolverPool() = DnsResolverPool(
-        maxConcurrentSockets = 20,
+        // A page load fires dozens of lookups at once; too few sockets queues them behind each other.
+        maxConcurrentSockets = 48,
         socketTimeoutMs = DNS_TIMEOUT_MS
     ) { socket ->
         try {
@@ -665,7 +672,7 @@ class AdBlockVpnService : VpnService() {
         }
 
         val cached = synchronized(dnsCache) { dnsCache[key] }
-        if (cached != null && (System.currentTimeMillis() - cached.timestamp) < DNS_CACHE_TTL_MS) {
+        if (cached != null && android.os.SystemClock.elapsedRealtime() < cached.expiresAtElapsed) {
             writeForwardedResponse(domain, packet, length, cached.payload, outputStream)
             return
         }
@@ -680,8 +687,10 @@ class AdBlockVpnService : VpnService() {
         try {
             val dnsPayload = withContext(Dispatchers.IO) { performDnsQuery(packet, length, userAllowed) }
             if (dnsPayload != null && isCacheable(dnsPayload)) {
+                val ttlMs = (DnsResponseInspector.minAnswerTtlSeconds(dnsPayload) ?: 0L) * 1000L
+                val expires = android.os.SystemClock.elapsedRealtime() + ttlMs.coerceIn(MIN_CACHE_MS, MAX_CACHE_MS)
                 synchronized(dnsCache) {
-                    dnsCache[key] = CachedDnsResponse(dnsPayload, System.currentTimeMillis())
+                    dnsCache[key] = CachedDnsResponse(dnsPayload, expires)
                 }
             }
             deferred.complete(dnsPayload)
@@ -738,20 +747,43 @@ class AdBlockVpnService : VpnService() {
     }
     
     /**
-     * Perform the actual DNS query with server fallback.
-     * Returns the DNS response payload, or null on failure.
+     * Resolves upstream, fastest server first. If it hasn't answered within a few of its usual
+     * round trips, the next server is asked too and the first answer wins, so a lost UDP packet
+     * costs ~100 ms instead of a full timeout. Returns the DNS response payload, or null.
      */
     private suspend fun performDnsQuery(packet: ByteArray, length: Int, unfiltered: Boolean): ByteArray? {
         val dnsOffset = DnsPacketHelper.getDnsPayloadOffset(packet, length) ?: return null
         val dnsPayloadLength = DnsPacketHelper.getDnsPayloadLength(packet, length) ?: return null
-
         val pool = resolverPool ?: return null
-        
-        for (server in if (unfiltered) UNFILTERED_DNS_SERVERS else DNS_SERVERS) {
-            val result = pool.performQuery(packet, dnsOffset, dnsPayloadLength, server)
-            if (result != null) return result
-            com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "DNS server ${server.hostAddress} failed, trying next")
+        val ranking = if (unfiltered) UNFILTERED_DNS_RANKING else DNS_RANKING
+        val servers = ranking.ordered()
+        val hedgeMs = ranking.hedgeDelayMs()
+
+        val answer = kotlinx.coroutines.coroutineScope {
+            val winner = CompletableDeferred<ByteArray?>()
+            val remaining = java.util.concurrent.atomic.AtomicInteger(servers.size)
+            val attempts = servers.mapIndexed { index, server ->
+                launch {
+                    if (index > 0) kotlinx.coroutines.delay(hedgeMs * index)
+                    if (winner.isCompleted) return@launch
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    val result = pool.performQuery(packet, dnsOffset, dnsPayloadLength, server)
+                    if (result != null) {
+                        ranking.recordSuccess(server, android.os.SystemClock.elapsedRealtime() - started)
+                        winner.complete(result)
+                    } else {
+                        ranking.recordFailure(server)
+                        com.grayzone.app.GrayzoneLogger.d(com.grayzone.app.LogComponent.DNS, "DNS server ${server.hostAddress} failed")
+                    }
+                    if (remaining.decrementAndGet() == 0) winner.complete(null)
+                }
+            }
+            val result = winner.await()
+            attempts.forEach { it.cancel() }
+            result
         }
+        if (answer != null) return answer
+
         // Offline, every query fails: one line a minute is enough to see it in the log.
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastAllServersFailedLogMs >= 60_000L) {
@@ -763,7 +795,6 @@ class AdBlockVpnService : VpnService() {
         }
         return null
     }
-
     @Volatile private var lastAllServersFailedLogMs = 0L
 
 

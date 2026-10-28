@@ -66,6 +66,35 @@ class DnsResponseInspectorTest {
         assertEquals(listOf("b.example.com", "c.bad.org"), DnsResponseInspector.cnameTargets(payload))
     }
 
+    private fun recordWithTtl(owner: ByteArray, type: Int, ttl: Long, rdata: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(owner)
+        out.write(byteArrayOf(0, type.toByte(), 0, 1,
+            (ttl shr 24).toByte(), (ttl shr 16).toByte(), (ttl shr 8).toByte(), ttl.toByte(),
+            (rdata.size shr 8).toByte(), rdata.size.toByte()))
+        out.write(rdata)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun `cache ttl is the smallest answer ttl`() {
+        val payload = response(
+            name("www", "shop", "com"),
+            recordWithTtl(questionPointer, 5, 3600, name("cdn", "example", "net")),
+            recordWithTtl(name("cdn", "example", "net"), 1, 60, byteArrayOf(1, 2, 3, 4)),
+            recordWithTtl(name("cdn", "example", "net"), 1, 300, byteArrayOf(5, 6, 7, 8))
+        )
+        assertEquals(60L, DnsResponseInspector.minAnswerTtlSeconds(payload))
+    }
+
+    @Test
+    fun `no answers or a malformed packet gives no ttl`() {
+        assertEquals(null, DnsResponseInspector.minAnswerTtlSeconds(response(name("a", "com"))))
+        assertEquals(null, DnsResponseInspector.minAnswerTtlSeconds(ByteArray(5)))
+        val payload = response(name("a", "com"), recordWithTtl(questionPointer, 1, 60, byteArrayOf(1, 2, 3, 4)))
+        for (cut in 0 until payload.size) DnsResponseInspector.minAnswerTtlSeconds(payload.copyOf(cut))
+    }
+
     @Test
     fun `answers without cnames give nothing`() {
         val payload = response(name("a", "com"), record(questionPointer, 1, byteArrayOf(1, 2, 3, 4)))

@@ -7,6 +7,15 @@ publish it as release `vX.Y.Z`, using the section below as the release notes.
 VPN blocklists are versioned separately (a UTC timestamp such as `202610270634`) and update
 on the phone by themselves; see Settings → VPN settings → Blocklists.
 
+## [1.3.1] - 2026-10-28
+
+### Fixed
+- Slow browsing with the VPN on. DNS now asks the fastest server on your network first
+  (Cloudflare answered in ~20 ms where Quad9 took 300+ ms), and if it is slow to answer, the next
+  server is asked too and the first reply wins, so a lost packet costs ~100 ms instead of 2 s.
+- Cached DNS answers follow their own lifetime (30 s to 10 min) instead of a fixed 10 minutes.
+- More lookups can run at once, so busy pages don't queue.
+
 ## [1.3.0] - 2026-10-28
 
 ### Changed

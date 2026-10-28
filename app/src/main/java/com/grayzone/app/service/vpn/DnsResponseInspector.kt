@@ -40,6 +40,34 @@ object DnsResponseInspector {
         return targets
     }
 
+    /**
+     * Seconds the answer may be cached: the smallest TTL among its answer records, or null when it
+     * has none (NXDOMAIN, empty answer) or is malformed.
+     */
+    fun minAnswerTtlSeconds(payload: ByteArray): Long? {
+        if (payload.size < 12) return null
+        val qdCount = u16(payload, 4)
+        val anCount = u16(payload, 6).coerceAtMost(MAX_RECORDS)
+        if (anCount == 0) return null
+        var pos = 12
+        repeat(qdCount.coerceAtMost(MAX_RECORDS)) {
+            pos = skipName(payload, pos) ?: return null
+            pos += 4
+            if (pos > payload.size) return null
+        }
+        var min: Long? = null
+        repeat(anCount) {
+            pos = skipName(payload, pos) ?: return min
+            if (pos + 10 > payload.size) return min
+            val ttl = (u16(payload, pos + 4).toLong() shl 16) or u16(payload, pos + 6).toLong()
+            min = if (min == null) ttl else minOf(min!!, ttl)
+            val rdLength = u16(payload, pos + 8)
+            pos += 10 + rdLength
+            if (pos > payload.size) return min
+        }
+        return min
+    }
+
     /** Position just past the (possibly compressed) name at [start], or null if malformed. */
     private fun skipName(data: ByteArray, start: Int): Int? {
         var pos = start
