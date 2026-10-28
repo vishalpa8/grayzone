@@ -101,41 +101,31 @@ fun drawableToBitmap(drawable: Drawable, maxSize: Int = APP_ICON_SIZE_PX): Bitma
     return bmp
 }
 
-fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    return try {
-        val enabledServices = android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        )
-        AccessibilityServiceIds.isServiceEnabled(
-            enabledServicesSetting = enabledServices,
-            packageName = context.packageName,
-            serviceClassName = com.grayzone.app.service.GrayzoneAccessibilityService::class.java.name
-        )
-    } catch (e: Exception) {
-        GrayzoneLogger.w(
-            LogComponent.ACCESSIBILITY,
-            "Failed to read accessibility enabled state", e
-        )
-        false
+/**
+ * Usage access ("Apps with usage access" / "Usage data access"): lets Grayzone see which app is
+ * in front, without reading any screen content.
+ */
+fun hasUsageAccess(context: Context): Boolean = try {
+    val appOps = context.getSystemService(android.app.AppOpsManager::class.java)
+    when (appOps.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)) {
+        android.app.AppOpsManager.MODE_ALLOWED -> true
+        // Some OEM builds leave the op at "default" and grant through the permission itself.
+        android.app.AppOpsManager.MODE_DEFAULT ->
+            context.checkSelfPermission(android.Manifest.permission.PACKAGE_USAGE_STATS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        else -> false
     }
+} catch (e: Exception) {
+    GrayzoneLogger.w(LogComponent.PERMISSIONS, "Failed to read usage access state", e)
+    false
 }
-
 /** Settings page that grants [requirement], so a "fix this" affordance never lands on the wrong screen. */
 fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent = when (requirement) {
-    SetupRequirement.ACCESSIBILITY -> {
-        // The extras make most Settings apps scroll to and highlight Grayzone in the list.
-        val service = android.content.ComponentName(
-            context, com.grayzone.app.service.GrayzoneAccessibilityService::class.java
-        ).flattenToString()
-        Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            putExtra(":settings:fragment_args_key", service)
-            putExtra(
-                ":settings:show_fragment_args",
-                android.os.Bundle().apply { putString(":settings:fragment_args_key", service) }
-            )
-        }
-    }
+    // With the package, most phones open Grayzone's own toggle; openSettingsFor falls back to the list.
+    SetupRequirement.USAGE_ACCESS ->
+        Intent(
+            android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS,
+            android.net.Uri.parse("package:${context.packageName}")
+        )
     SetupRequirement.OVERLAY ->
         Intent(
             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -158,7 +148,7 @@ fun settingsIntentFor(context: Context, requirement: SetupRequirement): Intent =
 /** Starts the monitoring service only when Monitoring is on and the core permissions are granted. */
 fun startMonitoringIfReady(context: Context) {
     if (!isMonitoringEnabled(context)) return
-    if (!isAccessibilityServiceEnabled(context) || !android.provider.Settings.canDrawOverlays(context)) return
+    if (!hasUsageAccess(context) || !android.provider.Settings.canDrawOverlays(context)) return
     try {
         context.startForegroundService(Intent(context, com.grayzone.app.service.OverlayService::class.java))
     } catch (e: Exception) {
@@ -176,10 +166,11 @@ fun isMonitoringEnabled(context: Context): Boolean =
  * App info, on phones that lack it.
  */
 fun openSettingsFor(context: Context, requirement: SetupRequirement, logTag: String): Boolean {
-    // No ACCESSIBILITY_DETAILS_SETTINGS: it needs a system-only permission and is refused for
-    // regular apps; the list page (with the highlight extras) is the most direct option.
     val candidates = buildList {
         add(settingsIntentFor(context, requirement))
+        if (requirement == SetupRequirement.USAGE_ACCESS) {
+            add(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
         if (requirement == SetupRequirement.BATTERY) {
             add(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }

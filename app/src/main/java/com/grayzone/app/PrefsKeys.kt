@@ -10,11 +10,11 @@ object PrefsKeys {
     const val THEME_MODE         = "theme_mode"
 
     /**
-     * True once the user has been prompted for the *current* Accessibility-permission loss; reset to
-     * false when the permission is next observed enabled. Enforces prompt-once-per-loss so the app
-     * does not repeatedly nag when the OS revokes the service.
+     * True once the user has been prompted for the *current* loss of a core permission (usage
+     * access or display over other apps); reset to false when they are next observed granted.
+     * Enforces prompt-once-per-loss so the app does not repeatedly nag after a revoke.
      */
-    const val ACCESSIBILITY_PROMPTED_FOR_LOSS = "accessibility_prompted_for_loss"
+    const val CORE_PERMISSION_PROMPTED_FOR_LOSS = "core_permission_prompted_for_loss"
 
     /**
      * True once first-run setup has been left behind. While false, onboarding stays on screen until

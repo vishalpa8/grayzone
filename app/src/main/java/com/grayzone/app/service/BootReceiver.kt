@@ -47,10 +47,10 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
 
-        // F-010: BootReceiver cannot restart the :a11y process — surface the gap in health state.
-        if (!com.grayzone.app.isAccessibilityServiceEnabled(context)) {
-            com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(false)
-            GrayzoneLogger.w(LogComponent.BOOT, "Accessibility is off after boot; monitoring cannot run until it is re-enabled")
+        // F-010: without usage access the monitoring service can't tell which app is open; surface it.
+        if (!com.grayzone.app.hasUsageAccess(context)) {
+            com.grayzone.app.data.ProtectionHealthRepository.updateUsageAccessStatus(false)
+            GrayzoneLogger.w(LogComponent.BOOT, "Usage access is off after boot; monitoring cannot run until it is allowed again")
         }
 
         // Only restart AdBlockVpnService if the user previously enabled the VPN.

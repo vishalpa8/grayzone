@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Appends log lines to [file] off the calling thread, rotating it to `<file>.1` once it would
  * exceed [maxBytes] (so at most two files of [maxBytes] each exist). One instance per process:
- * the main and accessibility processes each own their own file, so no cross-process locking.
+ * each process owns its own file, so no cross-process locking.
  * Never throws — logging must not be able to break the app.
  */
 class LogFileWriter(

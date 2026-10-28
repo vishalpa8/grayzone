@@ -92,7 +92,12 @@ class BlocklistStore(
         File(staging, MANIFEST).writeText(manifest.serialize())
         val target = versionDir(manifest.version)
         target.deleteRecursively()
-        check(staging.renameTo(target)) { "Could not move $staging to $target" }
+        // A just-written file can be briefly held open by a scanner, failing the first rename.
+        val moved = (1..3).any { attempt ->
+            if (attempt > 1) Thread.sleep(150L)
+            staging.renameTo(target)
+        }
+        check(moved) { "Could not move $staging to $target" }
         val tmp = File(root, "$CURRENT.tmp")
         tmp.writeText(manifest.version.toString())
         try {

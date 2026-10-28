@@ -11,14 +11,14 @@ class ProtectionStatusTest {
     fun resetRepo() {
         ProtectionHealthRepository.updateVpnStatus(false)
         ProtectionHealthRepository.updateOverlayStatus(false)
-        ProtectionHealthRepository.updateAccessibilityStatus(false)
+        ProtectionHealthRepository.updateUsageAccessStatus(false)
     }
 
     @Test
     fun `fully protected only when all three active`() {
         assertFalse(ProtectionStatus().isFullyProtected)
         assertTrue(
-            ProtectionStatus(vpnActive = true, overlayActive = true, accessibilityActive = true)
+            ProtectionStatus(vpnActive = true, overlayActive = true, usageAccessActive = true)
                 .isFullyProtected
         )
     }
@@ -26,10 +26,10 @@ class ProtectionStatusTest {
     @Test
     fun `degraded when some but not all protections are up`() {
         assertTrue(ProtectionStatus(vpnActive = true).isDegraded)
-        assertTrue(ProtectionStatus(overlayActive = true, accessibilityActive = true).isDegraded)
+        assertTrue(ProtectionStatus(overlayActive = true, usageAccessActive = true).isDegraded)
         assertFalse(ProtectionStatus().isDegraded)
         assertFalse(
-            ProtectionStatus(vpnActive = true, overlayActive = true, accessibilityActive = true)
+            ProtectionStatus(vpnActive = true, overlayActive = true, usageAccessActive = true)
                 .isDegraded
         )
     }
@@ -40,10 +40,10 @@ class ProtectionStatusTest {
         ProtectionHealthRepository.updateOverlayStatus(true)
         assertTrue(ProtectionHealthRepository.status.value.vpnActive)
         assertTrue(ProtectionHealthRepository.status.value.overlayActive)
-        assertFalse(ProtectionHealthRepository.status.value.accessibilityActive)
+        assertFalse(ProtectionHealthRepository.status.value.usageAccessActive)
         assertTrue(ProtectionHealthRepository.status.value.isDegraded)
 
-        ProtectionHealthRepository.updateAccessibilityStatus(true)
+        ProtectionHealthRepository.updateUsageAccessStatus(true)
         assertTrue(ProtectionHealthRepository.status.value.isFullyProtected)
     }
 }

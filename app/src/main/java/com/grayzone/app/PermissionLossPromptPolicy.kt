@@ -1,14 +1,12 @@
 package com.grayzone.app
 
 /**
- * Pure prompt-once-per-loss policy for the Accessibility permission. Prevents the
- * revoke → re-prompt loop: the user is prompted at most once per contiguous period during which the
- * permission is disabled, and the persisted flag resets when the permission is observed enabled
- * again (so a future genuine loss prompts exactly once more).
- *
- * See specs/002-fix-timeout-accessibility-bugs/contracts/accessibility-permission.md.
+ * Pure prompt-once-per-loss policy for the core permissions (usage access, display over other
+ * apps). Prevents the revoke → re-prompt loop: the user is prompted at most once per contiguous
+ * period during which a permission is off, and the persisted flag resets when they are observed
+ * granted again (so a future genuine loss prompts exactly once more).
  */
-object AccessibilityPromptPolicy {
+object PermissionLossPromptPolicy {
 
     /** Outcome of observing the current permission state. */
     data class Decision(

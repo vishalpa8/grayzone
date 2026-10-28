@@ -65,7 +65,7 @@ fun AppsScreen(viewModel: AppsViewModel = hiltViewModel()) {
         isRestrictionActive(context, prefs, monitoredApps, currentTime)
     }
     val coreReady = remember(currentTime) {
-        isAccessibilityServiceEnabled(context) && android.provider.Settings.canDrawOverlays(context)
+        hasUsageAccess(context) && android.provider.Settings.canDrawOverlays(context)
     }
 
     var filtered by remember { mutableStateOf<List<AppInfo>>(emptyList()) }

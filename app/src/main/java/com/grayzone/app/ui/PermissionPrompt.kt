@@ -26,9 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.grayzone.app.SetupRequirement
-import com.grayzone.app.appInfoSettingsIntent
 import com.grayzone.app.openSettingsFor
-import com.grayzone.app.startActivitySafely
 import com.grayzone.app.ui.theme.*
 
 private data class PromptCopy(val title: String, val reason: String)
@@ -38,10 +36,10 @@ private fun copyFor(requirement: SetupRequirement) = when (requirement) {
         "Allow notifications",
         "Shows that protection is on, plus a live timer while a session is running."
     )
-    SetupRequirement.ACCESSIBILITY -> PromptCopy(
-        "Turn on Accessibility",
-        "Lets Grayzone know which app is open so the pause screen appears at the right moment. " +
-            "It does not read, store, or share what is on your screen."
+    SetupRequirement.USAGE_ACCESS -> PromptCopy(
+        "Allow usage access",
+        "Lets Grayzone see which app is open so the pause screen appears at the right moment. " +
+            "Find Grayzone in the list and turn it on. It never sees what is on your screen."
     )
     SetupRequirement.OVERLAY -> PromptCopy(
         "Allow display over other apps",
@@ -152,15 +150,7 @@ fun PermissionPrompt(
             ) {
                 Text("Allow", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
-            if (requirement == SetupRequirement.ACCESSIBILITY && Build.VERSION.SDK_INT >= 33) {
-                TextButton(
-                    onClick = {
-                        startActivitySafely(context, appInfoSettingsIntent(context), "promptAppInfo")
-                    }
-                ) {
-                    Text("Toggle greyed out? Open app info", color = GZPrimary, fontSize = 13.sp)
-                }
-            }
+
             TextButton(onClick = onDecline) {
                 Text("Decline", color = GZTextSecondary, fontSize = 14.sp)
             }

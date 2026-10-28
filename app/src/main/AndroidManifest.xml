@@ -65,24 +65,6 @@
         </service>
 
         <!--
-            GrayzoneAccessibilityService: Event-driven foreground app detection.
-            Replaces battery-intensive UsageStatsManager polling with instant,
-            zero-overhead accessibility events. ~95% battery reduction vs polling.
-        -->
-        <service
-            android:name=".service.GrayzoneAccessibilityService"
-            android:exported="false"
-            android:process=":a11y"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
-        <!--
             SessionExpiryReceiver: fired by AlarmManager at a session's activeUntil so the app locks
             (and the countdown notification stops at 00:00) reliably across Doze/screen-off/process
             death. Internal only.

@@ -2,8 +2,8 @@ package com.grayzone.app
 
 /** A permission Grayzone cannot apply friction without, or that degrades protection when missing. */
 enum class SetupRequirement {
-    /** Blocking: detection. */
-    ACCESSIBILITY,
+    /** Blocking: detection (which app is in front). */
+    USAGE_ACCESS,
     /** Blocking: pause overlay. */
     OVERLAY,
     /** Degrading: ongoing / countdown notifications (API 33+). */
@@ -17,16 +17,16 @@ enum class SetupRequirement {
  *
  * Kept pure so the UI never has to guess: a half-granted setup must name the one
  * permission that is off and route to that permission's settings page, instead of
- * showing a combined "accessibility or overlay is off" message.
+ * showing a combined "usage access or overlay is off" message.
  */
 object SetupRequirements {
 
-    private val CORE = setOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY)
+    private val CORE = setOf(SetupRequirement.USAGE_ACCESS, SetupRequirement.OVERLAY)
 
     /** The order the first-run popup walks through the permissions, one at a time. */
     val SETUP_ORDER = listOf(
         SetupRequirement.NOTIFICATIONS,
-        SetupRequirement.ACCESSIBILITY,
+        SetupRequirement.USAGE_ACCESS,
         SetupRequirement.OVERLAY,
         SetupRequirement.BATTERY,
     )
@@ -35,23 +35,23 @@ object SetupRequirements {
      * then degrading grants (notifications, battery).
      *
      * Newer parameters default to granted so existing two-arg call sites stay valid
-     * (core gating is accessibility + overlay only).
+     * (core gating is usage access + overlay only).
      */
     fun missing(
-        accessibilityEnabled: Boolean,
+        usageAccessEnabled: Boolean,
         overlayEnabled: Boolean,
         notificationsEnabled: Boolean = true,
         batteryExempt: Boolean = true,
     ): List<SetupRequirement> =
         buildList {
-            if (!accessibilityEnabled) add(SetupRequirement.ACCESSIBILITY)
+            if (!usageAccessEnabled) add(SetupRequirement.USAGE_ACCESS)
             if (!overlayEnabled) add(SetupRequirement.OVERLAY)
             if (!notificationsEnabled) add(SetupRequirement.NOTIFICATIONS)
             if (!batteryExempt) add(SetupRequirement.BATTERY)
         }
 
     fun label(requirement: SetupRequirement): String = when (requirement) {
-        SetupRequirement.ACCESSIBILITY -> "Accessibility"
+        SetupRequirement.USAGE_ACCESS -> "Usage access"
         SetupRequirement.OVERLAY -> "Display over other apps"
         SetupRequirement.NOTIFICATIONS -> "Notifications"
         SetupRequirement.BATTERY -> "Battery exemption"
@@ -72,7 +72,7 @@ object SetupRequirements {
     fun body(missing: List<SetupRequirement>): String = when (missing.size) {
         0 -> ""
         1 -> when (missing.first()) {
-            SetupRequirement.ACCESSIBILITY -> "Tap below to enable."
+            SetupRequirement.USAGE_ACCESS -> "Tap below to allow."
             SetupRequirement.OVERLAY -> "Tap below to allow."
             SetupRequirement.NOTIFICATIONS -> "Tap below to allow."
             SetupRequirement.BATTERY -> "Tap below to exempt."
@@ -80,14 +80,8 @@ object SetupRequirements {
         else -> "Enable the missing items below."
     }
 
-    /** Label for the action that fixes [missing] next, e.g. "Enable Accessibility". */
+    /** Label for the action that fixes [missing] next, e.g. "Enable Usage access". */
     fun actionLabel(missing: List<SetupRequirement>): String =
         missing.firstOrNull()?.let { "Enable ${label(it)}" } ?: ""
 
-    /**
-     * Android 13+ can grey out the accessibility toggle for sideloaded installs until the user
-     * allows restricted settings from App info.
-     */
-    fun needsRestrictedSettingsHint(sdkInt: Int, requirement: SetupRequirement): Boolean =
-        sdkInt >= 33 && requirement == SetupRequirement.ACCESSIBILITY
 }

@@ -9,7 +9,6 @@ import androidx.core.content.FileProvider
 import com.grayzone.app.BuildConfig
 import com.grayzone.app.GrayzoneLogger
 import com.grayzone.app.LogComponent
-import com.grayzone.app.service.GrayzoneAccessibilityService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,7 +26,7 @@ import java.util.Locale
  */
 object LogExporter {
 
-    private val PROCESSES = listOf("main", "a11y")
+    private val PROCESSES = listOf("main")
     private const val KEEP_EXPORTS = 3
     private val scope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
 
@@ -40,13 +39,6 @@ object LogExporter {
         val app = context.applicationContext
         val activityRef = java.lang.ref.WeakReference(context as? androidx.activity.ComponentActivity)
         scope.launch {
-            // The accessibility process buffers its own lines; ask it to write them out first.
-            try {
-                app.sendBroadcast(Intent(GrayzoneAccessibilityService.ACTION_FLUSH_LOGS).setPackage(app.packageName))
-                kotlinx.coroutines.delay(300L)
-            } catch (e: Exception) {
-                GrayzoneLogger.w(LogComponent.UI, "Could not ask the accessibility process to flush logs", e)
-            }
             val intent = buildShareIntent(app)
             onDone()
             if (intent == null) {

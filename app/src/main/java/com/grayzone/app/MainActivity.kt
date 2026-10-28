@@ -197,7 +197,7 @@ object TabRequests {
  *  - [WalkReason.FEATURE]: [PermissionGate.requireSetup] asks every missing permission; the feature
  *    runs only if all of them end up granted.
  *  - [WalkReason.RECOVERY]: Monitoring is on but a core permission was turned off outside the app;
- *    asked once per loss ([AccessibilityPromptPolicy]).
+ *    asked once per loss ([PermissionLossPromptPolicy]).
  */
 @Composable
 fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
@@ -206,7 +206,7 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
     val prefs = remember { context.getSharedPreferences(PrefsKeys.PREFS_NAME, Context.MODE_PRIVATE) }
 
     fun readMissing(): List<SetupRequirement> = SetupRequirements.missing(
-        accessibilityEnabled = isAccessibilityServiceEnabled(context),
+        usageAccessEnabled = hasUsageAccess(context),
         overlayEnabled = Settings.canDrawOverlays(context),
         notificationsEnabled = areAppNotificationsEnabled(context),
         batteryExempt = !isBatteryOptimized(context),
@@ -260,7 +260,7 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
                     startMonitoringIfReady(context)
                 } else {
                     // Counts as "asked for this loss", so the recovery popup does not pop straight back.
-                    prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, true).apply()
+                    prefs.edit().putBoolean(PrefsKeys.CORE_PERMISSION_PROMPTED_FOR_LOSS, true).apply()
                     android.widget.Toast.makeText(
                         context,
                         if (reason == WalkReason.RECOVERY) "Protection stays paused until permissions are allowed"
@@ -286,18 +286,18 @@ fun MainAppContent(onThemeModeChanged: (String) -> Unit = {}) {
             }
             return
         }
-        val coreReady = SetupRequirement.ACCESSIBILITY !in missingNow && SetupRequirement.OVERLAY !in missingNow
+        val coreReady = SetupRequirement.USAGE_ACCESS !in missingNow && SetupRequirement.OVERLAY !in missingNow
         if (coreReady) {
-            prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false).apply()
+            prefs.edit().putBoolean(PrefsKeys.CORE_PERMISSION_PROMPTED_FOR_LOSS, false).apply()
             return
         }
         // Nothing to protect while Monitoring is off; the feature walk asks when it is turned on.
         if (!isMonitoringEnabled(context)) return
-        val decision = AccessibilityPromptPolicy.onObserved(
-            previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, false),
+        val decision = PermissionLossPromptPolicy.onObserved(
+            previouslyPromptedForLoss = prefs.getBoolean(PrefsKeys.CORE_PERMISSION_PROMPTED_FOR_LOSS, false),
             isEnabled = false
         )
-        prefs.edit().putBoolean(PrefsKeys.ACCESSIBILITY_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
+        prefs.edit().putBoolean(PrefsKeys.CORE_PERMISSION_PROMPTED_FOR_LOSS, decision.promptedForLoss).apply()
         // Protection only depends on the two core grants, so recovery asks just for those.
         if (decision.shouldPrompt) {
             begin(
@@ -383,11 +383,11 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                // After Force stop the OS clears Accessibility and blocks self-start until the user
-                // opens Grayzone again — re-sync health and restart OverlayService when grants return.
-                val a11yOn = isAccessibilityServiceEnabled(context)
-                ProtectionHealthRepository.updateAccessibilityStatus(a11yOn)
-                if (a11yOn && Settings.canDrawOverlays(context) && isMonitoringEnabled(context)) {
+                // After Force stop the OS blocks self-start until the user opens Grayzone again;
+                // re-sync health and restart OverlayService when grants return.
+                val usageOn = hasUsageAccess(context)
+                ProtectionHealthRepository.updateUsageAccessStatus(usageOn)
+                if (usageOn && Settings.canDrawOverlays(context) && isMonitoringEnabled(context)) {
                     try {
                         context.startForegroundService(Intent(context, OverlayService::class.java))
                     } catch (e: Exception) {
@@ -423,7 +423,7 @@ fun MainScreen(onThemeModeChanged: (String) -> Unit = {}) {
     LaunchedEffect(Unit) {
         // Monitoring is off until the user turns it on (and grants permissions), so nothing runs yet.
         if (!isMonitoringEnabled(context) ||
-            !isAccessibilityServiceEnabled(context) ||
+            !hasUsageAccess(context) ||
             !Settings.canDrawOverlays(context)
         ) {
             reconcileVpnState(context) { consentIntent -> vpnConsentLauncher.launch(consentIntent) }

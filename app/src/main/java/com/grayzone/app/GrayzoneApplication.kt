@@ -39,7 +39,7 @@ class GrayzoneApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // First, in every process, so crashes anywhere (incl. the accessibility process) are recorded.
+        // First, so crashes anywhere are recorded.
         val processName = Application.getProcessName()
         GrayzoneLogger.init(this, processName)
         GrayzoneLogger.i(
@@ -48,19 +48,15 @@ class GrayzoneApplication : Application() {
                 "on ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}"
         )
 
-        // The :a11y process must NEVER touch prefs or WorkManager —
-        // SharedPreferences isn't multi-process safe.
+        // Helper processes (none today) must never touch prefs or WorkManager: SharedPreferences isn't multi-process safe.
         if (processName != packageName) return
 
-        // Force-stop strips Accessibility in Settings; sync health before UI/services assume it is on.
-        com.grayzone.app.data.ProtectionHealthRepository.updateAccessibilityStatus(
-            isAccessibilityServiceEnabled(this)
+        // Usage access can be revoked from Settings at any time; sync health before UI/services assume it is on.
+        com.grayzone.app.data.ProtectionHealthRepository.updateUsageAccessStatus(
+            hasUsageAccess(this)
         )
 
-        // Keep onCreate light: this is the main app process. GrayzoneAccessibilityService now runs
-        // in an isolated ":a11y" process (see the manifest), so heavy or failing work here can no
-        // longer ANR/crash the accessibility service — but a light onCreate still avoids UI jank and
-        // slow cold starts, so keep deferring non-critical work.
+        // Keep onCreate light to avoid UI jank and slow cold starts; defer non-critical work.
         validateConfiguration()
         migrateLockoutFormat()
         resetRuntimeStateIfNeeded()

@@ -14,8 +14,8 @@ class SetupRequirementsTest {
     }
 
     @Test
-    fun `overlay alone is reported when accessibility is granted`() {
-        val missing = SetupRequirements.missing(accessibilityEnabled = true, overlayEnabled = false)
+    fun `overlay alone is reported when usage access is granted`() {
+        val missing = SetupRequirements.missing(usageAccessEnabled = true, overlayEnabled = false)
 
         assertEquals(listOf(SetupRequirement.OVERLAY), missing)
         assertEquals("Display over other apps off", SetupRequirements.headline(missing))
@@ -23,20 +23,20 @@ class SetupRequirementsTest {
     }
 
     @Test
-    fun `accessibility alone is reported when overlay is granted`() {
-        val missing = SetupRequirements.missing(accessibilityEnabled = false, overlayEnabled = true)
+    fun `usage access alone is reported when overlay is granted`() {
+        val missing = SetupRequirements.missing(usageAccessEnabled = false, overlayEnabled = true)
 
-        assertEquals(listOf(SetupRequirement.ACCESSIBILITY), missing)
-        assertEquals("Accessibility off", SetupRequirements.headline(missing))
+        assertEquals(listOf(SetupRequirement.USAGE_ACCESS), missing)
+        assertEquals("Usage access off", SetupRequirements.headline(missing))
     }
 
     @Test
-    fun `accessibility is offered first when both are missing`() {
-        val missing = SetupRequirements.missing(accessibilityEnabled = false, overlayEnabled = false)
+    fun `usage access is offered first when both are missing`() {
+        val missing = SetupRequirements.missing(usageAccessEnabled = false, overlayEnabled = false)
 
-        assertEquals(listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.OVERLAY), missing)
+        assertEquals(listOf(SetupRequirement.USAGE_ACCESS, SetupRequirement.OVERLAY), missing)
         assertEquals("2 permissions off", SetupRequirements.headline(missing))
-        assertEquals("Enable Accessibility", SetupRequirements.actionLabel(missing))
+        assertEquals("Enable Usage access", SetupRequirements.actionLabel(missing))
     }
 
     @Test
@@ -50,7 +50,7 @@ class SetupRequirementsTest {
     @Test
     fun `notifications off is reported as a missing requirement`() {
         val missing = SetupRequirements.missing(
-            accessibilityEnabled = true,
+            usageAccessEnabled = true,
             overlayEnabled = true,
             notificationsEnabled = false,
         )
@@ -62,7 +62,7 @@ class SetupRequirementsTest {
     @Test
     fun `degrading permissions are reported without claiming protection ready`() {
         val missing = SetupRequirements.missing(
-            accessibilityEnabled = true,
+            usageAccessEnabled = true,
             overlayEnabled = true,
             notificationsEnabled = false,
             batteryExempt = false,
@@ -79,28 +79,15 @@ class SetupRequirementsTest {
     @Test
     fun `battery follows core permissions in ordering`() {
         val missing = SetupRequirements.missing(
-            accessibilityEnabled = false,
+            usageAccessEnabled = false,
             overlayEnabled = true,
             notificationsEnabled = true,
             batteryExempt = false,
         )
 
         assertEquals(
-            listOf(SetupRequirement.ACCESSIBILITY, SetupRequirement.BATTERY),
+            listOf(SetupRequirement.USAGE_ACCESS, SetupRequirement.BATTERY),
             missing
-        )
-    }
-
-    @Test
-    fun `restricted settings hint only for accessibility on API 33+`() {
-        assertTrue(
-            SetupRequirements.needsRestrictedSettingsHint(33, SetupRequirement.ACCESSIBILITY)
-        )
-        assertFalse(
-            SetupRequirements.needsRestrictedSettingsHint(32, SetupRequirement.ACCESSIBILITY)
-        )
-        assertFalse(
-            SetupRequirements.needsRestrictedSettingsHint(34, SetupRequirement.OVERLAY)
         )
     }
 }

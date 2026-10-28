@@ -24,7 +24,6 @@ enum class LogComponent {
     DATABASE,
     SCHEDULE,
     BOOT,
-    ACCESSIBILITY,
     PERMISSIONS,
     UI,
     CLEANUP,
@@ -70,7 +69,12 @@ object GrayzoneLogger {
      */
     fun init(context: Context, processName: String?) {
         if (writer != null) return
-        processLabel = if (processName?.endsWith(":a11y") == true) "a11y" else "main"
+        processLabel = processName?.substringAfter(':', "main") ?: "main"
+        // Left behind by versions that ran an accessibility process.
+        if (processLabel == "main") {
+            File(logDirectory(context), "a11y.log").delete()
+            File(logDirectory(context), "a11y.log.1").delete()
+        }
         val fileWriter = LogFileWriter(File(logDirectory(context), "$processLabel.log"))
         writer = fileWriter
 

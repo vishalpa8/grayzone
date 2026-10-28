@@ -7,6 +7,18 @@ publish it as release `vX.Y.Z`, using the section below as the release notes.
 VPN blocklists are versioned separately (a UTC timestamp such as `202610270634`) and update
 on the phone by themselves; see Settings → VPN settings → Blocklists.
 
+## [1.3.0] - 2026-10-28
+
+### Changed
+- Grayzone no longer uses Accessibility. It now sees which app is open through Usage access,
+  which never reads screen content. This removes the system-wide slowdown Accessibility caused,
+  avoids Play Protect's block on sideloaded installs, and simplifies Play Store review.
+- After updating, turn on Usage access for Grayzone when asked; the old Accessibility switch is
+  no longer needed.
+
+### Removed
+- The Force stop / Uninstall page guard, which required Accessibility.
+
 ## [1.2.0] - 2026-10-27
 
 ### Added

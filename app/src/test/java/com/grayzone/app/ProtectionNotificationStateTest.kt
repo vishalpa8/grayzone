@@ -10,7 +10,7 @@ class ProtectionNotificationStateTest {
     @Test
     fun `healthy permissions keep active title`() {
         val copy = ProtectionNotificationState.resolve(
-            accessibilityEnabled = true,
+            usageAccessEnabled = true,
             overlayEnabled = true
         )
         assertFalse(copy.isWarning)
@@ -18,20 +18,20 @@ class ProtectionNotificationStateTest {
     }
 
     @Test
-    fun `accessibility off surfaces warning title`() {
+    fun `usage access off surfaces warning title`() {
         val copy = ProtectionNotificationState.resolve(
-            accessibilityEnabled = false,
+            usageAccessEnabled = false,
             overlayEnabled = true
         )
         assertTrue(copy.isWarning)
         assertEquals("Protection is OFF", copy.title)
-        assertEquals(SetupRequirement.ACCESSIBILITY, copy.fixRequirement)
+        assertEquals(SetupRequirement.USAGE_ACCESS, copy.fixRequirement)
     }
 
     @Test
     fun `overlay off surfaces warning title`() {
         val copy = ProtectionNotificationState.resolve(
-            accessibilityEnabled = true,
+            usageAccessEnabled = true,
             overlayEnabled = false
         )
         assertTrue(copy.isWarning)

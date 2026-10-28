@@ -14,8 +14,8 @@ data class ProtectionNotificationCopy(
 
 object ProtectionNotificationState {
 
-    fun resolve(accessibilityEnabled: Boolean, overlayEnabled: Boolean): ProtectionNotificationCopy {
-        val missing = SetupRequirements.missing(accessibilityEnabled, overlayEnabled)
+    fun resolve(usageAccessEnabled: Boolean, overlayEnabled: Boolean): ProtectionNotificationCopy {
+        val missing = SetupRequirements.missing(usageAccessEnabled, overlayEnabled)
         if (missing.isEmpty()) {
             return ProtectionNotificationCopy(
                 title = "Grayzone is active",

@@ -44,7 +44,7 @@ fun HomeScreen() {
     val gate = LocalPermissionGate.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var accessibilityOn by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var usageAccessOn by remember { mutableStateOf(hasUsageAccess(context)) }
     var overlayOn by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var batteryExempt by remember { mutableStateOf(!isBatteryOptimized(context)) }
     var monitoringOn by remember { mutableStateOf(isMonitoringEnabled(context)) }
@@ -56,7 +56,7 @@ fun HomeScreen() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                accessibilityOn = isAccessibilityServiceEnabled(context)
+                usageAccessOn = hasUsageAccess(context)
                 overlayOn = Settings.canDrawOverlays(context)
                 batteryExempt = !isBatteryOptimized(context)
                 monitoringOn = isMonitoringEnabled(context)
@@ -81,8 +81,8 @@ fun HomeScreen() {
     val data = HomeData(monitoredCount = monitoredCount)
     // F-155: permissions alone are not "active" — OverlayService must also be running.
     val health by ProtectionHealthRepository.status.collectAsStateWithLifecycle()
-    val coreReady = accessibilityOn && overlayOn
-    val isActive = monitoringOn && coreReady && health.overlayActive && health.accessibilityActive
+    val coreReady = usageAccessOn && overlayOn
+    val isActive = monitoringOn && coreReady && health.overlayActive && health.usageAccessActive
 
     // One status, in priority order. Only "Active" is green; anything that weakens protection says so.
     val status = when {

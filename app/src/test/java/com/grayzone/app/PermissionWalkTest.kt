@@ -1,6 +1,6 @@
 package com.grayzone.app
 
-import com.grayzone.app.SetupRequirement.ACCESSIBILITY
+import com.grayzone.app.SetupRequirement.USAGE_ACCESS
 import com.grayzone.app.SetupRequirement.BATTERY
 import com.grayzone.app.SetupRequirement.NOTIFICATIONS
 import com.grayzone.app.SetupRequirement.OVERLAY
@@ -12,7 +12,7 @@ import org.junit.Test
 
 class PermissionWalkTest {
 
-    private val all = listOf(NOTIFICATIONS, ACCESSIBILITY, OVERLAY, BATTERY)
+    private val all = listOf(NOTIFICATIONS, USAGE_ACCESS, OVERLAY, BATTERY)
 
     @Test
     fun `nothing missing starts no walk`() {
@@ -21,7 +21,7 @@ class PermissionWalkTest {
 
     @Test
     fun `steps follow setup order regardless of input order`() {
-        val walk = PermissionWalk.start(listOf(BATTERY, OVERLAY, NOTIFICATIONS, ACCESSIBILITY))!!
+        val walk = PermissionWalk.start(listOf(BATTERY, OVERLAY, NOTIFICATIONS, USAGE_ACCESS))!!
         assertEquals(all, walk.steps)
         assertEquals(NOTIFICATIONS, walk.current(all))
     }
@@ -29,7 +29,7 @@ class PermissionWalkTest {
     @Test
     fun `declining the first moves to the second instead of ending`() {
         val walk = PermissionWalk.start(all)!!.decline(NOTIFICATIONS)
-        assertEquals(ACCESSIBILITY, walk.current(all))
+        assertEquals(USAGE_ACCESS, walk.current(all))
         assertFalse(walk.isFinished(all))
     }
 
@@ -57,9 +57,9 @@ class PermissionWalkTest {
     fun `coming back from settings without granting keeps the same popup`() {
         val walk = PermissionWalk.start(all)!!
         val missing = all.filter { it != NOTIFICATIONS }
-        assertEquals(ACCESSIBILITY, walk.current(missing))
-        // Returned from Accessibility settings, still off:
-        assertEquals(ACCESSIBILITY, walk.current(missing))
+        assertEquals(USAGE_ACCESS, walk.current(missing))
+        // Returned from Usage access settings, still off:
+        assertEquals(USAGE_ACCESS, walk.current(missing))
     }
 
     @Test
@@ -82,7 +82,7 @@ class PermissionWalkTest {
         var walk = PermissionWalk.start(all)!!
         val missing = all.toMutableList()
         missing.remove(NOTIFICATIONS)            // allowed
-        walk = walk.decline(ACCESSIBILITY)       // declined
+        walk = walk.decline(USAGE_ACCESS)       // declined
         assertEquals(OVERLAY, walk.current(missing))
         missing.remove(OVERLAY)                  // allowed
         assertEquals(BATTERY, walk.current(missing))
@@ -102,7 +102,7 @@ class PermissionWalkTest {
     @Test
     fun `first run excludes permissions declined in an earlier launch`() {
         val walk = PermissionWalk.start(all, exclude = setOf(NOTIFICATIONS, BATTERY))!!
-        assertEquals(listOf(ACCESSIBILITY, OVERLAY), walk.steps)
+        assertEquals(listOf(USAGE_ACCESS, OVERLAY), walk.steps)
     }
 
     @Test

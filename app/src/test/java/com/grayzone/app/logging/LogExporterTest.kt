@@ -2,6 +2,7 @@ package com.grayzone.app.logging
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -24,24 +25,28 @@ class LogExporterTest {
     }
 
     @Test
-    fun `bundles each process with the rotated backup first`() {
+    fun `bundles the log with the rotated backup first`() {
         File(dir, "main.log.1").writeText("old\n")
         File(dir, "main.log").writeText("new\n")
-        File(dir, "a11y.log").writeText("a11y line\n")
 
         val out = StringWriter().also { LogExporter.writeBundle(dir, it) }.toString().lines()
 
         val mainHeader = out.indexOf("===== main process =====")
-        val a11yHeader = out.indexOf("===== a11y process =====")
-        assertTrue(mainHeader in 0 until a11yHeader)
+        assertTrue(mainHeader >= 0)
         assertEquals(listOf("old", "new"), out.subList(mainHeader + 1, mainHeader + 3))
-        assertEquals("a11y line", out[a11yHeader + 1])
     }
 
     @Test
-    fun `a process without logs is marked instead of omitted`() {
-        File(dir, "main.log").writeText("only main\n")
+    fun `an empty log is marked instead of omitted`() {
         val out = StringWriter().also { LogExporter.writeBundle(dir, it) }.toString().lines()
-        assertEquals("(no entries)", out[out.indexOf("===== a11y process =====") + 1])
+        assertEquals("(no entries)", out[out.indexOf("===== main process =====") + 1])
+    }
+
+    @Test
+    fun `logs from the old accessibility process are not bundled`() {
+        File(dir, "main.log").writeText("main line\n")
+        File(dir, "a11y.log").writeText("stale\n")
+        val out = StringWriter().also { LogExporter.writeBundle(dir, it) }.toString()
+        assertFalse(out.contains("stale"))
     }
 }

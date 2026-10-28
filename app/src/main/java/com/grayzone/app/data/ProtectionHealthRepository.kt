@@ -31,7 +31,7 @@ object ProtectionHealthRepository {
         _status.update { it.copy(overlayActive = isActive) }
     }
 
-    fun updateAccessibilityStatus(isActive: Boolean) {
-        _status.update { it.copy(accessibilityActive = isActive) }
+    fun updateUsageAccessStatus(isActive: Boolean) {
+        _status.update { it.copy(usageAccessActive = isActive) }
     }
 }
